@@ -1,0 +1,14 @@
+2026-03-23T12:54:02.817872+00:00 | INFO  | Training task started | model=random_forest | dataset=C:\Users\zhuow\cowork_workplace\gitLabCoding\project\Ai_learning\ml_platform\storage\uploads\3c102b55b838-viz_test.csv
+2026-03-23T12:54:03.910111+00:00 | INFO  | Loading and preparing data...
+2026-03-23T12:54:03.914619+00:00 | INFO  | Data prepared | train_samples=240 | val_samples=60 | features=4 | target=label
+2026-03-23T12:54:04.031956+00:00 | INFO  | Model configured | params={'n_estimators': 50}
+2026-03-23T12:54:04.776151+00:00 | INFO  | MLflow run started | run_id=5f171f8903cd47cd809aef57e3758cb8
+2026-03-23T12:54:04.777172+00:00 | INFO  | Starting training with 5-fold cross validation
+2026-03-23T12:54:04.911568+00:00 | INFO  | [Step 1/5] accuracy=0.5667 f1=0.5647 roc_auc=0.4911
+2026-03-23T12:54:05.032555+00:00 | INFO  | [Step 2/5] accuracy=0.5 f1=0.4994 roc_auc=0.5039
+2026-03-23T12:54:05.176686+00:00 | INFO  | [Step 3/5] accuracy=0.4333 f1=0.4333 roc_auc=0.3782
+2026-03-23T12:54:05.325410+00:00 | INFO  | [Step 4/5] accuracy=0.4667 f1=0.4594 roc_auc=0.5067
+2026-03-23T12:54:05.436718+00:00 | INFO  | [Step 5/5] accuracy=0.45 f1=0.4446 roc_auc=0.4166
+2026-03-23T12:54:05.568376+00:00 | INFO  | Model saved | path=C:\Users\zhuow\cowork_workplace\gitLabCoding\project\Ai_learning\ml_platform\storage\models\aaca6b24-9a3e-4d65-9e67-67cee0c6b9ef.joblib
+2026-03-23T12:54:05.568652+00:00 | INFO  | Training completed | accuracy=0.3667 | f1=0.3667 | roc_auc=0.3771 | cv_avg_accuracy=0.4833 | cv_std_accuracy=0.0472 | cv_avg_f1=0.4803 | cv_std_f1=0.0478 | cv_avg_roc_auc=0.4593 | cv_std_roc_auc=0.0522
+2026-03-23T12:54:05.568814+00:00 | INFO  | Status: SUCCESS — Training completed successfully

@@ -1,0 +1,61 @@
+{
+  "task_id": "e3a19be2-9e2a-4c66-9913-586c89f2d964",
+  "model_type": "random_forest",
+  "steps": [
+    {
+      "step": 1,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.45,
+        "f1": 0.4443,
+        "roc_auc": 0.4041,
+        "fold": 1
+      },
+      "timestamp": "2026-03-23T09:50:07.423385+00:00"
+    },
+    {
+      "step": 2,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.475,
+        "f1": 0.4477,
+        "roc_auc": 0.3763,
+        "fold": 2
+      },
+      "timestamp": "2026-03-23T09:50:07.506076+00:00"
+    },
+    {
+      "step": 3,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.475,
+        "f1": 0.4733,
+        "roc_auc": 0.3864,
+        "fold": 3
+      },
+      "timestamp": "2026-03-23T09:50:07.602218+00:00"
+    },
+    {
+      "step": 4,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.55,
+        "f1": 0.532,
+        "roc_auc": 0.5227,
+        "fold": 4
+      },
+      "timestamp": "2026-03-23T09:50:07.696838+00:00"
+    },
+    {
+      "step": 5,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.525,
+        "f1": 0.5109,
+        "roc_auc": 0.5328,
+        "fold": 5
+      },
+      "timestamp": "2026-03-23T09:50:07.792916+00:00"
+    }
+  ]
+}

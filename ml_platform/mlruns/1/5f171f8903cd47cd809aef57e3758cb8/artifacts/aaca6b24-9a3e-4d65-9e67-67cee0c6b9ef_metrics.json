@@ -1,0 +1,61 @@
+{
+  "task_id": "aaca6b24-9a3e-4d65-9e67-67cee0c6b9ef",
+  "model_type": "random_forest",
+  "steps": [
+    {
+      "step": 1,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.5667,
+        "f1": 0.5647,
+        "roc_auc": 0.4911,
+        "fold": 1
+      },
+      "timestamp": "2026-03-23T12:54:04.911077+00:00"
+    },
+    {
+      "step": 2,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.5,
+        "f1": 0.4994,
+        "roc_auc": 0.5039,
+        "fold": 2
+      },
+      "timestamp": "2026-03-23T12:54:05.031273+00:00"
+    },
+    {
+      "step": 3,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.4333,
+        "f1": 0.4333,
+        "roc_auc": 0.3782,
+        "fold": 3
+      },
+      "timestamp": "2026-03-23T12:54:05.176131+00:00"
+    },
+    {
+      "step": 4,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.4667,
+        "f1": 0.4594,
+        "roc_auc": 0.5067,
+        "fold": 4
+      },
+      "timestamp": "2026-03-23T12:54:05.324926+00:00"
+    },
+    {
+      "step": 5,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.45,
+        "f1": 0.4446,
+        "roc_auc": 0.4166,
+        "fold": 5
+      },
+      "timestamp": "2026-03-23T12:54:05.436159+00:00"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+2026-03-23T09:54:23.691891+00:00 | INFO  | Training task started | model=random_forest | dataset=C:\Users\zhuow\cowork_workplace\gitLabCoding\project\Ai_learning\ml_platform\storage\uploads\07c6c2bba98b-mlflow_test.csv
+2026-03-23T09:54:24.977421+00:00 | INFO  | Loading and preparing data...
+2026-03-23T09:54:24.981893+00:00 | INFO  | Data prepared | train_samples=160 | val_samples=40 | features=3 | target=label
+2026-03-23T09:54:25.092464+00:00 | INFO  | Model configured | params={'n_estimators': 30}
+2026-03-23T09:59:04.758631+00:00 | WARN  | MLflow logging failed: API request to http://localhost:5001/api/2.0/mlflow/experiments/get-by-name failed with exception HTTPConnectionPool(host='localhost', port=5001): Max retries exceeded with url: /api/2.0/mlflow/experiments/get-by-name?experiment_name=ml_platform (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001C4251E3DF0>: Failed to establish a new connection: [WinError 10061] 由于目标计算机积极拒绝，无法连接。'))
+2026-03-23T09:59:04.767171+00:00 | INFO  | Starting training with 3-fold cross validation
+2026-03-23T09:59:04.852156+00:00 | INFO  | [Step 1/3] accuracy=0.4478 f1=0.444
+2026-03-23T09:59:04.976066+00:00 | INFO  | [Step 2/3] accuracy=0.5075 f1=0.5081
+2026-03-23T09:59:05.054940+00:00 | INFO  | [Step 3/3] accuracy=0.4848 f1=0.4744
+2026-03-23T09:59:05.165630+00:00 | INFO  | Model saved | path=C:\Users\zhuow\cowork_workplace\gitLabCoding\project\Ai_learning\ml_platform\storage\models\ac7ee328-3fb1-4daf-989b-e5815176aed1.joblib
+2026-03-23T09:59:05.165961+00:00 | INFO  | Training completed | accuracy=0.55 | f1=0.5203 | cv_avg_accuracy=0.48 | cv_std_accuracy=0.0246 | cv_avg_f1=0.4755 | cv_std_f1=0.0262
+2026-03-23T09:59:05.166139+00:00 | INFO  | Status: SUCCESS — Training completed successfully

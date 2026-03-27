@@ -1,0 +1,39 @@
+{
+  "task_id": "5d23fe75-d940-4de1-a33d-4d231fe5b8cf",
+  "model_type": "xgboost",
+  "steps": [
+    {
+      "step": 1,
+      "total_steps": 3,
+      "metrics": {
+        "accuracy": 0.4925,
+        "f1": 0.4834,
+        "roc_auc": 0.3838,
+        "fold": 1
+      },
+      "timestamp": "2026-03-23T09:52:25.291777+00:00"
+    },
+    {
+      "step": 2,
+      "total_steps": 3,
+      "metrics": {
+        "accuracy": 0.5224,
+        "f1": 0.5235,
+        "roc_auc": 0.4806,
+        "fold": 2
+      },
+      "timestamp": "2026-03-23T09:52:25.358256+00:00"
+    },
+    {
+      "step": 3,
+      "total_steps": 3,
+      "metrics": {
+        "accuracy": 0.4697,
+        "f1": 0.4497,
+        "roc_auc": 0.3728,
+        "fold": 3
+      },
+      "timestamp": "2026-03-23T09:52:25.422703+00:00"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+artifact_path: file:///C:/Users/zhuow/cowork_workplace/gitLabCoding/project/Ai_learning/ml_platform/mlruns/288035223416367741/models/m-277e5dd6cfd642d5b26cf545dda30ed8/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.13.7
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.8.0
+    skops_trusted_types: null
+mlflow_version: 3.10.1
+model_id: m-277e5dd6cfd642d5b26cf545dda30ed8
+model_size_bytes: 220061
+model_uuid: m-277e5dd6cfd642d5b26cf545dda30ed8
+prompts: null
+run_id: cfc446aacf7b4ce29ff694f77310488f
+utc_time_created: '2026-03-23 11:39:18.019697'

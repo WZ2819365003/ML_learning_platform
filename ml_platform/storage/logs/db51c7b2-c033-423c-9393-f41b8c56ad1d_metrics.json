@@ -1,0 +1,56 @@
+{
+  "task_id": "db51c7b2-c033-423c-9393-f41b8c56ad1d",
+  "model_type": "random_forest",
+  "steps": [
+    {
+      "step": 1,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.425,
+        "f1": 0.4283,
+        "fold": 1
+      },
+      "timestamp": "2026-03-23T10:04:04.619324+00:00"
+    },
+    {
+      "step": 2,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.475,
+        "f1": 0.4594,
+        "fold": 2
+      },
+      "timestamp": "2026-03-23T10:04:04.755475+00:00"
+    },
+    {
+      "step": 3,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.475,
+        "f1": 0.476,
+        "fold": 3
+      },
+      "timestamp": "2026-03-23T10:04:04.829937+00:00"
+    },
+    {
+      "step": 4,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.625,
+        "f1": 0.58,
+        "fold": 4
+      },
+      "timestamp": "2026-03-23T10:04:04.923590+00:00"
+    },
+    {
+      "step": 5,
+      "total_steps": 5,
+      "metrics": {
+        "accuracy": 0.525,
+        "f1": 0.5186,
+        "fold": 5
+      },
+      "timestamp": "2026-03-23T10:04:05.003170+00:00"
+    }
+  ]
+}

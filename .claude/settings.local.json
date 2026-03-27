@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(claude --version)",
+      "Bash(claude plugin:*)",
+      "Bash(git clone:*)",
+      "Bash(git config:*)",
+      "Bash(mkdir -p \"C:/Users/zhuow/.claude/plugins/cache/local/superpowers\")",
+      "Bash(cp -r \"C:/Users/zhuow/cowork_workplace/gitLabCoding/project/superpowers-main/\"* \"C:/Users/zhuow/.claude/plugins/cache/local/superpowers/\")",
+      "Bash(for d:*)",
+      "Bash(do touch:*)",
+      "Bash(done)",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in [''app/main.py'',''app/api/routes/data.py'',''app/api/routes/training.py'',''app/api/routes/logs.py'',''app/utils/file_utils.py'']]\")",
+      "Bash(pip install:*)",
+      "Bash(python -c \"from app.main import app; print\\(''FastAPI app created:'', app.title\\)\")",
+      "Bash(timeout 8 python -c \":*)",
+      "Bash(python -c \":*)",
+      "Bash(rm -f storage/ml_platform.db)",
+      "Bash(find C:/Users/zhuow/cowork_workplace/gitLabCoding/project/Ai_learning -path *mlflow* -name *.yaml)",
+      "Bash(uvicorn app.main:app --reload --host 0.0.0.0 --port 8000)",
+      "Bash(curl -s http://localhost:8000/health)"
+    ]
+  }
+}
