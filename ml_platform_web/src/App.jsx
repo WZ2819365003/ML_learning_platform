@@ -9,6 +9,7 @@ import TrainingConfig from './pages/TrainingConfig'
 import TrainingMonitor from './pages/TrainingMonitor'
 import Results from './pages/Results'
 import ModelManagement from './pages/ModelManagement'
+import ModelDeploy from './pages/ModelDeploy'
 import Settings from './pages/Settings'
 
 const { Content } = Layout
@@ -29,6 +30,7 @@ function App() {
               <Route path="/training/monitor" element={<TrainingMonitor />} />
               <Route path="/results" element={<Results />} />
               <Route path="/models" element={<ModelManagement />} />
+              <Route path="/deploy" element={<ModelDeploy />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
           </Content>

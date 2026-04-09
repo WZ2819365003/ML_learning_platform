@@ -7,7 +7,8 @@ import {
   RocketOutlined,
   LineChartOutlined,
   AppstoreOutlined,
-  SettingOutlined
+  CloudServerOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 
 const { Sider } = Layout
@@ -53,6 +54,11 @@ const Sidebar = () => {
       label: <Link to="/models">模型管理</Link>
     },
     {
+      key: 'deploy',
+      icon: <CloudServerOutlined />,
+      label: <Link to="/deploy">模型部署</Link>
+    },
+    {
       key: 'settings',
       icon: <SettingOutlined />,
       label: <Link to="/settings">系统设置</Link>
@@ -67,6 +73,7 @@ const Sidebar = () => {
     if (path === '/training/monitor') return 'training-monitor'
     if (path === '/results') return 'results'
     if (path === '/models') return 'models'
+    if (path === '/deploy') return 'deploy'
     if (path === '/settings') return 'settings'
     return 'dashboard'
   }
