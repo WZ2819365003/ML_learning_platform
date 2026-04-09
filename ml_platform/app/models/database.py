@@ -9,9 +9,11 @@ from typing import AsyncGenerator
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     String,
     Text,
 )
@@ -162,6 +164,60 @@ class TrainingLog(Base):
 
     def __repr__(self) -> str:
         return f"<TrainingLog id={self.id!r} level={self.level!r}>"
+
+
+# ---------------------------------------------------------------------------
+# ModelDeployment
+# ---------------------------------------------------------------------------
+
+class ModelDeployment(Base):
+    __tablename__ = "model_deployments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("training_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    max_batch_size: Mapped[int] = mapped_column(Integer, default=100)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    inference_jobs: Mapped[list[InferenceJob]] = relationship(
+        back_populates="deployment", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<ModelDeployment id={self.id!r} name={self.name!r} status={self.status!r}>"
+
+
+# ---------------------------------------------------------------------------
+# InferenceJob
+# ---------------------------------------------------------------------------
+
+class InferenceJob(Base):
+    __tablename__ = "inference_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    deployment_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("model_deployments.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    input_rows: Mapped[int] = mapped_column(Integer, default=0)
+    predictions: Mapped[list | None] = mapped_column(JSON, default=None)
+    probabilities: Mapped[list | None] = mapped_column(JSON, default=None)
+    error_message: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    deployment: Mapped[ModelDeployment] = relationship(back_populates="inference_jobs")
+
+    def __repr__(self) -> str:
+        return f"<InferenceJob id={self.id!r} status={self.status!r}>"
 
 
 # ---------------------------------------------------------------------------

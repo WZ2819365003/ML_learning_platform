@@ -168,3 +168,59 @@ class PredictionResponse(BaseModel):
     predictions: list[Any] = Field(default_factory=list)
     class_labels: list[str] = Field(default_factory=list)
     probabilities: list[dict[str, float]] | None = None
+
+
+# ===================================================================
+# Deployment schemas
+# ===================================================================
+
+class DeployRequest(BaseModel):
+    """Request body for deploying a trained model."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    max_batch_size: int = Field(default=100, ge=1, le=10000)
+
+
+class DeploymentResponse(BaseModel):
+    """Serialised representation of a model deployment."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    deployment_id: str
+    task_id: str
+    name: str
+    status: str
+    request_count: int
+    created_at: datetime
+    endpoints: dict[str, str] = Field(default_factory=dict)
+
+
+class DeploymentListResponse(BaseModel):
+    """Paginated list of deployments."""
+
+    deployments: list[DeploymentResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class InferenceRequest(BaseModel):
+    """Request body for submitting an inference (predict) job."""
+
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    include_probabilities: bool = True
+
+
+class InferenceJobResponse(BaseModel):
+    """Serialised representation of an inference job result."""
+
+    job_id: str
+    deployment_id: str
+    status: str
+    predictions: list[Any] | None = None
+    probabilities: list[Any] | None = None
+    input_rows: int
+    error_message: str | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
