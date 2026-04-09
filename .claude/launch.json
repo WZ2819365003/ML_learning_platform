@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Backend (FastAPI :8000)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["scripts/run_backend_dev.py"],
+      "port": 8000
+    },
+    {
+      "name": "Frontend (Vite :3000)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "ml_platform_web", "run", "dev"],
+      "port": 3000
+    }
+  ]
+}
