@@ -1,14 +1,33 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, Form, InputNumber, Select, Space, Typography, message } from 'antd';
+import { Alert, Button, Card, Form, InputNumber, Select, Space, Tag, Typography, message } from 'antd';
 import { RocketOutlined } from '@ant-design/icons';
 import { dataApi, trainingApi } from '../services/api';
 
 const { Paragraph, Text, Title } = Typography;
 
-const metricOptions = [
+const CLASSIFICATION_MODELS = [
+  'random_forest', 'xgboost', 'lightgbm', 'logistic_regression', 'svm', 'mlp',
+];
+const REGRESSION_MODELS = [
+  'random_forest_regressor', 'xgboost_regressor', 'lightgbm_regressor',
+  'linear_regression', 'ridge', 'lasso', 'elasticnet', 'svr', 'mlp_regressor',
+];
+
+const CLASSIFICATION_METRICS = [
   { label: 'accuracy', value: 'accuracy' },
   { label: 'f1', value: 'f1' },
+  { label: 'precision', value: 'precision' },
+  { label: 'recall', value: 'recall' },
+  { label: 'roc_auc', value: 'roc_auc' },
+  { label: 'log_loss', value: 'log_loss' },
+];
+const REGRESSION_METRICS = [
+  { label: 'rmse', value: 'rmse' },
+  { label: 'mae', value: 'mae' },
+  { label: 'r2', value: 'r2' },
+  { label: 'mse', value: 'mse' },
+  { label: 'mape', value: 'mape' },
 ];
 
 const TrainingConfig = () => {
@@ -21,6 +40,9 @@ const TrainingConfig = () => {
 
   const selectedDatasetId = Form.useWatch('dataset_id', form);
   const selectedTarget = Form.useWatch('target_column', form);
+  const selectedModel = Form.useWatch('model_type', form);
+  const isRegression = REGRESSION_MODELS.includes(selectedModel);
+  const metricOptions = isRegression ? REGRESSION_METRICS : CLASSIFICATION_METRICS;
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
     [datasets, selectedDatasetId]
@@ -77,6 +99,15 @@ const TrainingConfig = () => {
     const defaultModel = models.includes('random_forest') ? 'random_forest' : models[0];
     form.setFieldValue('model_type', defaultModel);
   }, [form, models]);
+
+  // Reset eval_metrics when task type switches between classification and regression
+  useEffect(() => {
+    if (!selectedModel) return;
+    const defaultMetrics = REGRESSION_MODELS.includes(selectedModel)
+      ? ['rmse', 'r2']
+      : ['accuracy', 'f1'];
+    form.setFieldValue('eval_metrics', defaultMetrics);
+  }, [selectedModel, form]);
 
   async function loadPageData() {
     try {
@@ -180,15 +211,31 @@ const TrainingConfig = () => {
             </Form.Item>
 
             <Form.Item
-              label="模型类型"
+              label={
+                <Space>
+                  模型类型
+                  {selectedModel && (
+                    <Tag color={isRegression ? 'blue' : 'green'}>
+                      {isRegression ? '回归' : '分类'}
+                    </Tag>
+                  )}
+                </Space>
+              }
               name="model_type"
               rules={[{ required: true, message: '请选择模型类型' }]}
             >
-              <Select
-                data-testid="model-select"
-                placeholder="请选择模型类型"
-                options={models.map((model) => ({ label: model, value: model }))}
-              />
+              <Select data-testid="model-select" placeholder="请选择模型类型">
+                <Select.OptGroup label="分类模型">
+                  {CLASSIFICATION_MODELS.filter((m) => models.includes(m)).map((m) => (
+                    <Select.Option key={m} value={m}>{m}</Select.Option>
+                  ))}
+                </Select.OptGroup>
+                <Select.OptGroup label="回归模型">
+                  {REGRESSION_MODELS.filter((m) => models.includes(m)).map((m) => (
+                    <Select.Option key={m} value={m}>{m}</Select.Option>
+                  ))}
+                </Select.OptGroup>
+              </Select>
             </Form.Item>
 
             <Space size={16} wrap style={{ width: '100%', marginBottom: 16 }}>
