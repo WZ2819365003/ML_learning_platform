@@ -7,7 +7,9 @@ from app.models.database import get_db
 from app.models.schemas import DatasetListResponse, DatasetPreview, DatasetResponse
 from app.services.data_service import (
     delete_dataset,
+    get_correlation,
     get_dataset_preview,
+    get_target_distribution,
     list_datasets,
     upload_dataset,
 )
@@ -42,6 +44,28 @@ async def list_datasets_route(
 ) -> DatasetListResponse:
     """List all uploaded datasets with pagination."""
     return await list_datasets(page=page, page_size=page_size, db=db)
+
+
+@router.get("/{dataset_id}/correlation")
+async def correlation_route(
+    dataset_id: str,
+    method: str = Query(default="pearson", pattern="^(pearson|spearman|kendall)$"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return correlation matrix for all numeric columns."""
+    return await get_correlation(dataset_id=dataset_id, method=method, db=db)
+
+
+@router.get("/{dataset_id}/target_distribution")
+async def target_distribution_route(
+    dataset_id: str,
+    target_column: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return distribution stats and value counts for the target column."""
+    return await get_target_distribution(
+        dataset_id=dataset_id, target_column=target_column, db=db
+    )
 
 
 @router.delete("/{dataset_id}")

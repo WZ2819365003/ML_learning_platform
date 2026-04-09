@@ -229,6 +229,87 @@ async def list_datasets(
     }
 
 
+async def get_correlation(
+    dataset_id: str,
+    db: AsyncSession,
+    method: str = "pearson",
+) -> dict[str, Any]:
+    """Return the correlation matrix for all numeric columns in the dataset."""
+    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    dataset: Dataset | None = result.scalar_one_or_none()
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    file_path = Path(dataset.file_path)
+    df = _read_dataframe(file_path, file_path.suffix.lower())
+    numeric_df = df.select_dtypes(include="number")
+
+    if numeric_df.empty:
+        return {"columns": [], "matrix": [], "method": method}
+
+    corr = numeric_df.corr(method=method).round(4)
+    columns = corr.columns.tolist()
+    matrix = corr.where(corr.notna(), None).values.tolist()
+
+    return {"columns": columns, "matrix": matrix, "method": method}
+
+
+async def get_target_distribution(
+    dataset_id: str,
+    target_column: str,
+    db: AsyncSession,
+) -> dict[str, Any]:
+    """Return value-count distribution and descriptive stats for target_column."""
+    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    dataset: Dataset | None = result.scalar_one_or_none()
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    file_path = Path(dataset.file_path)
+    df = _read_dataframe(file_path, file_path.suffix.lower())
+
+    if target_column not in df.columns:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Column '{target_column}' not found in dataset",
+        )
+
+    col = df[target_column]
+    is_numeric = pd.api.types.is_numeric_dtype(col)
+
+    if is_numeric:
+        stats = {
+            "mean": round(float(col.mean()), 4) if col.notna().any() else None,
+            "std": round(float(col.std()), 4) if col.notna().any() else None,
+            "min": float(col.min()) if col.notna().any() else None,
+            "max": float(col.max()) if col.notna().any() else None,
+            "median": round(float(col.median()), 4) if col.notna().any() else None,
+        }
+        counts = None
+        # Histogram bins for continuous numeric
+        hist_counts, bin_edges = pd.cut(col.dropna(), bins=20, retbins=True)
+        hist = [
+            {"bin_start": round(float(bin_edges[i]), 4), "count": int((hist_counts == hist_counts.cat.categories[i]).sum())}
+            for i in range(len(hist_counts.cat.categories))
+        ]
+    else:
+        stats = None
+        counts = col.value_counts().head(50).to_dict()
+        counts = {str(k): int(v) for k, v in counts.items()}
+        hist = None
+
+    return {
+        "column": target_column,
+        "dtype": str(col.dtype),
+        "is_numeric": is_numeric,
+        "missing_count": int(col.isna().sum()),
+        "unique_count": int(col.nunique()),
+        "stats": stats,
+        "value_counts": counts,
+        "histogram": hist,
+    }
+
+
 async def delete_dataset(dataset_id: str, db: AsyncSession) -> bool:
     """Delete a dataset's file from disk and its record from the database.
 
