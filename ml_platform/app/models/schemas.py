@@ -78,6 +78,10 @@ class TrainingRequest(BaseModel):
     test_size: float = Field(default=0.2, gt=0.0, lt=1.0)
     eval_metrics: list[str] = Field(default_factory=lambda: ["accuracy"])
     cross_validation: CrossValidationConfig | None = None
+    class_weight: str | None = Field(
+        default=None,
+        description="'balanced' or None. Applied only to models with class_weight_support.",
+    )
 
 
 class TrainingTaskResponse(BaseModel):
@@ -145,6 +149,52 @@ class MetricsResponse(BaseModel):
             "together with metric values recorded at that point."
         ),
     )
+
+
+# ===================================================================
+# Prediction schemas
+# ===================================================================
+
+# ===================================================================
+# Model Registry schemas
+# ===================================================================
+
+class ParamSpecSchema(BaseModel):
+    name: str
+    display_name: str
+    type: str
+    default: Any = None
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
+    options: list[str] | None = None
+    required: bool = False
+    advanced: bool = False
+    description: str = ""
+
+
+class ModelMetadata(BaseModel):
+    id: str
+    display_name: str
+    category: str
+    task_types: list[str]
+    description: str
+    class_weight_support: bool
+    params: list[ParamSpecSchema]
+
+
+class CategoryMetadata(BaseModel):
+    id: str
+    display_name: str
+    icon: str
+
+
+class ModelsListResponse(BaseModel):
+    categories: list[CategoryMetadata]
+    models: list[ModelMetadata]
+    common_params: list[ParamSpecSchema]
+    classification_metrics: list[dict[str, str]]
+    regression_metrics: list[dict[str, str]]
 
 
 # ===================================================================
