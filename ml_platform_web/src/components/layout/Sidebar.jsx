@@ -9,6 +9,7 @@ import {
   AppstoreOutlined,
   CloudServerOutlined,
   SettingOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons'
 
 const { Sider } = Layout
@@ -49,6 +50,25 @@ const Sidebar = () => {
       label: <Link to="/results">结果可视化</Link>
     },
     {
+      key: 'dl',
+      icon: <ExperimentOutlined />,
+      label: '深度学习',
+      children: [
+        {
+          key: 'dl-config',
+          label: <Link to="/dl/config">模型配置</Link>
+        },
+        {
+          key: 'dl-monitor',
+          label: <Link to="/dl/monitor">训练监控</Link>
+        },
+        {
+          key: 'dl-results',
+          label: <Link to="/dl/results">结果详情</Link>
+        }
+      ]
+    },
+    {
       key: 'models',
       icon: <AppstoreOutlined />,
       label: <Link to="/models">模型管理</Link>
@@ -75,6 +95,9 @@ const Sidebar = () => {
     if (path === '/models') return 'models'
     if (path === '/deploy') return 'deploy'
     if (path === '/settings') return 'settings'
+    if (path === '/dl/config') return 'dl-config'
+    if (path === '/dl/monitor') return 'dl-monitor'
+    if (path === '/dl/results') return 'dl-results'
     return 'dashboard'
   }
 
@@ -95,6 +118,7 @@ const Sidebar = () => {
       <Menu
         mode="inline"
         selectedKeys={[getSelectedKey()]}
+        defaultOpenKeys={['training', 'dl']}
         items={menuItems}
         style={{ borderRight: 0 }}
       />

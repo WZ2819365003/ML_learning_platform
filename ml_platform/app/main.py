@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.models.database import Base, async_engine
 from app.api.routes import data, training, logs, experiment, visualization, model_mgmt
 from app.api.routes.deploy import deploy_router, inference_router
+from app.api.routes.dl import router as dl_router
 from app.api.websocket import router as ws_router
 
 
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(model_mgmt.router, prefix="/api")
     app.include_router(deploy_router, prefix="/api")   # → /api/deploy/...
     app.include_router(inference_router)               # → /inference/... (no /api prefix)
+    app.include_router(dl_router, prefix="/api")       # → /api/dl/...
     app.include_router(ws_router)
 
     # ---- Root-level endpoints ----

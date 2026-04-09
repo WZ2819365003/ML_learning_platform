@@ -221,6 +221,44 @@ class InferenceJob(Base):
 
 
 # ---------------------------------------------------------------------------
+# DLTrainingTask
+# ---------------------------------------------------------------------------
+
+class DLTrainingTask(Base):
+    __tablename__ = "dl_training_tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dataset_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    target_column: Mapped[str] = mapped_column(String(255), nullable=False)
+    model_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(32), default="classification")
+
+    arch_config:  Mapped[dict | None] = mapped_column(JSON, default=dict)
+    opt_config:   Mapped[dict | None] = mapped_column(JSON, default=dict)
+    train_config: Mapped[dict | None] = mapped_column(JSON, default=dict)
+
+    status:        Mapped[str]   = mapped_column(String(32), default="PENDING", nullable=False)
+    progress:      Mapped[float] = mapped_column(Float, default=0.0)
+    current_epoch: Mapped[int]   = mapped_column(Integer, default=0)
+    total_epochs:  Mapped[int]   = mapped_column(Integer, default=0)
+
+    result_metrics: Mapped[dict | None] = mapped_column(JSON, default=None)
+    model_path:     Mapped[str | None]  = mapped_column(String(1024), default=None)
+    error_message:  Mapped[str | None]  = mapped_column(Text, default=None)
+
+    created_at:  Mapped[datetime]      = mapped_column(DateTime(timezone=True), default=_utcnow)
+    started_at:  Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    dataset: Mapped[Dataset] = relationship("Dataset")
+
+    def __repr__(self) -> str:
+        return f"<DLTrainingTask id={self.id!r} model={self.model_type!r} status={self.status!r}>"
+
+
+# ---------------------------------------------------------------------------
 # Dependency injection helper
 # ---------------------------------------------------------------------------
 
