@@ -6,6 +6,7 @@ import {
   Col,
   Descriptions,
   Empty,
+  Form,
   Input,
   Modal,
   Row,
@@ -18,13 +19,14 @@ import {
 import {
   ApiOutlined,
   BarChartOutlined,
+  CloudUploadOutlined,
   CopyOutlined,
   DeleteOutlined,
   EyeOutlined,
   PlayCircleOutlined,
 } from '@ant-design/icons';
 import * as echarts from 'echarts';
-import api, { dataApi, modelApi } from '../services/api';
+import api, { dataApi, deployApi, modelApi } from '../services/api';
 import { formatBytes, formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
 
 const { Paragraph, Text, Title } = Typography;
@@ -68,6 +70,9 @@ const ModelManagement = () => {
   const [predictionPayload, setPredictionPayload] = useState('[]');
   const [predictionResult, setPredictionResult] = useState('');
   const [predictionRunning, setPredictionRunning] = useState(false);
+  const [deployTarget, setDeployTarget] = useState(null);
+  const [deployLoading, setDeployLoading] = useState(false);
+  const [deployForm] = Form.useForm();
   const compareChartRef = useRef(null);
 
   useEffect(() => {
@@ -208,6 +213,25 @@ const ModelManagement = () => {
     }
   }
 
+  async function handleDeploy(values) {
+    if (!deployTarget) return;
+    setDeployLoading(true);
+    try {
+      await deployApi.createDeployment(deployTarget.task_id, {
+        name: values.name,
+        description: values.description || null,
+        max_batch_size: 100,
+      });
+      message.success('部署成功，请前往「模型部署」页查看接口 URL');
+      setDeployTarget(null);
+      deployForm.resetFields();
+    } catch (e) {
+      message.error('部署失败: ' + (e?.response?.data?.detail || e?.message || '未知错误'));
+    } finally {
+      setDeployLoading(false);
+    }
+  }
+
   const predictionUrl = selectedModel
     ? `${api.defaults.baseURL}/models/${selectedModel.task_id}/predict`
     : '';
@@ -291,6 +315,13 @@ const ModelManagement = () => {
                 <Space size="small">
                   <Button type="text" icon={<EyeOutlined />} onClick={() => void openModelDetail(record)}>
                     详情
+                  </Button>
+                  <Button
+                    type="text"
+                    icon={<CloudUploadOutlined />}
+                    onClick={() => { setDeployTarget(record); deployForm.setFieldValue('name', `${record.model_type}-deploy`); }}
+                  >
+                    部署
                   </Button>
                   <Button type="text" danger icon={<DeleteOutlined />} onClick={() => void handleDeleteModel(record.task_id)}>
                     删除
@@ -418,6 +449,35 @@ const ModelManagement = () => {
         ) : (
           <div ref={compareChartRef} style={{ width: '100%', height: 420 }} />
         )}
+      </Modal>
+
+      <Modal
+        title={<Space><CloudUploadOutlined /> 部署模型</Space>}
+        open={!!deployTarget}
+        onCancel={() => { setDeployTarget(null); deployForm.resetFields(); }}
+        onOk={() => deployForm.submit()}
+        okText="确认部署"
+        confirmLoading={deployLoading}
+        destroyOnHidden
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`将为模型 ${deployTarget?.model_type ?? ''} 创建部署，部署成功后可在「模型部署」页查看接口 URL。`}
+        />
+        <Form form={deployForm} layout="vertical" onFinish={(v) => void handleDeploy(v)}>
+          <Form.Item
+            label="部署名称"
+            name="name"
+            rules={[{ required: true, message: '请输入部署名称' }]}
+          >
+            <Input placeholder="例：生产预测服务-v1" />
+          </Form.Item>
+          <Form.Item label="描述（可选）" name="description">
+            <Input.TextArea rows={2} placeholder="简短描述此部署的用途" />
+          </Form.Item>
+        </Form>
       </Modal>
     </Space>
   );
