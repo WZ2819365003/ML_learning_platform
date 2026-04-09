@@ -247,11 +247,22 @@ TRAINER_REGISTRY: dict[str, type[BaseTrainer]] = {
     "mlp": MLPTrainer,
 }
 
+
+def detect_task_type(model_type: str) -> str:
+    """Return 'regression' or 'classification' based on model_type string."""
+    from app.core.regression_trainers import REGRESSION_TRAINER_REGISTRY
+    return "regression" if model_type in REGRESSION_TRAINER_REGISTRY else "classification"
+
+
 def get_trainer(model_type: str) -> BaseTrainer:
-    trainer_cls = TRAINER_REGISTRY.get(model_type)
+    from app.core.regression_trainers import REGRESSION_TRAINER_REGISTRY
+    combined = {**TRAINER_REGISTRY, **REGRESSION_TRAINER_REGISTRY}
+    trainer_cls = combined.get(model_type)
     if trainer_cls is None:
-        raise ValueError(f"Unknown model type: '{model_type}'. Available: {list(TRAINER_REGISTRY.keys())}")
+        raise ValueError(f"Unknown model type: '{model_type}'. Available: {list(combined.keys())}")
     return trainer_cls()
 
+
 def list_available_models() -> list[str]:
-    return list(TRAINER_REGISTRY.keys())
+    from app.core.regression_trainers import REGRESSION_TRAINER_REGISTRY
+    return list(TRAINER_REGISTRY.keys()) + list(REGRESSION_TRAINER_REGISTRY.keys())
