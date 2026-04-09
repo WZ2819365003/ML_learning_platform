@@ -12,12 +12,12 @@ import pandas as pd
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 
 from app.config import get_settings
 from app.core.trainer import get_trainer, list_available_models
 from app.core.logger import TrainingLogger
 from app.models.database import AsyncSession, Dataset, TrainingTask, async_session_factory
+from app.services.prediction_service import load_dataframe, prepare_training_frame
 
 logger = logging.getLogger(__name__)
 
@@ -27,44 +27,10 @@ _executor = ThreadPoolExecutor(max_workers=4)
 # Track running tasks for cancellation
 _running_tasks: dict[str, asyncio.Task] = {}
 
-
 def _prepare_data(file_path: str, target_column: str, test_size: float):
     """Load data, encode labels, split into train/val sets."""
-    path = Path(file_path)
-    ext = path.suffix.lower()
-
-    if ext == ".csv":
-        df = pd.read_csv(path)
-    elif ext == ".parquet":
-        df = pd.read_parquet(path)
-    elif ext == ".xlsx":
-        df = pd.read_excel(path)
-    else:
-        raise ValueError(f"Unsupported file format: {ext}")
-
-    if target_column not in df.columns:
-        raise ValueError(f"Target column '{target_column}' not found. Available: {list(df.columns)}")
-
-    # Separate features and target
-    X = df.drop(columns=[target_column])
-    y = df[target_column]
-
-    # Handle categorical features -- simple label encoding
-    label_encoders = {}
-    for col in X.columns:
-        if X[col].dtype == "object" or X[col].dtype.name == "category":
-            le = LabelEncoder()
-            X[col] = le.fit_transform(X[col].astype(str))
-            label_encoders[col] = le
-
-    # Encode target if needed
-    if y.dtype == "object" or y.dtype.name == "category":
-        le = LabelEncoder()
-        y = pd.Series(le.fit_transform(y.astype(str)))
-
-    # Fill NaN with median for numeric
-    X = X.fillna(X.median(numeric_only=True))
-    X = X.fillna(0)  # fallback for any remaining NaN
+    df = load_dataframe(file_path)
+    X, y, _, _ = prepare_training_frame(df, target_column)
 
     X_train, X_val, y_train, y_val = train_test_split(
         X.values, y.values, test_size=test_size, random_state=42, stratify=y.values

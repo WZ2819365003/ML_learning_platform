@@ -145,3 +145,26 @@ class MetricsResponse(BaseModel):
             "together with metric values recorded at that point."
         ),
     )
+
+
+# ===================================================================
+# Prediction schemas
+# ===================================================================
+
+class PredictionRequest(BaseModel):
+    """Inline JSON rows submitted for saved-model inference."""
+
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    include_probabilities: bool = True
+
+
+class PredictionResponse(BaseModel):
+    """Prediction output returned by a saved model endpoint."""
+
+    task_id: str
+    model_type: str
+    target_column: str
+    rows: int
+    predictions: list[Any] = Field(default_factory=list)
+    class_labels: list[str] = Field(default_factory=list)
+    probabilities: list[dict[str, float]] | None = None

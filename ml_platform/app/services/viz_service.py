@@ -11,11 +11,11 @@ import pandas as pd
 from fastapi import HTTPException
 from sklearn.metrics import confusion_matrix, roc_curve, auc
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 from sqlalchemy import select
 
 from app.config import get_settings
 from app.models.database import AsyncSession, Dataset, TrainingTask
+from app.services.prediction_service import load_dataframe, prepare_training_frame
 
 logger = logging.getLogger(__name__)
 
@@ -30,41 +30,19 @@ def _load_model(model_path: str):
 
 def _load_and_split_data(file_path: str, target_column: str, test_size: float = 0.2):
     """Load dataset and split into train/test, mirroring training logic."""
-    path = Path(file_path)
-    ext = path.suffix.lower()
-    if ext == ".csv":
-        df = pd.read_csv(path)
-    elif ext == ".parquet":
-        df = pd.read_parquet(path)
-    elif ext == ".xlsx":
-        df = pd.read_excel(path)
-    else:
-        raise ValueError(f"Unsupported: {ext}")
-
-    X = df.drop(columns=[target_column])
-    y = df[target_column]
-
-    # Encode categoricals
-    for col in X.columns:
-        if X[col].dtype == 'object' or X[col].dtype.name == 'category':
-            le = LabelEncoder()
-            X[col] = le.fit_transform(X[col].astype(str))
-
-    label_encoder = None
-    original_labels = None
-    if y.dtype == 'object' or y.dtype.name == 'category':
-        label_encoder = LabelEncoder()
-        original_labels = sorted(y.unique().tolist())
-        y = pd.Series(label_encoder.fit_transform(y.astype(str)))
-
-    X = X.fillna(X.median(numeric_only=True)).fillna(0)
+    df = load_dataframe(file_path)
+    X, y, _, target_encoder = prepare_training_frame(df, target_column)
 
     X_train, X_test, y_train, y_test = train_test_split(
         X.values, y.values, test_size=test_size, random_state=42, stratify=y.values
     )
 
     feature_names = list(X.columns)
-    class_labels = original_labels if original_labels else sorted([str(c) for c in np.unique(y.values)])
+    class_labels = (
+        target_encoder.classes_.tolist()
+        if target_encoder is not None
+        else sorted([str(c) for c in np.unique(y.values)])
+    )
 
     return X_train, X_test, y_train, y_test, feature_names, class_labels
 
