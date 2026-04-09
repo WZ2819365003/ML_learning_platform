@@ -238,3 +238,59 @@ async def get_shap_summary(task_id: str, db: AsyncSession, max_samples: int = 10
     except Exception as e:
         logger.error("SHAP computation failed: %s", str(e))
         raise HTTPException(status_code=500, detail=f"SHAP computation failed: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# Regression visualization helpers
+# ---------------------------------------------------------------------------
+
+def _load_task_model_data(task, dataset, test_size: float = 0.2):
+    """Load model + split data for regression tasks (no stratify on continuous target).
+
+    This is a separate helper from _load_and_split_data which uses stratify=y.values
+    (only valid for classification). Regression targets are continuous so stratify
+    must be omitted.
+    """
+    df = load_dataframe(dataset.file_path)
+    X, y, _, target_encoder = prepare_training_frame(df, task.target_column)
+
+    # No stratify — regression targets are continuous
+    X_train, X_test, y_train, y_test = train_test_split(
+        X.values, y.values, test_size=test_size, random_state=42
+    )
+
+    model = _load_model(task.model_path)
+    feature_names = list(X.columns)
+    return model, X_train, X_test, y_train, y_test, feature_names
+
+
+async def get_residual_plot(task_id: str, db: AsyncSession) -> dict:
+    """Return residuals (y_true - y_pred) and predicted values for residual plot."""
+    task, dataset = await _get_task_and_dataset(task_id, db)
+    model, _, X_test, _, y_test, _ = _load_task_model_data(task, dataset, task.test_size)
+
+    y_pred = model.predict(X_test)
+    residuals = (y_test - y_pred).tolist()
+    y_pred_list = y_pred.tolist()
+
+    return {
+        "task_id": task_id,
+        "predicted": [round(float(v), 4) for v in y_pred_list],
+        "residuals": [round(float(v), 4) for v in residuals],
+        "mean_residual": round(float(np.mean(residuals)), 4),
+        "std_residual": round(float(np.std(residuals)), 4),
+    }
+
+
+async def get_predicted_vs_actual(task_id: str, db: AsyncSession) -> dict:
+    """Return predicted vs actual values for scatter plot."""
+    task, dataset = await _get_task_and_dataset(task_id, db)
+    model, _, X_test, _, y_test, _ = _load_task_model_data(task, dataset, task.test_size)
+
+    y_pred = model.predict(X_test)
+
+    return {
+        "task_id": task_id,
+        "actual": [round(float(v), 4) for v in y_test.tolist()],
+        "predicted": [round(float(v), 4) for v in y_pred.tolist()],
+    }

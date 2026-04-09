@@ -6,9 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import get_db
 from app.services.viz_service import (
     get_confusion_matrix,
-    get_roc_curve,
     get_feature_importance,
     get_learning_curve,
+    get_predicted_vs_actual,
+    get_residual_plot,
+    get_roc_curve,
     get_shap_summary,
 )
 
@@ -60,3 +62,21 @@ async def shap_summary_route(
 ):
     """Return SHAP values for model explainability."""
     return await get_shap_summary(task_id, db, max_samples=max_samples)
+
+
+@router.get("/{task_id}/residual_plot")
+async def residual_plot_route(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return residuals vs predicted values for regression tasks."""
+    return await get_residual_plot(task_id, db)
+
+
+@router.get("/{task_id}/predicted_vs_actual")
+async def predicted_vs_actual_route(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return predicted vs actual scatter data for regression tasks."""
+    return await get_predicted_vs_actual(task_id, db)
