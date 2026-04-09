@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sklearn.model_selection import train_test_split
 
 from app.config import get_settings
-from app.core.trainer import get_trainer, list_available_models
+from app.core.trainer import detect_task_type, get_trainer, list_available_models
 from app.core.logger import TrainingLogger
 from app.models.database import AsyncSession, Dataset, TrainingTask, async_session_factory
 from app.services.prediction_service import load_dataframe, prepare_training_frame
@@ -27,16 +27,45 @@ _executor = ThreadPoolExecutor(max_workers=4)
 # Track running tasks for cancellation
 _running_tasks: dict[str, asyncio.Task] = {}
 
-def _prepare_data(file_path: str, target_column: str, test_size: float):
+def _prepare_data(file_path: str, target_column: str, test_size: float, is_regression: bool = False):
     """Load data, encode labels, split into train/val sets."""
     df = load_dataframe(file_path)
     X, y, _, _ = prepare_training_frame(df, target_column)
 
+    # Regression targets are continuous — stratify is not applicable
+    stratify = None if is_regression else y.values
     X_train, X_val, y_train, y_val = train_test_split(
-        X.values, y.values, test_size=test_size, random_state=42, stratify=y.values
+        X.values, y.values, test_size=test_size, random_state=42, stratify=stratify
     )
 
     return X_train, X_val, y_train, y_val
+
+
+def _apply_class_weight(
+    hyperparameters: dict,
+    model_type: str,
+    class_weight: str | None,
+    y_train,
+) -> dict:
+    """Translate the top-level class_weight field into model-specific hyperparameter keys."""
+    if not class_weight:
+        return hyperparameters
+
+    hp = dict(hyperparameters)
+
+    if model_type == "xgboost":
+        # XGBoost uses scale_pos_weight for binary classification
+        unique, counts = np.unique(y_train, return_counts=True)
+        if len(unique) == 2 and counts[1] > 0:
+            hp["scale_pos_weight"] = float(counts[0]) / float(counts[1])
+    elif model_type == "lightgbm":
+        hp["is_unbalance"] = True
+    elif model_type in ("random_forest", "extra_trees", "gradient_boosting",
+                        "logistic_regression", "svm"):
+        hp["class_weight"] = class_weight
+    # decision_tree, knn, gaussian_nb, mlp, neural: not supported — silently ignored
+
+    return hp
 
 
 def _try_init_mlflow():
@@ -78,6 +107,7 @@ def _run_training_sync(
     eval_metrics: list[str],
     cv_folds: int,
     model_save_dir: str,
+    class_weight: str | None = None,
 ) -> dict:
     """Synchronous training function to run in thread pool."""
     # Initialize per-task logger
@@ -90,14 +120,18 @@ def _run_training_sync(
 
     # Prepare data
     tl.log("INFO", "Loading and preparing data...")
-    X_train, X_val, y_train, y_val = _prepare_data(file_path, target_column, test_size)
+    is_regression = detect_task_type(model_type) == "regression"
+    X_train, X_val, y_train, y_val = _prepare_data(file_path, target_column, test_size, is_regression)
     tl.log("INFO", "Data prepared",
            train_samples=len(X_train), val_samples=len(X_val),
            features=X_train.shape[1], target=target_column)
 
+    # Translate class_weight into model-specific hyperparameter keys
+    effective_hp = _apply_class_weight(hyperparameters, model_type, class_weight, y_train)
+
     # Create and configure trainer
     trainer = get_trainer(model_type)
-    trainer.configure(hyperparameters)
+    trainer.configure(effective_hp)
     tl.log("INFO", "Model configured", params=str(hyperparameters))
 
     # Start MLflow run if available
@@ -110,7 +144,7 @@ def _run_training_sync(
                 "target_column": target_column,
                 "test_size": test_size,
                 "cv_folds": cv_folds,
-                **{k: str(v) for k, v in hyperparameters.items()},
+                **{k: str(v) for k, v in effective_hp.items()},
             })
             tl.log("INFO", "MLflow run started", run_id=mlflow_run.info.run_id)
         except Exception as e:
@@ -222,6 +256,7 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
         eval_metrics=request_data.get("eval_metrics", ["accuracy"]),
         cv_folds=cv_config.get("folds", 5) if cv_config.get("enabled", True) else 3,
         model_save_dir=str(settings.storage_models),
+        class_weight=request_data.get("class_weight"),
     ))
     _running_tasks[task_id] = bg_task
 
@@ -238,6 +273,7 @@ async def _execute_training(
     eval_metrics: list[str],
     cv_folds: int,
     model_save_dir: str,
+    class_weight: str | None = None,
 ):
     """Background coroutine that runs training in a thread and updates DB."""
     # Update status to RUNNING
@@ -256,7 +292,7 @@ async def _execute_training(
             _executor,
             _run_training_sync,
             task_id, file_path, target_column, model_type,
-            hyperparameters, test_size, eval_metrics, cv_folds, model_save_dir,
+            hyperparameters, test_size, eval_metrics, cv_folds, model_save_dir, class_weight,
         )
 
         # Update with results

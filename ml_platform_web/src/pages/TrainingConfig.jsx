@@ -1,113 +1,62 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, Form, InputNumber, Select, Space, Tag, Typography, message } from 'antd';
-import { RocketOutlined } from '@ant-design/icons';
+import {
+  Alert, Button, Card, Divider, Form, InputNumber, Select, Space, Switch,
+  Tag, Typography, message,
+} from 'antd';
+import { RocketOutlined, SettingOutlined } from '@ant-design/icons';
 import { dataApi, trainingApi } from '../services/api';
+import ModelSelector from '../components/ModelSelector';
+import DynamicParamForm from '../components/DynamicParamForm';
 
 const { Paragraph, Text, Title } = Typography;
 
-const CLASSIFICATION_MODELS = [
-  'random_forest', 'xgboost', 'lightgbm', 'logistic_regression', 'svm', 'mlp',
-];
-const REGRESSION_MODELS = [
-  'random_forest_regressor', 'xgboost_regressor', 'lightgbm_regressor',
-  'linear_regression', 'ridge', 'lasso', 'elasticnet', 'svr', 'mlp_regressor',
-];
-
-const CLASSIFICATION_METRICS = [
-  { label: 'accuracy', value: 'accuracy' },
-  { label: 'f1', value: 'f1' },
-  { label: 'precision', value: 'precision' },
-  { label: 'recall', value: 'recall' },
-  { label: 'roc_auc', value: 'roc_auc' },
-  { label: 'log_loss', value: 'log_loss' },
-];
-const REGRESSION_METRICS = [
-  { label: 'rmse', value: 'rmse' },
-  { label: 'mae', value: 'mae' },
-  { label: 'r2', value: 'r2' },
-  { label: 'mse', value: 'mse' },
-  { label: 'mape', value: 'mape' },
-];
+// Parse list-type hyperparams from comma-separated string → number[]
+function parseHyperparameters(raw = {}) {
+  const result = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'string' && v.includes(',')) {
+      const nums = v.split(',').map(s => Number(s.trim())).filter(n => !Number.isNaN(n));
+      result[k] = nums.length > 0 ? nums : v;
+    } else {
+      result[k] = v;
+    }
+  }
+  return result;
+}
 
 const TrainingConfig = () => {
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const location = useLocation();
+
   const [datasets, setDatasets] = useState([]);
-  const [models, setModels] = useState([]);
+  const [registryData, setRegistryData] = useState({
+    categories: [], models: [], classificationMetrics: [], regressionMetrics: [],
+  });
+  const [advancedMode, setAdvancedMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const selectedDatasetId = Form.useWatch('dataset_id', form);
-  const selectedTarget = Form.useWatch('target_column', form);
   const selectedModel = Form.useWatch('model_type', form);
-  const isRegression = REGRESSION_MODELS.includes(selectedModel);
-  const metricOptions = isRegression ? REGRESSION_METRICS : CLASSIFICATION_METRICS;
+
+  const selectedModelSpec = useMemo(
+    () => registryData.models.find(m => m.id === selectedModel) ?? null,
+    [registryData.models, selectedModel]
+  );
+  const isRegression = selectedModelSpec?.task_types?.includes('regression') && !selectedModelSpec?.task_types?.includes('classification');
+  const metricOptions = isRegression ? registryData.regressionMetrics : registryData.classificationMetrics;
+
   const selectedDataset = useMemo(
-    () => datasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
+    () => datasets.find(d => d.id === selectedDatasetId) ?? null,
     [datasets, selectedDatasetId]
   );
   const targetOptions = useMemo(() => {
-    const columnsInfo = selectedDataset?.columns_info ?? {};
-    return Object.keys(columnsInfo).map((column) => ({
-      label: column,
-      value: column,
-    }));
+    return Object.keys(selectedDataset?.columns_info ?? {}).map(col => ({ label: col, value: col }));
   }, [selectedDataset]);
 
-  useEffect(() => {
-    void loadPageData();
-  }, []);
-
-  useEffect(() => {
-    const preferredDatasetId = location.state?.preferredDatasetId;
-    if (!preferredDatasetId || datasets.length === 0) {
-      return;
-    }
-
-    const datasetExists = datasets.some((dataset) => dataset.id === preferredDatasetId);
-    if (datasetExists) {
-      form.setFieldValue('dataset_id', preferredDatasetId);
-    }
-  }, [datasets, form, location.state]);
-
-  useEffect(() => {
-    if (!selectedDataset) {
-      return;
-    }
-
-    const columns = Object.keys(selectedDataset.columns_info ?? {});
-    const currentTarget = form.getFieldValue('target_column');
-    if (currentTarget && columns.includes(currentTarget)) {
-      return;
-    }
-
-    const defaultTarget = columns.includes('Target') ? 'Target' : columns.at(-1);
-    form.setFieldValue('target_column', defaultTarget);
-  }, [form, selectedDataset]);
-
-  useEffect(() => {
-    if (models.length === 0) {
-      return;
-    }
-
-    const currentModel = form.getFieldValue('model_type');
-    if (currentModel && models.includes(currentModel)) {
-      return;
-    }
-
-    const defaultModel = models.includes('random_forest') ? 'random_forest' : models[0];
-    form.setFieldValue('model_type', defaultModel);
-  }, [form, models]);
-
-  // Reset eval_metrics when task type switches between classification and regression
-  useEffect(() => {
-    if (!selectedModel) return;
-    const defaultMetrics = REGRESSION_MODELS.includes(selectedModel)
-      ? ['rmse', 'r2']
-      : ['accuracy', 'f1'];
-    form.setFieldValue('eval_metrics', defaultMetrics);
-  }, [selectedModel, form]);
+  // ── Load page data ──────────────────────────────────────────────────────────
+  useEffect(() => { void loadPageData(); }, []);
 
   async function loadPageData() {
     try {
@@ -115,32 +64,69 @@ const TrainingConfig = () => {
         dataApi.listDatasets(),
         trainingApi.listModels(),
       ]);
-
       setDatasets(datasetResponse.items ?? []);
-      setModels(Array.isArray(modelResponse) ? modelResponse : modelResponse.value ?? []);
+      setRegistryData({
+        categories: modelResponse.categories ?? [],
+        models: modelResponse.models ?? [],
+        classificationMetrics: (modelResponse.classification_metrics ?? []).map(m => ({
+          label: m.label, value: m.value,
+        })),
+        regressionMetrics: (modelResponse.regression_metrics ?? []).map(m => ({
+          label: m.label, value: m.value,
+        })),
+      });
     } catch (error) {
       console.error('加载训练配置失败:', error);
       message.error('加载训练配置失败');
     }
   }
 
+  // ── Auto-select dataset from navigation state ───────────────────────────────
+  useEffect(() => {
+    const preferredId = location.state?.preferredDatasetId;
+    if (!preferredId || datasets.length === 0) return;
+    if (datasets.some(d => d.id === preferredId)) {
+      form.setFieldValue('dataset_id', preferredId);
+    }
+  }, [datasets, form, location.state]);
+
+  // ── Auto-select default target column ──────────────────────────────────────
+  useEffect(() => {
+    if (!selectedDataset) return;
+    const cols = Object.keys(selectedDataset.columns_info ?? {});
+    const current = form.getFieldValue('target_column');
+    if (current && cols.includes(current)) return;
+    const defaultTarget = cols.includes('Target') ? 'Target' : cols.at(-1);
+    form.setFieldValue('target_column', defaultTarget);
+  }, [form, selectedDataset]);
+
+  // ── Reset eval_metrics when task type changes ───────────────────────────────
+  useEffect(() => {
+    if (!selectedModelSpec) return;
+    const defaults = selectedModelSpec.task_types?.includes('regression') &&
+      !selectedModelSpec.task_types?.includes('classification')
+      ? ['rmse', 'r2']
+      : ['accuracy', 'f1'];
+    form.setFieldValue('eval_metrics', defaults);
+  }, [selectedModelSpec, form]);
+
+  // ── Submit ──────────────────────────────────────────────────────────────────
   async function handleSubmit(values) {
     setSubmitting(true);
     try {
+      // Lift class_weight from hyperparameters to top-level field
+      const { class_weight: classWeight, ...rawHp } = values.hyperparameters ?? {};
+      const hyperparameters = parseHyperparameters(rawHp);
+
       const task = await trainingApi.startTraining({
         dataset_id: values.dataset_id,
         target_column: values.target_column,
         model_type: values.model_type,
-        hyperparameters: {
-          n_estimators: values.n_estimators,
-          max_depth: values.max_depth,
-        },
-        test_size: values.test_size,
-        eval_metrics: values.eval_metrics,
-        cross_validation: {
-          enabled: true,
-          folds: values.cv_folds,
-        },
+        hyperparameters,
+        test_size: values.test_size ?? 0.2,
+        eval_metrics: values.eval_metrics ?? [],
+        class_weight: classWeight ?? null,
+        cross_validation: { enabled: true, folds: values.cv_folds ?? 5 },
       });
 
       message.success('训练任务已启动');
@@ -152,6 +138,8 @@ const TrainingConfig = () => {
       setSubmitting(false);
     }
   }
+
+  const selectedTarget = Form.useWatch('target_column', form);
 
   return (
     <div>
@@ -173,35 +161,22 @@ const TrainingConfig = () => {
           <Form
             form={form}
             layout="vertical"
-            initialValues={{
-              test_size: 0.2,
-              eval_metrics: ['accuracy', 'f1'],
-              n_estimators: 100,
-              max_depth: 6,
-              cv_folds: 3,
-            }}
-            onFinish={(values) => void handleSubmit(values)}
+            initialValues={{ test_size: 0.2, eval_metrics: ['accuracy', 'f1'], cv_folds: 5 }}
+            onFinish={values => void handleSubmit(values)}
           >
-            <Form.Item
-              label="数据集"
-              name="dataset_id"
-              rules={[{ required: true, message: '请选择数据集' }]}
-            >
+            {/* ── Dataset & Target ── */}
+            <Form.Item label="数据集" name="dataset_id" rules={[{ required: true, message: '请选择数据集' }]}>
               <Select
                 data-testid="dataset-select"
                 placeholder="请选择数据集"
-                options={datasets.map((dataset) => ({
-                  label: `${dataset.name} (${dataset.row_count ?? 0} 行 / ${dataset.column_count ?? 0} 列)`,
-                  value: dataset.id,
+                options={datasets.map(d => ({
+                  label: `${d.name} (${d.row_count ?? 0} 行 / ${d.column_count ?? 0} 列)`,
+                  value: d.id,
                 }))}
               />
             </Form.Item>
 
-            <Form.Item
-              label="目标列"
-              name="target_column"
-              rules={[{ required: true, message: '请选择目标列' }]}
-            >
+            <Form.Item label="目标列" name="target_column" rules={[{ required: true, message: '请选择目标列' }]}>
               <Select
                 data-testid="target-select"
                 placeholder="请选择目标列"
@@ -210,12 +185,13 @@ const TrainingConfig = () => {
               />
             </Form.Item>
 
+            {/* ── Model Selector ── */}
             <Form.Item
               label={
                 <Space>
                   模型类型
-                  {selectedModel && (
-                    <Tag color={isRegression ? 'blue' : 'green'}>
+                  {selectedModelSpec && (
+                    <Tag color={isRegression ? 'green' : 'blue'}>
                       {isRegression ? '回归' : '分类'}
                     </Tag>
                   )}
@@ -224,39 +200,57 @@ const TrainingConfig = () => {
               name="model_type"
               rules={[{ required: true, message: '请选择模型类型' }]}
             >
-              <Select data-testid="model-select" placeholder="请选择模型类型">
-                <Select.OptGroup label="分类模型">
-                  {CLASSIFICATION_MODELS.filter((m) => models.includes(m)).map((m) => (
-                    <Select.Option key={m} value={m}>{m}</Select.Option>
-                  ))}
-                </Select.OptGroup>
-                <Select.OptGroup label="回归模型">
-                  {REGRESSION_MODELS.filter((m) => models.includes(m)).map((m) => (
-                    <Select.Option key={m} value={m}>{m}</Select.Option>
-                  ))}
-                </Select.OptGroup>
-              </Select>
+              <ModelSelector
+                models={registryData.models}
+                categories={registryData.categories}
+                value={selectedModel}
+                onChange={v => form.setFieldValue('model_type', v)}
+              />
             </Form.Item>
 
-            <Space size={16} wrap style={{ width: '100%', marginBottom: 16 }}>
+            {/* ── Common Params ── */}
+            <Space size={16} wrap style={{ width: '100%', marginBottom: 8 }}>
               <Form.Item label="测试集比例" name="test_size" style={{ marginBottom: 0 }}>
-                <InputNumber min={0.1} max={0.5} step={0.05} />
-              </Form.Item>
-              <Form.Item label="n_estimators" name="n_estimators" style={{ marginBottom: 0 }}>
-                <InputNumber min={10} max={500} step={10} />
-              </Form.Item>
-              <Form.Item label="max_depth" name="max_depth" style={{ marginBottom: 0 }}>
-                <InputNumber min={2} max={20} />
+                <InputNumber min={0.05} max={0.5} step={0.05} style={{ width: 120 }} />
               </Form.Item>
               <Form.Item label="交叉验证折数" name="cv_folds" style={{ marginBottom: 0 }}>
-                <InputNumber min={2} max={10} />
+                <InputNumber min={2} max={20} step={1} style={{ width: 120 }} />
               </Form.Item>
             </Space>
 
+            {/* ── Model-specific Params ── */}
+            {selectedModelSpec && (
+              <>
+                <Divider orientation="left" style={{ marginTop: 8, marginBottom: 16 }}>
+                  <Space>
+                    <SettingOutlined />
+                    模型参数
+                    <Switch
+                      size="small"
+                      checked={advancedMode}
+                      onChange={setAdvancedMode}
+                      checkedChildren="高级"
+                      unCheckedChildren="基础"
+                    />
+                  </Space>
+                </Divider>
+                <DynamicParamForm
+                  params={selectedModelSpec.params ?? []}
+                  advancedMode={advancedMode}
+                />
+              </>
+            )}
+
+            {/* ── Eval Metrics ── */}
             <Form.Item label="评估指标" name="eval_metrics">
-              <Select mode="multiple" options={metricOptions} />
+              <Select
+                mode="multiple"
+                options={metricOptions}
+                placeholder="请选择评估指标"
+              />
             </Form.Item>
 
+            {/* ── Dataset Info ── */}
             {selectedDataset ? (
               <Card size="small" style={{ marginBottom: 24 }}>
                 <Space direction="vertical" size={4}>

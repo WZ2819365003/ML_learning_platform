@@ -5,9 +5,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.trainer import list_available_models
+from app.core.model_registry import (
+    CATEGORY_REGISTRY,
+    CLASSIFICATION_EVAL_METRICS,
+    COMMON_PARAMS,
+    MODEL_REGISTRY,
+    REGRESSION_EVAL_METRICS,
+)
 from app.models.database import get_db
 from app.models.schemas import (
+    ModelsListResponse,
     TrainingListResponse,
     TrainingRequest,
     TrainingTaskResponse,
@@ -61,7 +68,13 @@ async def list_training_tasks_route(
     return await list_training_tasks(db, page=page, page_size=page_size, status_filter=status)
 
 
-@router.get("/models", response_model=list[str])
+@router.get("/models", response_model=ModelsListResponse)
 async def get_available_models():
-    """Return a list of available model types for training."""
-    return list_available_models()
+    """Return structured model metadata with categories, params, and eval metrics."""
+    return {
+        "categories": CATEGORY_REGISTRY,
+        "models": MODEL_REGISTRY,
+        "common_params": COMMON_PARAMS,
+        "classification_metrics": CLASSIFICATION_EVAL_METRICS,
+        "regression_metrics": REGRESSION_EVAL_METRICS,
+    }

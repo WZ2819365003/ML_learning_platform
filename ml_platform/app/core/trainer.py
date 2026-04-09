@@ -140,6 +140,7 @@ class RandomForestTrainer(BaseTrainer):
             "min_samples_split": hyperparameters.get("min_samples_split", 2),
             "min_samples_leaf": hyperparameters.get("min_samples_leaf", 1),
             "random_state": hyperparameters.get("random_state", 42),
+            "class_weight": hyperparameters.get("class_weight", None),
             "n_jobs": -1,
         }
         self.model = RandomForestClassifier(**params)
@@ -158,6 +159,9 @@ class XGBoostTrainer(BaseTrainer):
             "max_depth": hyperparameters.get("max_depth", 6),
             "subsample": hyperparameters.get("subsample", 0.8),
             "colsample_bytree": hyperparameters.get("colsample_bytree", 0.8),
+            "reg_alpha": hyperparameters.get("reg_alpha", 0),
+            "reg_lambda": hyperparameters.get("reg_lambda", 1),
+            "scale_pos_weight": hyperparameters.get("scale_pos_weight", 1),
             "random_state": hyperparameters.get("random_state", 42),
             "eval_metric": "logloss",
         }
@@ -176,6 +180,9 @@ class LightGBMTrainer(BaseTrainer):
             "learning_rate": hyperparameters.get("learning_rate", 0.1),
             "num_leaves": hyperparameters.get("num_leaves", 31),
             "max_depth": hyperparameters.get("max_depth", -1),
+            "reg_alpha": hyperparameters.get("reg_alpha", 0),
+            "reg_lambda": hyperparameters.get("reg_lambda", 1),
+            "is_unbalance": hyperparameters.get("is_unbalance", False),
             "random_state": hyperparameters.get("random_state", 42),
             "verbose": -1,
         }
@@ -194,6 +201,7 @@ class LogisticRegressionTrainer(BaseTrainer):
             "l1_ratio": hyperparameters.get("l1_ratio", 0),
             "max_iter": hyperparameters.get("max_iter", 1000),
             "solver": hyperparameters.get("solver", "lbfgs"),
+            "class_weight": hyperparameters.get("class_weight", None),
             "random_state": hyperparameters.get("random_state", 42),
         }
         self.model = LogisticRegression(**params)
@@ -210,6 +218,7 @@ class SVMTrainer(BaseTrainer):
             "C": hyperparameters.get("C", 1.0),
             "kernel": hyperparameters.get("kernel", "rbf"),
             "gamma": hyperparameters.get("gamma", "scale"),
+            "class_weight": hyperparameters.get("class_weight", None),
             "probability": True,  # needed for predict_proba and roc_auc
             "random_state": hyperparameters.get("random_state", 42),
         }
