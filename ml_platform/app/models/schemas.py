@@ -90,6 +90,7 @@ class TrainingTaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    name: str | None = None
     dataset_id: str
     model_type: str
     hyperparameters: dict[str, Any] | None = None
@@ -292,12 +293,18 @@ class DLTrainingRequest(BaseModel):
     train_config:  dict[str, Any] = Field(default_factory=dict)
 
 
+class TaskRenameRequest(BaseModel):
+    """Request body for renaming a task."""
+    name: str = Field(..., min_length=1, max_length=100)
+
+
 class DLTaskResponse(BaseModel):
     """Serialised DLTrainingTask."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id:            str
+    name:          str | None = None
     dataset_id:    str
     target_column: str
     model_type:    str

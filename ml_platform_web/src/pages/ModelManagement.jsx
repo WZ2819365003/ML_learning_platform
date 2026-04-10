@@ -9,9 +9,11 @@ import {
   Form,
   Input,
   Modal,
+  Pagination,
   Row,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
   message,
@@ -26,7 +28,7 @@ import {
   PlayCircleOutlined,
 } from '@ant-design/icons';
 import * as echarts from 'echarts';
-import api, { dataApi, deployApi, modelApi } from '../services/api';
+import api, { dataApi, deployApi, dlApi, modelApi } from '../services/api';
 import { formatBytes, formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
 
 const { Paragraph, Text, Title } = Typography;
@@ -238,100 +240,38 @@ const ModelManagement = () => {
 
   return (
     <Space direction="vertical" size={20} style={{ width: '100%' }}>
-      <Card>
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Title level={2} style={{ margin: 0 }}>
-            模型管理
-          </Title>
-          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            这里只显示真实保存下来的模型文件。你可以查看训练细节、删除模型文件、对比多模型指标，也可以直接调用预测接口。
-          </Paragraph>
-          <Space wrap>
-            <Button
-              type="primary"
-              icon={<BarChartOutlined />}
-              disabled={selectedRowKeys.length < 2}
-              onClick={handleCompareModels}
-            >
-              对比已选模型 ({selectedRowKeys.length}/3)
-            </Button>
-            <Text type="secondary">最多同时对比 3 个模型</Text>
-          </Space>
-        </Space>
-      </Card>
+      <Title level={2} style={{ margin: 0 }}>模型管理</Title>
 
-      <Card>
-        <Table
-          loading={loading}
-          rowKey="task_id"
-          dataSource={models}
-          locale={{ emptyText: <Empty description="还没有已保存模型" /> }}
-          rowSelection={{
-            selectedRowKeys,
-            onChange: (nextKeys) => {
-              if (nextKeys.length > 3) {
-                message.warning('最多只能同时选择 3 个模型');
-                return;
-              }
-              setSelectedRowKeys(nextKeys);
-            },
-          }}
-          columns={[
-            {
-              title: '数据集',
-              dataIndex: 'dataset_name',
-              render: (value, record) => value ?? record.dataset_id,
-            },
-            {
-              title: '模型',
-              dataIndex: 'model_type',
-              render: (value) => <Tag color="blue">{value}</Tag>,
-            },
-            {
-              title: '目标列',
-              dataIndex: 'target_column',
-            },
-            {
-              title: '准确率',
-              render: (_, record) => formatMetric(record.result_metrics?.accuracy, { percent: true }),
-            },
-            {
-              title: 'F1',
-              render: (_, record) => formatMetric(record.result_metrics?.f1),
-            },
-            {
-              title: '大小',
-              dataIndex: 'model_size',
-              render: (value) => formatBytes(value),
-            },
-            {
-              title: '完成时间',
-              dataIndex: 'finished_at',
-              render: (value) => formatDateTime(value),
-            },
-            {
-              title: '操作',
-              render: (_, record) => (
-                <Space size="small">
-                  <Button type="text" icon={<EyeOutlined />} onClick={() => void openModelDetail(record)}>
-                    详情
-                  </Button>
-                  <Button
-                    type="text"
-                    icon={<CloudUploadOutlined />}
-                    onClick={() => { setDeployTarget(record); deployForm.setFieldValue('name', `${record.model_type}-deploy`); }}
-                  >
-                    部署
-                  </Button>
-                  <Button type="text" danger icon={<DeleteOutlined />} onClick={() => void handleDeleteModel(record.task_id)}>
-                    删除
-                  </Button>
-                </Space>
-              ),
-            },
-          ]}
-        />
-      </Card>
+      <Tabs
+        defaultActiveKey="ml"
+        items={[
+          {
+            key: 'ml',
+            label: '机器学习模型',
+            children: <MLModelTab
+              models={models}
+              loading={loading}
+              selectedRowKeys={selectedRowKeys}
+              setSelectedRowKeys={setSelectedRowKeys}
+              handleCompareModels={handleCompareModels}
+              openModelDetail={openModelDetail}
+              handleDeleteModel={handleDeleteModel}
+              setDeployTarget={setDeployTarget}
+              deployForm={deployForm}
+            />,
+          },
+          {
+            key: 'dl',
+            label: '深度学习模型',
+            children: <DLModelTab />,
+          },
+          {
+            key: 'universal',
+            label: '通用模型',
+            children: <UniversalModelTab />,
+          },
+        ]}
+      />
 
       <Modal
         title="模型详情与预测接口"
@@ -482,5 +422,141 @@ const ModelManagement = () => {
     </Space>
   );
 };
+
+// ── ML tab: extracted from original layout ────────────────────────────────────
+function MLModelTab({
+  models, loading, selectedRowKeys, setSelectedRowKeys,
+  handleCompareModels, openModelDetail, handleDeleteModel,
+  setDeployTarget, deployForm,
+}) {
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space wrap>
+        <Button
+          type="primary"
+          icon={<BarChartOutlined />}
+          disabled={selectedRowKeys.length < 2}
+          onClick={handleCompareModels}
+        >
+          对比已选模型 ({selectedRowKeys.length}/3)
+        </Button>
+        <Text type="secondary">最多同时对比 3 个模型</Text>
+      </Space>
+      <Table
+        loading={loading}
+        rowKey="task_id"
+        dataSource={models}
+        locale={{ emptyText: <Empty description="还没有已保存模型" /> }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: (nextKeys) => {
+            if (nextKeys.length > 3) { message.warning('最多只能同时选择 3 个模型'); return; }
+            setSelectedRowKeys(nextKeys);
+          },
+        }}
+        columns={[
+          { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id },
+          { title: '模型', dataIndex: 'model_type', render: v => <Tag color="blue">{v}</Tag> },
+          { title: '目标列', dataIndex: 'target_column' },
+          { title: '准确率', render: (_, r) => formatMetric(r.result_metrics?.accuracy, { percent: true }) },
+          { title: 'F1', render: (_, r) => formatMetric(r.result_metrics?.f1) },
+          { title: '大小', dataIndex: 'model_size', render: v => formatBytes(v) },
+          { title: '完成时间', dataIndex: 'finished_at', render: v => formatDateTime(v) },
+          {
+            title: '操作',
+            render: (_, record) => (
+              <Space size="small">
+                <Button type="text" icon={<EyeOutlined />} onClick={() => void openModelDetail(record)}>详情</Button>
+                <Button type="text" icon={<CloudUploadOutlined />}
+                  onClick={() => { setDeployTarget(record); deployForm.setFieldValue('name', `${record.model_type}-deploy`); }}>
+                  部署
+                </Button>
+                <Button type="text" danger icon={<DeleteOutlined />} onClick={() => void handleDeleteModel(record.task_id)}>删除</Button>
+              </Space>
+            ),
+          },
+        ]}
+      />
+    </Space>
+  );
+}
+
+// ── DL tab ────────────────────────────────────────────────────────────────────
+function DLModelTab() {
+  const [models, setModels] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 10;
+
+  useEffect(() => { void load(page); }, [page]);
+
+  async function load(p) {
+    setLoading(true);
+    try {
+      const res = await dlApi.listTrainedModels({ page: p, page_size: PAGE_SIZE });
+      setModels(res.items ?? []);
+      setTotal(res.total ?? 0);
+    } catch {
+      message.error('加载深度学习模型失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const columns = [
+    { title: '任务名称', dataIndex: 'name', render: (v, r) => v ?? r.id.slice(0, 8) },
+    { title: '架构', dataIndex: 'model_type', render: v => <Tag color="purple">{v}</Tag> },
+    { title: '任务类型', dataIndex: 'task_type' },
+    {
+      title: '指标',
+      render: (_, r) => {
+        const m = r.result_metrics ?? {};
+        if (m.val_acc != null) return `准确率 ${(m.val_acc * 100).toFixed(1)}%`;
+        if (m.val_rmse != null) return `RMSE ${m.val_rmse.toFixed(4)}`;
+        return '-';
+      },
+    },
+    { title: '完成时间', dataIndex: 'finished_at', render: v => formatDateTime(v) },
+  ];
+
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Table
+        rowKey="id"
+        dataSource={models}
+        columns={columns}
+        loading={loading}
+        pagination={false}
+        locale={{ emptyText: <Empty description="还没有完成训练的深度学习模型" /> }}
+      />
+      <div style={{ textAlign: 'right' }}>
+        <Pagination
+          current={page}
+          pageSize={PAGE_SIZE}
+          total={total}
+          showTotal={t => `共 ${t} 条`}
+          onChange={p => setPage(p)}
+          showSizeChanger={false}
+        />
+      </div>
+    </Space>
+  );
+}
+
+// ── Universal tab ─────────────────────────────────────────────────────────────
+function UniversalModelTab() {
+  return (
+    <Card>
+      <Empty
+        description={
+          <span>
+            通用时序模型（如 Google TimesFM）集成功能<br />即将上线，敬请期待。
+          </span>
+        }
+      />
+    </Card>
+  );
+}
 
 export default ModelManagement;

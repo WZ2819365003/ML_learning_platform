@@ -5,7 +5,6 @@ import {
   DashboardOutlined,
   DatabaseOutlined,
   RocketOutlined,
-  LineChartOutlined,
   AppstoreOutlined,
   CloudServerOutlined,
   SettingOutlined,
@@ -32,7 +31,7 @@ const Sidebar = () => {
     {
       key: 'training',
       icon: <RocketOutlined />,
-      label: '训练管理',
+      label: '机器学习',
       children: [
         {
           key: 'training-config',
@@ -41,13 +40,12 @@ const Sidebar = () => {
         {
           key: 'training-monitor',
           label: <Link to="/training/monitor">训练监控</Link>
+        },
+        {
+          key: 'training-results',
+          label: <Link to="/training/results">结果可视化</Link>
         }
       ]
-    },
-    {
-      key: 'results',
-      icon: <LineChartOutlined />,
-      label: <Link to="/results">结果可视化</Link>
     },
     {
       key: 'dl',
@@ -64,7 +62,7 @@ const Sidebar = () => {
         },
         {
           key: 'dl-results',
-          label: <Link to="/dl/results">结果详情</Link>
+          label: <Link to="/dl/results">结果可视化</Link>
         }
       ]
     },
@@ -91,7 +89,7 @@ const Sidebar = () => {
     if (path === '/data') return 'data'
     if (path === '/training/config') return 'training-config'
     if (path === '/training/monitor') return 'training-monitor'
-    if (path === '/results') return 'results'
+    if (path === '/training/results') return 'training-results'
     if (path === '/models') return 'models'
     if (path === '/deploy') return 'deploy'
     if (path === '/settings') return 'settings'

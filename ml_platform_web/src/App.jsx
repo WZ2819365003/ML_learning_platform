@@ -31,7 +31,8 @@ function App() {
               <Route path="/data" element={<DataManagement />} />
               <Route path="/training/config" element={<TrainingConfig />} />
               <Route path="/training/monitor" element={<TrainingMonitor />} />
-              <Route path="/results" element={<Results />} />
+              <Route path="/results" element={<Navigate to="/training/results" />} />
+              <Route path="/training/results" element={<Results />} />
               <Route path="/models" element={<ModelManagement />} />
               <Route path="/deploy" element={<ModelDeploy />} />
               <Route path="/settings" element={<Settings />} />

@@ -215,8 +215,11 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
             detail=f"Unknown DL model '{request_data['model_type']}'. Available: {available}",
         )
 
+    import uuid as _uuid_mod
+    short_id = str(_uuid_mod.uuid4())[:8]
     task = DLTrainingTask(
         dataset_id=dataset_id,
+        name=f"{request_data['model_type']}_{short_id}",
         target_column=request_data["target_column"],
         model_type=request_data["model_type"],
         task_type=request_data.get("task_type", "auto"),
@@ -278,6 +281,42 @@ async def list_dl_tasks(
         stmt = stmt.where(DLTrainingTask.status == status_filter)
         count_stmt = count_stmt.where(DLTrainingTask.status == status_filter)
 
+    total = (await db.execute(count_stmt)).scalar_one()
+    offset = (page - 1) * page_size
+    stmt = stmt.order_by(DLTrainingTask.created_at.desc()).offset(offset).limit(page_size)
+    tasks = (await db.execute(stmt)).scalars().all()
+    return {"items": tasks, "total": total, "page": page, "page_size": page_size}
+
+
+async def rename_dl_task(task_id: str, name: str, db: AsyncSession) -> DLTrainingTask:
+    """Rename a DL training task."""
+    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
+    task = res.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="DL task not found")
+    task.name = name
+    await db.flush()
+    return task
+
+
+async def delete_dl_task(task_id: str, db: AsyncSession) -> None:
+    """Delete a DL training task (not allowed while RUNNING)."""
+    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
+    task = res.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="DL task not found")
+    if task.status == "RUNNING":
+        raise HTTPException(status_code=422, detail="Cannot delete a running task. Stop it first.")
+    await db.delete(task)
+    await db.flush()
+
+
+async def list_dl_trained_models(
+    db: AsyncSession, page: int = 1, page_size: int = 20
+) -> dict:
+    """Return paginated list of successfully completed DL tasks (i.e. trained models)."""
+    stmt = select(DLTrainingTask).where(DLTrainingTask.status == "SUCCESS")
+    count_stmt = select(func.count(DLTrainingTask.id)).where(DLTrainingTask.status == "SUCCESS")
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
     stmt = stmt.order_by(DLTrainingTask.created_at.desc()).offset(offset).limit(page_size)

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Badge, Button, Card, Col, Divider, Input, message, Modal, Row,
-  Skeleton, Space, Spin, Statistic, Table, Tag, Tooltip, Typography,
+  Badge, Button, Card, Col, Divider, Empty, Input, message, Modal, Row,
+  Skeleton, Space, Spin, Statistic, Table, Tabs, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   CopyOutlined, DeleteOutlined, LinkOutlined,
@@ -153,30 +153,21 @@ export default function ModelDeploy() {
     },
   ];
 
-  return (
+  const mlContent = (
     <div>
-      <Typography.Title level={2}>模型部署</Typography.Title>
-
       {/* Stats */}
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col span={8}>
-          <Card>
-            <Statistic title="部署总数" value={totalDeployments} />
-          </Card>
+          <Card><Statistic title="部署总数" value={totalDeployments} /></Card>
         </Col>
         <Col span={8}>
-          <Card>
-            <Statistic title="活跃部署" value={activeCount} valueStyle={{ color: '#3f8600' }} />
-          </Card>
+          <Card><Statistic title="活跃部署" value={activeCount} valueStyle={{ color: '#3f8600' }} /></Card>
         </Col>
         <Col span={8}>
-          <Card>
-            <Statistic title="总调用次数" value={totalCalls} />
-          </Card>
+          <Card><Statistic title="总调用次数" value={totalCalls} /></Card>
         </Col>
       </Row>
 
-      {/* Table */}
       <Card title="部署列表" style={{ marginBottom: 24 }}>
         <Table
           columns={columns}
@@ -188,7 +179,6 @@ export default function ModelDeploy() {
         />
       </Card>
 
-      {/* Detail panel */}
       {selected && (
         <Card
           title={
@@ -202,7 +192,6 @@ export default function ModelDeploy() {
           }
         >
           <Row gutter={24}>
-            {/* URLs */}
             <Col xs={24} md={12}>
               <Text strong>预测 URL (url1 — POST):</Text>
               <div style={{ marginTop: 8, marginBottom: 16 }}>
@@ -213,8 +202,6 @@ export default function ModelDeploy() {
                 <CopyableUrl url={selected.endpoints?.result || ''} label="查询预测结果" />
               </div>
             </Col>
-
-            {/* Online test */}
             <Col xs={24} md={12}>
               <Text strong>在线测试</Text>
               <div style={{ marginTop: 8 }}>
@@ -237,15 +224,11 @@ export default function ModelDeploy() {
                   <Text type="secondary" style={{ marginLeft: 8 }}>部署已暂停</Text>
                 )}
               </div>
-
               {testResult && (
                 <>
                   <Divider />
                   <Text strong>预测结果:</Text>
-                  <pre style={{
-                    background: '#f6f8fa', padding: 12, borderRadius: 4,
-                    marginTop: 8, fontSize: 12, overflowX: 'auto',
-                  }}>
+                  <pre style={{ background: '#f6f8fa', padding: 12, borderRadius: 4, marginTop: 8, fontSize: 12, overflowX: 'auto' }}>
                     {JSON.stringify(testResult, null, 2)}
                   </pre>
                 </>
@@ -255,7 +238,6 @@ export default function ModelDeploy() {
         </Card>
       )}
 
-      {/* Delete confirm modal */}
       <Modal
         open={!!deleteTarget}
         title="确认删除"
@@ -266,6 +248,36 @@ export default function ModelDeploy() {
       >
         <p>确定要删除部署 <strong>{deleteTarget?.name}</strong> 吗？此操作不可撤销。</p>
       </Modal>
+    </div>
+  );
+
+  return (
+    <div>
+      <Typography.Title level={2} style={{ marginBottom: 16 }}>模型部署</Typography.Title>
+      <Tabs
+        defaultActiveKey="ml"
+        items={[
+          { key: 'ml', label: '机器学习部署', children: mlContent },
+          {
+            key: 'dl',
+            label: '深度学习部署',
+            children: (
+              <Card>
+                <Empty description="深度学习模型部署功能即将上线，敬请期待。" />
+              </Card>
+            ),
+          },
+          {
+            key: 'universal',
+            label: '通用模型部署',
+            children: (
+              <Card>
+                <Empty description="通用模型（如 Google TimesFM）部署功能即将上线，敬请期待。" />
+              </Card>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

@@ -1,17 +1,20 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useLocation } from 'react-router-dom';
-import { Button, Card, Descriptions, Space, Table, Tag, Typography, message } from 'antd';
-import { ReloadOutlined, StopOutlined } from '@ant-design/icons';
+import React, { useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import {
+  Button, Card, Descriptions, Input, Modal, Pagination,
+  Popconfirm, Progress, Space, Table, Tag, Typography, message,
+} from 'antd';
+import {
+  ArrowLeftOutlined, CheckOutlined, CloseOutlined,
+  DeleteOutlined, EditOutlined, EyeOutlined,
+  PlusOutlined, ReloadOutlined, StopOutlined,
+} from '@ant-design/icons';
 import { dataApi, logsApi, trainingApi } from '../services/api';
 
-const { Paragraph, Text, Title } = Typography;
+const { Text, Title } = Typography;
 
 function useQuery() {
   return new URLSearchParams(useLocation().search);
-}
-
-function formatStatus(status) {
-  return (status ?? 'UNKNOWN').toUpperCase();
 }
 
 const statusColors = {
@@ -21,217 +24,414 @@ const statusColors = {
   FAILED: 'error',
 };
 
-const TrainingMonitor = () => {
-  const query = useQuery();
-  const focusTaskId = query.get('taskId');
-  const [tasks, setTasks] = useState([]);
-  const [datasetsById, setDatasetsById] = useState({});
-  const [selectedTaskId, setSelectedTaskId] = useState(focusTaskId);
-  const [logText, setLogText] = useState('');
+const PAGE_SIZE = 10;
 
-  const selectedTask = useMemo(
-    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
-    [selectedTaskId, tasks]
+// ── Inline-editable name cell ─────────────────────────────────────────────────
+function EditableNameCell({ record, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(record.name ?? record.id.slice(0, 8));
+  const inputRef = useRef(null);
+
+  function startEdit(e) {
+    e.stopPropagation();
+    setVal(record.name ?? record.id.slice(0, 8));
+    setEditing(true);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }
+
+  async function save(e) {
+    e?.stopPropagation();
+    const trimmed = val.trim();
+    if (!trimmed) { setEditing(false); return; }
+    try {
+      await onSave(record.id, trimmed);
+      setEditing(false);
+    } catch {
+      message.error('重命名失败');
+    }
+  }
+
+  function cancel(e) {
+    e?.stopPropagation();
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <Space size={4} onClick={e => e.stopPropagation()}>
+        <Input
+          ref={inputRef}
+          size="small"
+          value={val}
+          maxLength={100}
+          style={{ width: 160 }}
+          onChange={e => setVal(e.target.value)}
+          onPressEnter={save}
+          onKeyDown={e => e.key === 'Escape' && cancel(e)}
+        />
+        <Button size="small" type="text" icon={<CheckOutlined />} onClick={save} />
+        <Button size="small" type="text" icon={<CloseOutlined />} onClick={cancel} />
+      </Space>
+    );
+  }
+
+  return (
+    <Space size={4}>
+      <Text>{record.name ?? <Text type="secondary">{record.id.slice(0, 8)}</Text>}</Text>
+      <Button
+        size="small"
+        type="text"
+        icon={<EditOutlined />}
+        onClick={startEdit}
+        style={{ opacity: 0.5 }}
+      />
+    </Space>
   );
+}
 
+// ── List view ─────────────────────────────────────────────────────────────────
+function TaskListView({ navigate }) {
+  const [tasks, setTasks] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [datasetsById, setDatasetsById] = useState({});
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => { void loadDatasets(); }, []);
+  useEffect(() => { void loadPage(page); }, [page]);
+
+  // Auto-refresh running tasks every 5s
   useEffect(() => {
-    void refreshAll();
-  }, []);
+    const timer = setInterval(() => {
+      const hasRunning = tasks.some(t => t.status === 'RUNNING' || t.status === 'PENDING');
+      if (hasRunning) void loadPage(page);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [tasks, page]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void refreshAll();
-    }, 2000);
-
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    if (focusTaskId) {
-      setSelectedTaskId(focusTaskId);
-    } else if (!selectedTaskId && tasks.length > 0) {
-      setSelectedTaskId(tasks[0].id);
-    }
-  }, [focusTaskId, selectedTaskId, tasks]);
-
-  useEffect(() => {
-    if (!selectedTaskId) {
-      setLogText('');
-      return;
-    }
-
-    void loadLogs(selectedTaskId);
-  }, [selectedTaskId]);
-
-  async function refreshAll() {
+  async function loadDatasets() {
     try {
-      const [taskResponse, datasetResponse] = await Promise.all([
-        trainingApi.listTasks(),
-        dataApi.listDatasets(),
-      ]);
+      const res = await dataApi.listDatasets();
+      setDatasetsById(Object.fromEntries((res.items ?? []).map(d => [d.id, d.name])));
+    } catch { /* ignore */ }
+  }
 
-      setTasks(taskResponse.items ?? []);
-      setDatasetsById(
-        Object.fromEntries((datasetResponse.items ?? []).map((dataset) => [dataset.id, dataset.name]))
-      );
-    } catch (error) {
-      console.error('刷新训练任务失败:', error);
-      message.error('刷新训练任务失败');
+  async function loadPage(p) {
+    setLoading(true);
+    try {
+      const res = await trainingApi.listTasks({ page: p, page_size: PAGE_SIZE });
+      setTasks(res.items ?? []);
+      setTotal(res.total ?? 0);
+    } catch {
+      message.error('加载任务列表失败');
+    } finally {
+      setLoading(false);
     }
   }
 
-  async function loadLogs(taskId) {
+  async function handleRename(taskId, name) {
+    await trainingApi.renameTask(taskId, name);
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, name } : t));
+  }
+
+  async function handleDelete(taskId) {
     try {
-      const logResponse = await logsApi.getLogs(taskId, { page_size: 20 });
-      const text = (logResponse.entries ?? [])
-        .map((entry) => `${entry.created_at} | ${entry.level} | ${entry.message}`)
-        .join('\n');
-      setLogText(text);
-    } catch (error) {
-      setLogText('当前任务还没有日志输出。');
+      await trainingApi.deleteTask(taskId);
+      message.success('任务已删除');
+      void loadPage(page);
+    } catch (err) {
+      message.error(err?.response?.data?.detail ?? '删除失败');
     }
   }
 
-  async function stopTask(taskId) {
+  async function handleStop(taskId) {
     try {
       await trainingApi.stopTraining(taskId);
-      message.success('训练任务已停止');
-      await refreshAll();
-    } catch (error) {
-      console.error('停止训练任务失败:', error);
-      message.error('停止训练任务失败');
+      message.success('已发送停止指令');
+      void loadPage(page);
+    } catch {
+      message.error('停止失败');
     }
   }
+
+  const columns = [
+    {
+      title: '任务名称',
+      key: 'name',
+      render: (_, record) => (
+        <EditableNameCell record={record} onSave={handleRename} />
+      ),
+    },
+    {
+      title: '模型',
+      dataIndex: 'model_type',
+      key: 'model_type',
+      width: 130,
+    },
+    {
+      title: '数据集',
+      dataIndex: 'dataset_id',
+      key: 'dataset_id',
+      width: 160,
+      render: v => datasetsById[v] ?? <Text code>{v.slice(0, 8)}</Text>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 90,
+      render: v => {
+        const s = (v ?? 'UNKNOWN').toUpperCase();
+        return <Tag color={statusColors[s] ?? 'default'}>{s}</Tag>;
+      },
+    },
+    {
+      title: '进度',
+      dataIndex: 'progress',
+      key: 'progress',
+      width: 120,
+      render: (v, record) => {
+        const s = (record.status ?? '').toUpperCase();
+        return (
+          <Progress
+            percent={Math.round(v ?? 0)}
+            size="small"
+            status={s === 'FAILED' ? 'exception' : s === 'SUCCESS' ? 'success' : 'active'}
+            showInfo={false}
+          />
+        );
+      },
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 160,
+      render: v => new Date(v).toLocaleString('zh-CN'),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 140,
+      render: (_, record) => {
+        const s = (record.status ?? '').toUpperCase();
+        return (
+          <Space size={4} onClick={e => e.stopPropagation()}>
+            <Button
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => navigate(`/training/monitor?taskId=${record.id}`)}
+            >
+              查看
+            </Button>
+            {s === 'RUNNING' && (
+              <Button
+                size="small"
+                danger
+                icon={<StopOutlined />}
+                onClick={() => void handleStop(record.id)}
+              >
+                停止
+              </Button>
+            )}
+            {s !== 'RUNNING' && (
+              <Popconfirm
+                title="确认删除该任务吗？"
+                okText="删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => void handleDelete(record.id)}
+              >
+                <Button size="small" danger icon={<DeleteOutlined />} />
+              </Popconfirm>
+            )}
+          </Space>
+        );
+      },
+    },
+  ];
 
   return (
     <div>
       <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 24 }}>
-        <Title level={2} style={{ margin: 0 }}>
-          训练监控
-        </Title>
-        <Button icon={<ReloadOutlined />} onClick={() => void refreshAll()}>
-          刷新
-        </Button>
+        <Title level={2} style={{ margin: 0 }}>机器学习训练监控</Title>
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={() => void loadPage(page)}>刷新</Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => navigate('/training/config')}
+          >
+            新建训练
+          </Button>
+        </Space>
       </Space>
 
-      <Card style={{ marginBottom: 24 }}>
-        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          页面会自动轮询任务状态。成功后会展示最终指标，失败时会展示错误消息。
-        </Paragraph>
-      </Card>
-
-      <Card title="训练任务列表" style={{ marginBottom: 24 }}>
+      <Card>
         <Table
           rowKey="id"
           dataSource={tasks}
-          pagination={{ pageSize: 10 }}
-          onRow={(record) => ({
-            onClick: () => setSelectedTaskId(record.id),
+          columns={columns}
+          loading={loading}
+          pagination={false}
+          size="middle"
+          onRow={record => ({
+            style: { cursor: 'pointer' },
+            onClick: () => navigate(`/training/monitor?taskId=${record.id}`),
           })}
-          columns={[
-            {
-              title: '任务 ID',
-              dataIndex: 'id',
-              key: 'id',
-              render: (value) => <Text code>{value.slice(0, 8)}</Text>,
-            },
-            {
-              title: '数据集',
-              dataIndex: 'dataset_id',
-              key: 'dataset_id',
-              render: (value) => datasetsById[value] ?? value,
-            },
-            {
-              title: '模型',
-              dataIndex: 'model_type',
-              key: 'model_type',
-            },
-            {
-              title: '状态',
-              dataIndex: 'status',
-              key: 'status',
-              render: (value) => <Tag color={statusColors[formatStatus(value)]}>{formatStatus(value)}</Tag>,
-            },
-            {
-              title: '进度',
-              dataIndex: 'progress',
-              key: 'progress',
-              render: (value) => `${Math.round(value ?? 0)}%`,
-            },
-            {
-              title: '创建时间',
-              dataIndex: 'created_at',
-              key: 'created_at',
-              render: (value) => new Date(value).toLocaleString('zh-CN'),
-            },
-            {
-              title: '操作',
-              key: 'actions',
-              render: (_, record) =>
-                formatStatus(record.status) === 'RUNNING' ? (
-                  <Button
-                    danger
-                    size="small"
-                    icon={<StopOutlined />}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void stopTask(record.id);
-                    }}
-                  >
-                    停止
-                  </Button>
-                ) : null,
-            },
-          ]}
         />
-      </Card>
-
-      <Card title="任务详情">
-        {selectedTask ? (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Descriptions bordered column={2} size="small">
-              <Descriptions.Item label="数据集">
-                {datasetsById[selectedTask.dataset_id] ?? selectedTask.dataset_id}
-              </Descriptions.Item>
-              <Descriptions.Item label="模型">{selectedTask.model_type}</Descriptions.Item>
-              <Descriptions.Item label="状态">
-                <Tag color={statusColors[formatStatus(selectedTask.status)]}>{formatStatus(selectedTask.status)}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="进度">{Math.round(selectedTask.progress ?? 0)}%</Descriptions.Item>
-              <Descriptions.Item label="开始时间">
-                {selectedTask.started_at ? new Date(selectedTask.started_at).toLocaleString('zh-CN') : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="结束时间">
-                {selectedTask.finished_at ? new Date(selectedTask.finished_at).toLocaleString('zh-CN') : '-'}
-              </Descriptions.Item>
-            </Descriptions>
-
-            {selectedTask.result_metrics ? (
-              <Descriptions bordered column={2} size="small" title="训练指标">
-                {Object.entries(selectedTask.result_metrics).map(([key, value]) => (
-                  <Descriptions.Item key={key} label={key}>
-                    {String(value)}
-                  </Descriptions.Item>
-                ))}
-              </Descriptions>
-            ) : null}
-
-            {selectedTask.error_message ? (
-              <Card size="small" title="错误信息">
-                <Text type="danger">{selectedTask.error_message}</Text>
-              </Card>
-            ) : null}
-
-            <Card size="small" title="最近日志">
-              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{logText || '当前任务还没有日志输出。'}</pre>
-            </Card>
-          </Space>
-        ) : (
-          <Text type="secondary">暂无训练任务。</Text>
-        )}
+        <div style={{ marginTop: 16, textAlign: 'right' }}>
+          <Pagination
+            current={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            showTotal={t => `共 ${t} 条`}
+            onChange={p => setPage(p)}
+            showSizeChanger={false}
+          />
+        </div>
       </Card>
     </div>
   );
+}
+
+// ── Detail view ───────────────────────────────────────────────────────────────
+function TaskDetailView({ taskId, navigate }) {
+  const [task, setTask] = useState(null);
+  const [logText, setLogText] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    void loadTask();
+    void loadLogs();
+    const timer = setInterval(() => {
+      void loadTask();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [taskId]);
+
+  async function loadTask() {
+    try {
+      const data = await trainingApi.getTrainingStatus(taskId);
+      setTask(data);
+    } catch {
+      message.error('加载任务状态失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadLogs() {
+    try {
+      const res = await logsApi.getLogs(taskId, { page_size: 30 });
+      const text = (res.entries ?? [])
+        .map(e => `${e.created_at} | ${e.level} | ${e.message}`)
+        .join('\n');
+      setLogText(text || '暂无日志。');
+    } catch {
+      setLogText('日志加载失败。');
+    }
+  }
+
+  async function handleStop() {
+    try {
+      await trainingApi.stopTraining(taskId);
+      message.success('已发送停止指令');
+      void loadTask();
+    } catch {
+      message.error('停止失败');
+    }
+  }
+
+  const s = (task?.status ?? '').toUpperCase();
+
+  return (
+    <div>
+      <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 24 }}>
+        <Space>
+          <Button
+            icon={<ArrowLeftOutlined />}
+            onClick={() => navigate('/training/monitor')}
+          >
+            返回列表
+          </Button>
+          <Title level={2} style={{ margin: 0 }}>训练任务详情</Title>
+        </Space>
+        <Space>
+          {s === 'RUNNING' && (
+            <Button danger icon={<StopOutlined />} onClick={handleStop}>停止训练</Button>
+          )}
+          <Button icon={<ReloadOutlined />} onClick={() => { void loadTask(); void loadLogs(); }}>
+            刷新
+          </Button>
+        </Space>
+      </Space>
+
+      {loading && <Card><Text type="secondary">正在加载…</Text></Card>}
+
+      {!loading && task && (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Card>
+            <Descriptions bordered column={2} size="small">
+              <Descriptions.Item label="任务名称">{task.name ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="任务 ID"><Text code>{task.id}</Text></Descriptions.Item>
+              <Descriptions.Item label="模型">{task.model_type}</Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <Tag color={statusColors[s] ?? 'default'}>{s}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="进度" span={2}>
+                <Progress
+                  percent={Math.round(task.progress ?? 0)}
+                  status={s === 'FAILED' ? 'exception' : s === 'SUCCESS' ? 'success' : 'active'}
+                  strokeColor={s === 'RUNNING' ? { from: '#108ee9', to: '#87d068' } : undefined}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="开始时间">
+                {task.started_at ? new Date(task.started_at).toLocaleString('zh-CN') : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="结束时间">
+                {task.finished_at ? new Date(task.finished_at).toLocaleString('zh-CN') : '-'}
+              </Descriptions.Item>
+            </Descriptions>
+          </Card>
+
+          {task.result_metrics && (
+            <Card title="训练指标">
+              <Descriptions bordered column={3} size="small">
+                {Object.entries(task.result_metrics).map(([k, v]) => (
+                  <Descriptions.Item key={k} label={k}>{String(v)}</Descriptions.Item>
+                ))}
+              </Descriptions>
+            </Card>
+          )}
+
+          {task.error_message && (
+            <Card title="错误信息">
+              <Text type="danger">{task.error_message}</Text>
+            </Card>
+          )}
+
+          <Card title="最近日志">
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', maxHeight: 300, overflow: 'auto' }}>
+              {logText}
+            </pre>
+          </Card>
+        </Space>
+      )}
+    </div>
+  );
+}
+
+// ── Root component ────────────────────────────────────────────────────────────
+const TrainingMonitor = () => {
+  const query = useQuery();
+  const navigate = useNavigate();
+  const taskId = query.get('taskId');
+
+  if (taskId) {
+    return <TaskDetailView taskId={taskId} navigate={navigate} />;
+  }
+  return <TaskListView navigate={navigate} />;
 };
 
 export default TrainingMonitor;

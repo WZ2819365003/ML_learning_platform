@@ -103,7 +103,7 @@ const DLResults = () => {
         </Title>
         <Button
           icon={<ArrowLeftOutlined />}
-          onClick={() => navigate(`/dl/monitor?taskId=${taskId}`)}
+          onClick={() => navigate('/dl/monitor')}
         >
           返回监控
         </Button>
@@ -184,7 +184,7 @@ const DLResults = () => {
               <Button
                 type="link"
                 style={{ padding: 0, marginLeft: 4 }}
-                onClick={() => navigate(`/dl/monitor?taskId=${taskId}`)}
+                onClick={() => navigate('/dl/monitor')}
               >
                 前往监控页
               </Button>

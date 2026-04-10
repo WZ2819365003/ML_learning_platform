@@ -18,10 +18,14 @@ from app.models.schemas import (
     DLTaskListResponse,
     DLTaskResponse,
     DLTrainingRequest,
+    TaskRenameRequest,
 )
 from app.services.dl_service import (
+    delete_dl_task,
     get_dl_status,
     list_dl_tasks,
+    list_dl_trained_models,
+    rename_dl_task,
     start_dl_training,
     stop_dl_training,
 )
@@ -69,6 +73,16 @@ async def list_dl_tasks_route(
     return await list_dl_tasks(db, page=page, page_size=page_size, status_filter=status)
 
 
+@router.get("/trained-models", response_model=DLTaskListResponse)
+async def list_dl_trained_models_route(
+    page:      int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return paginated list of successfully trained DL models."""
+    return await list_dl_trained_models(db, page=page, page_size=page_size)
+
+
 @router.get("/{task_id}/status", response_model=DLTaskResponse)
 async def get_dl_status_route(
     task_id: str,
@@ -85,6 +99,25 @@ async def stop_dl_training_route(
 ):
     """Request cancellation of a running DL training task."""
     return await stop_dl_training(task_id, db)
+
+
+@router.patch("/{task_id}/name", response_model=DLTaskResponse)
+async def rename_dl_task_route(
+    task_id: str,
+    body: TaskRenameRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename a DL training task."""
+    return await rename_dl_task(task_id, body.name, db)
+
+
+@router.delete("/{task_id}", status_code=204)
+async def delete_dl_task_route(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a DL training task (not allowed while RUNNING)."""
+    await delete_dl_task(task_id, db)
 
 
 # ---------------------------------------------------------------------------

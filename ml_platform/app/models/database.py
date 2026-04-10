@@ -102,6 +102,7 @@ class TrainingTask(Base):
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=_uuid
     )
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
     dataset_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
     )
@@ -228,6 +229,7 @@ class DLTrainingTask(Base):
     __tablename__ = "dl_training_tasks"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
     dataset_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
     )

@@ -64,6 +64,12 @@ export const trainingApi = {
   stopTraining(taskId) {
     return api.post(`/training/${taskId}/stop`);
   },
+  renameTask(taskId, name) {
+    return api.patch(`/training/${taskId}/name`, { name });
+  },
+  deleteTask(taskId) {
+    return api.delete(`/training/${taskId}`);
+  },
 };
 
 export const logsApi = {
@@ -152,11 +158,14 @@ export const deployApi = {
 };
 
 export const dlApi = {
-  listModels:    ()       => api.get('/dl/models'),
-  startTraining: (data)   => api.post('/dl/train', data),
-  listTasks:     (params) => api.get('/dl/list', { params }),
-  getStatus:     (id)     => api.get(`/dl/${id}/status`),
-  stopTask:      (id)     => api.post(`/dl/${id}/stop`),
+  listModels:      ()         => api.get('/dl/models'),
+  startTraining:   (data)     => api.post('/dl/train', data),
+  listTasks:       (params)   => api.get('/dl/list', { params }),
+  getStatus:       (id)       => api.get(`/dl/${id}/status`),
+  stopTask:        (id)       => api.post(`/dl/${id}/stop`),
+  renameTask:      (id, name) => api.patch(`/dl/${id}/name`, { name }),
+  deleteTask:      (id)       => api.delete(`/dl/${id}`),
+  listTrainedModels: (params) => api.get('/dl/trained-models', { params }),
 };
 
 export default api;
