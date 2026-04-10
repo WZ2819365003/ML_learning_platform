@@ -4,7 +4,7 @@ import {
   Badge, Button, Card, Progress, Space, Table, Tag, Typography, message,
 } from 'antd';
 import { StopOutlined, TrophyOutlined } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
+import EChart from '../components/EChart';
 import { dlApi } from '../services/api';
 
 const { Text, Title } = Typography;
@@ -298,7 +298,7 @@ const DLMonitor = () => {
             style={{ flex: 1, minWidth: 0 }}
             bodyStyle={{ padding: 8 }}
           >
-            <ReactECharts
+            <EChart
               option={buildLossOption(lossHistory)}
               style={{ height: 300 }}
               notMerge
@@ -309,7 +309,7 @@ const DLMonitor = () => {
             style={{ flex: 1, minWidth: 0 }}
             bodyStyle={{ padding: 8 }}
           >
-            <ReactECharts
+            <EChart
               option={buildMetricOption(lossHistory, taskType)}
               style={{ height: 300 }}
               notMerge

@@ -4,7 +4,7 @@ import {
   Alert, Button, Card, Col, Row, Statistic, Typography, message,
 } from 'antd';
 import { ArrowLeftOutlined, DownloadOutlined } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
+import EChart from '../components/EChart';
 import { dlApi } from '../services/api';
 
 const { Title, Text } = Typography;
@@ -150,10 +150,9 @@ const DLResults = () => {
           {/* Training history chart */}
           {history.length > 0 && (
             <Card title="训练曲线" style={{ marginBottom: 24 }}>
-              <ReactECharts
+              <EChart
                 option={buildHistoryOption(history)}
                 style={{ height: 360 }}
-                notMerge
               />
             </Card>
           )}
