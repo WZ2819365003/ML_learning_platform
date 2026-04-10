@@ -11,6 +11,9 @@ import Results from './pages/Results'
 import ModelManagement from './pages/ModelManagement'
 import ModelDeploy from './pages/ModelDeploy'
 import Settings from './pages/Settings'
+import DLConfig from './pages/DLConfig'
+import DLMonitor from './pages/DLMonitor'
+import DLResults from './pages/DLResults'
 
 const { Content } = Layout
 
@@ -32,6 +35,9 @@ function App() {
               <Route path="/models" element={<ModelManagement />} />
               <Route path="/deploy" element={<ModelDeploy />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/dl/config"  element={<DLConfig />} />
+              <Route path="/dl/monitor" element={<DLMonitor />} />
+              <Route path="/dl/results" element={<DLResults />} />
             </Routes>
           </Content>
         </Layout>

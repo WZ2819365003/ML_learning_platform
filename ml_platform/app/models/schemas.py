@@ -274,3 +274,60 @@ class InferenceJobResponse(BaseModel):
     error_message: str | None = None
     created_at: datetime
     completed_at: datetime | None = None
+
+
+# ===================================================================
+# Deep-Learning schemas
+# ===================================================================
+
+class DLTrainingRequest(BaseModel):
+    """Request body for starting a DL training task."""
+
+    dataset_id:    str
+    target_column: str
+    model_type:    str = Field(..., description="mlp_dl / lstm / cnn1d / transformer")
+    task_type:     str = Field(default="auto", description="auto / classification / regression")
+    arch_config:   dict[str, Any] = Field(default_factory=dict)
+    opt_config:    dict[str, Any] = Field(default_factory=dict)
+    train_config:  dict[str, Any] = Field(default_factory=dict)
+
+
+class DLTaskResponse(BaseModel):
+    """Serialised DLTrainingTask."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id:            str
+    dataset_id:    str
+    target_column: str
+    model_type:    str
+    task_type:     str
+    status:        str
+    progress:      float
+    current_epoch: int
+    total_epochs:  int
+    result_metrics: dict[str, Any] | None = None
+    model_path:    str | None = None
+    error_message: str | None = None
+    created_at:    datetime
+    started_at:    datetime | None = None
+    finished_at:   datetime | None = None
+
+
+class DLTaskListResponse(BaseModel):
+    """Paginated list of DL training tasks."""
+
+    items:     list[DLTaskResponse]
+    total:     int
+    page:      int
+    page_size: int
+
+
+class DLModelsResponse(BaseModel):
+    """Full DL model registry response from GET /api/dl/models."""
+
+    categories:      list[dict[str, Any]]
+    models:          list[dict[str, Any]]
+    optimizer_params: list[dict[str, Any]]
+    train_params:    list[dict[str, Any]]
+

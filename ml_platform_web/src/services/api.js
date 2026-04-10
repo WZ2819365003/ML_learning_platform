@@ -151,4 +151,12 @@ export const deployApi = {
   },
 };
 
+export const dlApi = {
+  listModels:    ()       => api.get('/dl/models'),
+  startTraining: (data)   => api.post('/dl/train', data),
+  listTasks:     (params) => api.get('/dl/list', { params }),
+  getStatus:     (id)     => api.get(`/dl/${id}/status`),
+  stopTask:      (id)     => api.post(`/dl/${id}/stop`),
+};
+
 export default api;
