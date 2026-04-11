@@ -13,6 +13,16 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+def _parse_extra_fields(raw_extra: str) -> dict[str, str] | None:
+    extra: dict[str, str] = {}
+    for item in raw_extra.split(" | "):
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        extra[key] = value
+    return extra or None
+
+
 class EventBus:
     """Simple in-memory pub/sub for bridging training workers to WebSocket clients.
 
@@ -178,11 +188,16 @@ class TrainingLogger:
                             and entry_level != level_filter.upper()
                         ):
                             continue
+                        extra = (
+                            _parse_extra_fields(parts[3])
+                            if len(parts) == 4 and parts[3].strip()
+                            else None
+                        )
                         entries.append(
                             {
                                 "level": entry_level,
                                 "message": parts[2],
-                                "extra": None,
+                                "extra": extra,
                                 "created_at": parts[0],
                             }
                         )

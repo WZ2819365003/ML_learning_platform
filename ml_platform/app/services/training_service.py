@@ -427,3 +427,19 @@ async def delete_training_task(task_id: str, db: AsyncSession) -> None:
         raise HTTPException(status_code=422, detail="Cannot delete a running task. Stop it first.")
     await db.delete(task)
     await db.flush()
+
+
+async def update_training_task_meta(
+    task_id: str, notes: str | None, tags: list[str] | None, db: AsyncSession
+) -> TrainingTask:
+    """Update notes and/or tags of a training task."""
+    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Training task not found")
+    if notes is not None:
+        task.notes = notes
+    if tags is not None:
+        task.tags = tags
+    await db.flush()
+    return task

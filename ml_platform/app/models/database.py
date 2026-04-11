@@ -117,6 +117,8 @@ class TrainingTask(Base):
     result_metrics: Mapped[dict | None] = mapped_column(JSON, default=None)
     model_path: Mapped[str | None] = mapped_column(String(1024), default=None)
     error_message: Mapped[str | None] = mapped_column(Text, default=None)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    tags: Mapped[list | None] = mapped_column(JSON, default=None)
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
@@ -249,15 +251,152 @@ class DLTrainingTask(Base):
     result_metrics: Mapped[dict | None] = mapped_column(JSON, default=None)
     model_path:     Mapped[str | None]  = mapped_column(String(1024), default=None)
     error_message:  Mapped[str | None]  = mapped_column(Text, default=None)
+    notes:          Mapped[str | None]  = mapped_column(Text, nullable=True, default=None)
+    tags:           Mapped[list | None] = mapped_column(JSON, default=None)
 
     created_at:  Mapped[datetime]      = mapped_column(DateTime(timezone=True), default=_utcnow)
     started_at:  Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     dataset: Mapped[Dataset] = relationship("Dataset")
+    dl_epochs: Mapped[list["DLTrainingEpoch"]] = relationship(
+        back_populates="task", cascade="all, delete-orphan"
+    )
+    dl_logs: Mapped[list["DLTrainingLog"]] = relationship(
+        back_populates="task", cascade="all, delete-orphan"
+    )
+    dl_deployments: Mapped[list["DLModelDeployment"]] = relationship(
+        back_populates="dl_task", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<DLTrainingTask id={self.id!r} model={self.model_type!r} status={self.status!r}>"
+
+
+# ---------------------------------------------------------------------------
+# DLTrainingEpoch
+# ---------------------------------------------------------------------------
+
+class DLTrainingEpoch(Base):
+    __tablename__ = "dl_training_epochs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("dl_training_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_epochs: Mapped[int] = mapped_column(Integer, default=0)
+    train_loss: Mapped[float | None] = mapped_column(Float, default=None)
+    val_loss: Mapped[float | None] = mapped_column(Float, default=None)
+    val_acc: Mapped[float | None] = mapped_column(Float, default=None)
+    val_f1_macro: Mapped[float | None] = mapped_column(Float, default=None)
+    val_rmse: Mapped[float | None] = mapped_column(Float, default=None)
+    val_mae: Mapped[float | None] = mapped_column(Float, default=None)
+    val_r2: Mapped[float | None] = mapped_column(Float, default=None)
+    lr: Mapped[float | None] = mapped_column(Float, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    task: Mapped[DLTrainingTask] = relationship(back_populates="dl_epochs")
+
+    def __repr__(self) -> str:
+        return f"<DLTrainingEpoch task_id={self.task_id!r} epoch={self.epoch!r}>"
+
+
+# ---------------------------------------------------------------------------
+# DLTrainingLog
+# ---------------------------------------------------------------------------
+
+class DLTrainingLog(Base):
+    __tablename__ = "dl_training_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("dl_training_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    level: Mapped[str] = mapped_column(String(16), nullable=False, default="INFO")
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    extra: Mapped[dict | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    task: Mapped[DLTrainingTask] = relationship(back_populates="dl_logs")
+
+    def __repr__(self) -> str:
+        return f"<DLTrainingLog task_id={self.task_id!r} level={self.level!r}>"
+
+
+# ---------------------------------------------------------------------------
+# DLModelDeployment
+# ---------------------------------------------------------------------------
+
+class DLModelDeployment(Base):
+    __tablename__ = "dl_model_deployments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dl_task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("dl_training_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    dl_task: Mapped[DLTrainingTask] = relationship(back_populates="dl_deployments")
+
+    def __repr__(self) -> str:
+        return f"<DLModelDeployment id={self.id!r} name={self.name!r} status={self.status!r}>"
+
+
+# ---------------------------------------------------------------------------
+# ModelTagLibrary  – shared tag vocabulary across ML and DL models
+# ---------------------------------------------------------------------------
+
+class ModelTagLibrary(Base):
+    __tablename__ = "model_tag_library"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    def __repr__(self) -> str:
+        return f"<ModelTagLibrary name={self.name!r}>"
+
+
+# ---------------------------------------------------------------------------
+# TimeSeriesForecastTask  – tracks async Chronos forecast jobs
+# ---------------------------------------------------------------------------
+
+class TimeSeriesForecastTask(Base):
+    __tablename__ = "ts_forecast_tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+
+    # Input configuration
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    dataset_name: Mapped[str | None] = mapped_column(String(255), default=None)
+    value_column: Mapped[str] = mapped_column(String(255), nullable=False)
+    time_column: Mapped[str | None] = mapped_column(String(255), default=None)
+    horizon: Mapped[int] = mapped_column(Integer, default=24)
+    frequency: Mapped[str] = mapped_column(String(32), default="high")
+    model_name: Mapped[str] = mapped_column(String(128), default="amazon/chronos-t5-small")
+
+    # Execution state
+    status: Mapped[str] = mapped_column(String(32), default="PENDING", nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, default=None)
+
+    # Result payload (stored as JSON)
+    result: Mapped[dict | None] = mapped_column(JSON, default=None)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    def __repr__(self) -> str:
+        return f"<TimeSeriesForecastTask id={self.id!r} status={self.status!r}>"
 
 
 # ---------------------------------------------------------------------------

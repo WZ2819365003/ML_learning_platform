@@ -8,6 +8,9 @@ build/
 .venv/
 venv/
 env/
+ml_platform/timesfm_env/
+.tmp_pytest*/
+.tmp_pytest_run/
 
 # ML Platform runtime data (regenerated at runtime)
 ml_platform/storage/uploads/

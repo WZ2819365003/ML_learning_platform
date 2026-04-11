@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import joblib
-import pandas as pd
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -193,10 +192,8 @@ async def run_inference(
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     training_df = load_dataframe(dataset.file_path)
-    input_df = pd.DataFrame(rows)
-    # prepare_prediction_frame(training_df, rows_df, target_column) → np.ndarray
-    X_pred = prepare_prediction_frame(training_df, input_df, task.target_column)
-    predictions_raw = model.predict(X_pred).tolist()
+    X_pred = prepare_prediction_frame(training_df, rows, task.target_column)
+    predictions_raw = model.predict(X_pred.values).tolist()
 
     # Decode classification labels if applicable
     _, _, _, target_encoder = prepare_training_frame(training_df, task.target_column)

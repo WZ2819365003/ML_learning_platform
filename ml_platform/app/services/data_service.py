@@ -6,6 +6,7 @@ async SQLAlchemy sessions and pandas-based file inspection.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 from pathlib import Path
@@ -22,6 +23,29 @@ from app.utils.file_utils import generate_unique_filename
 logger = logging.getLogger(__name__)
 
 _ALLOWED_EXTENSIONS = {".csv", ".parquet", ".xlsx"}
+
+
+def _compute_content_digest(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+async def _find_existing_dataset_by_content(
+    db: AsyncSession,
+    content: bytes,
+    file_size: int,
+) -> Dataset | None:
+    digest = _compute_content_digest(content)
+    result = await db.execute(select(Dataset).where(Dataset.file_size == file_size))
+    for dataset in result.scalars():
+        path = Path(dataset.file_path)
+        if not path.exists():
+            continue
+        try:
+            if _compute_content_digest(path.read_bytes()) == digest:
+                return dataset
+        except OSError:
+            logger.warning("Failed to inspect dataset file for dedup: %s", path, exc_info=True)
+    return None
 
 
 def _validate_extension(filename: str) -> str:
@@ -100,6 +124,12 @@ async def upload_dataset(file: UploadFile, db: AsyncSession) -> Dataset:
                 f"allowed size ({settings.max_upload_size:,} bytes)."
             ),
         )
+
+    # -- dedup: reuse existing dataset if file content is identical --
+    existing_dataset = await _find_existing_dataset_by_content(db, content=content, file_size=file_size)
+    if existing_dataset is not None:
+        logger.info("Reusing existing dataset %s for '%s' by content digest", existing_dataset.id, original_name)
+        return existing_dataset
 
     # -- save to disk --
     unique_name = generate_unique_filename(original_name)

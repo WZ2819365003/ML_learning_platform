@@ -14,21 +14,38 @@ from app.core.dl_registry import (
 from app.core.logger import event_bus
 from app.models.database import get_db
 from app.models.schemas import (
+    DLDeploymentListResponse,
+    DLDeploymentResponse,
+    DLDeployRequest,
+    DLEpochListResponse,
     DLModelsResponse,
+    DLPredictionRequest,
+    DLPredictionResponse,
     DLTaskListResponse,
     DLTaskResponse,
     DLTrainingRequest,
+    ModelMetaUpdateRequest,
     TaskRenameRequest,
 )
 from app.services.dl_service import (
+    create_dl_deployment,
+    delete_dl_deployment,
     delete_dl_task,
     get_dl_status,
+    list_dl_logs,
+    list_dl_deployments,
+    list_dl_epochs,
     list_dl_tasks,
     list_dl_trained_models,
+    predict_dl_deployment,
+    predict_dl_task_direct,
     rename_dl_task,
     start_dl_training,
     stop_dl_training,
+    toggle_dl_deployment_status,
+    update_dl_task_meta,
 )
+from app.services.log_service import get_task_logs
 
 router = APIRouter(prefix="/dl", tags=["Deep Learning"])
 
@@ -111,6 +128,52 @@ async def rename_dl_task_route(
     return await rename_dl_task(task_id, body.name, db)
 
 
+@router.patch("/{task_id}/meta", response_model=DLTaskResponse)
+async def update_dl_task_meta_route(
+    task_id: str,
+    body: ModelMetaUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update notes and/or tags of a DL task."""
+    return await update_dl_task_meta(task_id, body.notes, body.tags, db)
+
+
+@router.get("/{task_id}/logs")
+async def get_dl_task_logs_route(
+    task_id: str,
+    level: Optional[str] = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return paginated training log entries for a DL task."""
+    payload = await list_dl_logs(task_id, db, level=level, page=page, page_size=page_size)
+    if payload["total"] > 0:
+        return payload
+    return await get_task_logs(task_id, level=level, page=page, page_size=page_size)
+
+
+@router.get("/{task_id}/epochs", response_model=DLEpochListResponse)
+async def list_dl_epochs_route(
+    task_id: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=1000, ge=1, le=2000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return paginated epoch records for a DL task (for page-refresh restore)."""
+    return await list_dl_epochs(task_id, db, page=page, page_size=page_size)
+
+
+@router.post("/{task_id}/predict")
+async def predict_dl_task_route(
+    task_id: str,
+    body: DLPredictionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Direct inference against a trained DL model (no deployment required)."""
+    return await predict_dl_task_direct(task_id, body.rows, db)
+
+
 @router.delete("/{task_id}", status_code=204)
 async def delete_dl_task_route(
     task_id: str,
@@ -118,6 +181,52 @@ async def delete_dl_task_route(
 ):
     """Delete a DL training task (not allowed while RUNNING)."""
     await delete_dl_task(task_id, db)
+
+
+# ---------------------------------------------------------------------------
+# DL Deployments
+# ---------------------------------------------------------------------------
+
+@router.post("/deployments/{dl_task_id}", response_model=DLDeploymentResponse, status_code=201)
+async def create_dl_deployment_route(
+    dl_task_id: str,
+    body: DLDeployRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Deploy a successfully trained DL model."""
+    return await create_dl_deployment(dl_task_id, body.name, body.description, db)
+
+
+@router.get("/deployments", response_model=DLDeploymentListResponse)
+async def list_dl_deployments_route(db: AsyncSession = Depends(get_db)):
+    """List all DL model deployments."""
+    return await list_dl_deployments(db)
+
+
+@router.patch("/deployments/{dep_id}/status", response_model=DLDeploymentResponse)
+async def toggle_dl_deployment_route(
+    dep_id: str,
+    status: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pause or resume a DL deployment."""
+    return await toggle_dl_deployment_status(dep_id, status, db)
+
+
+@router.delete("/deployments/{dep_id}", status_code=204)
+async def delete_dl_deployment_route(dep_id: str, db: AsyncSession = Depends(get_db)):
+    """Delete a DL deployment."""
+    await delete_dl_deployment(dep_id, db)
+
+
+@router.post("/deployments/{dep_id}/predict", response_model=DLPredictionResponse)
+async def predict_dl_deployment_route(
+    dep_id: str,
+    body: DLPredictionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Run inference via a DL deployment."""
+    return await predict_dl_deployment(dep_id, body.rows, db)
 
 
 # ---------------------------------------------------------------------------

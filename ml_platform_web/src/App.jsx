@@ -14,6 +14,9 @@ import Settings from './pages/Settings'
 import DLConfig from './pages/DLConfig'
 import DLMonitor from './pages/DLMonitor'
 import DLResults from './pages/DLResults'
+import TSConfig from './pages/TSConfig'
+import TSMonitor from './pages/TSMonitor'
+import TSResults from './pages/TSResults'
 
 const { Content } = Layout
 
@@ -39,6 +42,11 @@ function App() {
               <Route path="/dl/config"  element={<DLConfig />} />
               <Route path="/dl/monitor" element={<DLMonitor />} />
               <Route path="/dl/results" element={<DLResults />} />
+              {/* Time Series Forecast — multi-page nav (mirrors ML/DL pattern) */}
+              <Route path="/timesfm" element={<Navigate to="/ts/config" />} />
+              <Route path="/ts/config"  element={<TSConfig />} />
+              <Route path="/ts/monitor" element={<TSMonitor />} />
+              <Route path="/ts/results" element={<TSResults />} />
             </Routes>
           </Content>
         </Layout>

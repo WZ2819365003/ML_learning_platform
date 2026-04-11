@@ -14,6 +14,7 @@ from app.core.model_registry import (
 )
 from app.models.database import get_db
 from app.models.schemas import (
+    ModelMetaUpdateRequest,
     ModelsListResponse,
     TaskRenameRequest,
     TrainingListResponse,
@@ -27,6 +28,7 @@ from app.services.training_service import (
     rename_training_task,
     start_training,
     stop_training,
+    update_training_task_meta,
 )
 
 router = APIRouter(prefix="/training", tags=["Training"])
@@ -79,6 +81,16 @@ async def rename_training_task_route(
 ):
     """Rename a training task."""
     return await rename_training_task(task_id, body.name, db)
+
+
+@router.patch("/{task_id}/meta", response_model=TrainingTaskResponse)
+async def update_training_task_meta_route(
+    task_id: str,
+    body: ModelMetaUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update notes and/or tags of a training task."""
+    return await update_training_task_meta(task_id, body.notes, body.tags, db)
 
 
 @router.delete("/{task_id}", status_code=204)

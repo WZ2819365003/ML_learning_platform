@@ -9,6 +9,7 @@ import {
   CloudServerOutlined,
   SettingOutlined,
   ExperimentOutlined,
+  LineChartOutlined,
 } from '@ant-design/icons'
 
 const { Sider } = Layout
@@ -33,18 +34,9 @@ const Sidebar = () => {
       icon: <RocketOutlined />,
       label: '机器学习',
       children: [
-        {
-          key: 'training-config',
-          label: <Link to="/training/config">训练配置</Link>
-        },
-        {
-          key: 'training-monitor',
-          label: <Link to="/training/monitor">训练监控</Link>
-        },
-        {
-          key: 'training-results',
-          label: <Link to="/training/results">结果可视化</Link>
-        }
+        { key: 'training-config', label: <Link to="/training/config">训练配置</Link> },
+        { key: 'training-monitor', label: <Link to="/training/monitor">训练监控</Link> },
+        { key: 'training-results', label: <Link to="/training/results">结果可视化</Link> }
       ]
     },
     {
@@ -52,18 +44,19 @@ const Sidebar = () => {
       icon: <ExperimentOutlined />,
       label: '深度学习',
       children: [
-        {
-          key: 'dl-config',
-          label: <Link to="/dl/config">模型配置</Link>
-        },
-        {
-          key: 'dl-monitor',
-          label: <Link to="/dl/monitor">训练监控</Link>
-        },
-        {
-          key: 'dl-results',
-          label: <Link to="/dl/results">结果可视化</Link>
-        }
+        { key: 'dl-config', label: <Link to="/dl/config">模型配置</Link> },
+        { key: 'dl-monitor', label: <Link to="/dl/monitor">训练监控</Link> },
+        { key: 'dl-results', label: <Link to="/dl/results">结果可视化</Link> }
+      ]
+    },
+    {
+      key: 'ts',
+      icon: <LineChartOutlined />,
+      label: '时序预测',
+      children: [
+        { key: 'ts-config',  label: <Link to="/ts/config">预测配置</Link> },
+        { key: 'ts-monitor', label: <Link to="/ts/monitor">任务监控</Link> },
+        { key: 'ts-results', label: <Link to="/ts/results">结果可视化</Link> }
       ]
     },
     {
@@ -96,15 +89,18 @@ const Sidebar = () => {
     if (path === '/dl/config') return 'dl-config'
     if (path === '/dl/monitor') return 'dl-monitor'
     if (path === '/dl/results') return 'dl-results'
+    if (path === '/ts/config')  return 'ts-config'
+    if (path === '/ts/monitor') return 'ts-monitor'
+    if (path === '/ts/results') return 'ts-results'
     return 'dashboard'
   }
 
   return (
-    <Sider 
-      collapsible 
-      collapsed={collapsed} 
+    <Sider
+      collapsible
+      collapsed={collapsed}
       onCollapse={setCollapsed}
-      style={{ 
+      style={{
         background: '#fff',
         boxShadow: '2px 0 8px rgba(0, 0, 0, 0.09)'
       }}
@@ -116,7 +112,7 @@ const Sidebar = () => {
       <Menu
         mode="inline"
         selectedKeys={[getSelectedKey()]}
-        defaultOpenKeys={['training', 'dl']}
+        defaultOpenKeys={['training', 'dl', 'ts']}
         items={menuItems}
         style={{ borderRight: 0 }}
       />

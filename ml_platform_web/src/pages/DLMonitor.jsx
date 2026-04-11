@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
-  Badge, Button, Card, Pagination, Popconfirm, Progress,
-  Space, Table, Tag, Typography, message,
+  Badge, Button, Card, Col, Pagination, Popconfirm, Progress,
+  Row, Space, Table, Tag, Typography, message,
 } from 'antd';
 import {
   ArrowLeftOutlined, CheckOutlined, CloseOutlined,
@@ -117,40 +117,81 @@ function buildLossOption(lossHistory) {
 }
 
 function buildMetricOption(lossHistory, taskType) {
-  const epochs = lossHistory.map(d => d.epoch);
+  const epochs    = lossHistory.map(d => d.epoch);
   const valLosses = lossHistory.map(d => d.val_loss ?? null);
-  let secKey = null, secName = '';
-  if (taskType === 'classification') { secKey = 'val_acc'; secName = 'val_acc'; }
-  else if (taskType === 'regression') { secKey = 'val_rmse'; secName = 'val_rmse'; }
-  else {
+
+  // Detect task type from data if 'auto'
+  let resolvedType = taskType;
+  if (taskType === 'auto' || !taskType) {
     const first = lossHistory.find(d => d.val_acc != null || d.val_rmse != null);
-    if (first?.val_acc != null) { secKey = 'val_acc'; secName = 'val_acc'; }
-    else if (first?.val_rmse != null) { secKey = 'val_rmse'; secName = 'val_rmse'; }
+    resolvedType = first?.val_acc != null ? 'classification' : 'regression';
   }
-  const secData = secKey ? lossHistory.map(d => d[secKey] ?? null) : [];
+
+  const isClassification = resolvedType === 'classification';
+  const legendItems = ['val_loss'];
   const series = [
     { name: 'val_loss', type: 'line', smooth: true, yAxisIndex: 0, data: valLosses },
   ];
-  if (secKey) series.push({ name: secName, type: 'line', smooth: true, yAxisIndex: 1, data: secData });
+
+  if (isClassification) {
+    const hasF1 = lossHistory.some(d => d.val_f1_macro != null);
+    legendItems.push('val_acc');
+    series.push({
+      name: 'val_acc', type: 'line', smooth: true, yAxisIndex: 1,
+      data: lossHistory.map(d => d.val_acc ?? null),
+    });
+    if (hasF1) {
+      legendItems.push('val_f1');
+      series.push({
+        name: 'val_f1', type: 'line', smooth: true, yAxisIndex: 1,
+        lineStyle: { type: 'dashed' },
+        data: lossHistory.map(d => d.val_f1_macro ?? null),
+      });
+    }
+  } else {
+    legendItems.push('val_rmse');
+    series.push({
+      name: 'val_rmse', type: 'line', smooth: true, yAxisIndex: 1,
+      data: lossHistory.map(d => d.val_rmse ?? null),
+    });
+  }
+
   return {
     tooltip: { trigger: 'axis' },
-    legend: { data: secKey ? ['val_loss', secName] : ['val_loss'] },
+    legend: { data: legendItems },
     xAxis: { type: 'category', data: epochs, name: 'Epoch' },
     yAxis: [
       { type: 'value', name: 'Loss' },
-      { type: 'value', name: secKey ? secName : '', position: 'right' },
+      { type: 'value', name: isClassification ? '准确率 / F1' : 'RMSE', position: 'right' },
     ],
     series,
   };
 }
 
 const epochColumns = [
-  { title: 'Epoch', dataIndex: 'epoch', key: 'epoch', width: 80 },
+  { title: 'Epoch',      dataIndex: 'epoch',      key: 'epoch',      width: 70 },
   { title: 'Train Loss', dataIndex: 'train_loss', key: 'train_loss', render: v => v != null ? v.toFixed(6) : '-' },
-  { title: 'Val Loss', dataIndex: 'val_loss', key: 'val_loss', render: v => v != null ? v.toFixed(6) : '-' },
-  { title: 'Val Acc / RMSE', key: 'val_metric', render: (_, row) => row.val_acc != null ? row.val_acc.toFixed(4) : row.val_rmse != null ? row.val_rmse.toFixed(4) : '-' },
-  { title: 'LR', dataIndex: 'lr', key: 'lr', render: v => v != null ? v.toExponential(3) : '-' },
+  { title: 'Val Loss',   dataIndex: 'val_loss',   key: 'val_loss',   render: v => v != null ? v.toFixed(6) : '-' },
+  {
+    title: 'Val Acc / RMSE', key: 'val_metric',
+    render: (_, row) => row.val_acc != null ? row.val_acc.toFixed(4)
+                      : row.val_rmse != null ? row.val_rmse.toFixed(4) : '-',
+  },
+  {
+    title: 'Val F1', key: 'val_f1',
+    render: (_, row) => row.val_f1_macro != null ? row.val_f1_macro.toFixed(4) : '-',
+  },
+  { title: 'LR', dataIndex: 'lr', key: 'lr', render: v => v != null ? v.toExponential(3) : '-', width: 100 },
 ];
+
+function formatLogExtra(extra) {
+  if (!extra) {
+    return '';
+  }
+  return Object.entries(extra)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(' | ');
+}
 
 // ── List view ─────────────────────────────────────────────────────────────────
 function DLTaskListView({ navigate }) {
@@ -324,6 +365,8 @@ function DLTaskListView({ navigate }) {
   );
 }
 
+const EPOCH_PAGE_SIZE = 10;
+
 // ── Detail view ───────────────────────────────────────────────────────────────
 function DLTaskDetailView({ taskId, navigate }) {
   const [taskInfo, setTaskInfo] = useState(null);
@@ -331,32 +374,94 @@ function DLTaskDetailView({ taskId, navigate }) {
   const [wsConnected, setWsConnected] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stopping, setStopping] = useState(false);
+  const [logEntries, setLogEntries] = useState([]);
+  const [epochPage, setEpochPage] = useState(1);
+  const logEndRef = useRef(null);
   const wsRef = useRef(null);
+  const logWsRef = useRef(null);
+  const wsBase = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8000`;
 
   useEffect(() => {
     void loadStatus();
+    void loadLogs();
     return () => {
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      if (logWsRef.current) { logWsRef.current.close(); logWsRef.current = null; }
     };
   }, [taskId]);
+
+  // Heartbeat: poll logs every 4 s while training is running (catches missed WS messages)
+  useEffect(() => {
+    if (!taskInfo) return;
+    const s = (taskInfo.status ?? '').toUpperCase();
+    if (s !== 'RUNNING' && s !== 'PENDING') return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await dlApi.getLogs(taskId, { page: 1, page_size: 1000 });
+        const newEntries = res.entries ?? [];
+        setLogEntries(prev => newEntries.length >= prev.length ? newEntries : prev);
+      } catch { /* ignore */ }
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [taskInfo?.status, taskId]);
+
+  // Auto-scroll log panel when new entries arrive
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logEntries]);
 
   async function loadStatus() {
     try {
       const data = await dlApi.getStatus(taskId);
       setTaskInfo(data);
       setProgress(data.progress ?? 0);
+      // Always load epoch history from DB (restores charts after page refresh)
+      await loadEpochHistory();
       const finalStatuses = ['SUCCESS', 'FAILED'];
       if (!finalStatuses.includes((data.status ?? '').toUpperCase())) {
         openWebSocket();
+        openLogWebSocket();
       }
     } catch {
       message.error('加载任务状态失败');
     }
   }
 
+  async function loadEpochHistory() {
+    try {
+      const res = await dlApi.getEpochs(taskId, { page: 1, page_size: 2000 });
+      const items = res.items ?? [];
+      if (items.length > 0) {
+        setLossHistory(items.map(e => ({
+          epoch: e.epoch,
+          total: e.total_epochs,
+          train_loss: e.train_loss,
+          val_loss: e.val_loss,
+          val_acc: e.val_acc,
+          val_f1_macro: e.val_f1_macro,
+          val_rmse: e.val_rmse,
+          val_mae: e.val_mae,
+          val_r2: e.val_r2,
+          lr: e.lr,
+        })));
+      }
+    } catch {
+      // No epoch data yet — not an error
+    }
+  }
+
+  async function loadLogs() {
+    try {
+      const res = await dlApi.getLogs(taskId, { page: 1, page_size: 1000 });
+      setLogEntries(res.entries ?? []);
+    } catch {
+      // Logs may not exist yet — not an error
+    }
+  }
+
   function openWebSocket() {
     if (wsRef.current) return;
-    const ws = new WebSocket(`ws://localhost:8000/api/dl/ws/${taskId}`);
+    const ws = new WebSocket(`${wsBase}/api/dl/ws/${taskId}`);
     wsRef.current = ws;
     ws.onopen = () => setWsConnected(true);
     ws.onmessage = (event) => {
@@ -365,8 +470,11 @@ function DLTaskDetailView({ taskId, navigate }) {
         if (msg.type === 'epoch') {
           setProgress(msg.progress ?? 0);
           setLossHistory(prev => {
+            // Deduplicate: skip if this epoch is already in the list (loaded from DB)
+            const lastEpoch = prev.length > 0 ? prev[prev.length - 1].epoch : 0;
+            if (msg.epoch <= lastEpoch) return prev;
             const next = [...prev, msg];
-            return next.length > 500 ? next.slice(-500) : next;
+            return next.length > 2000 ? next.slice(-2000) : next;
           });
           setTaskInfo(prev => prev ? { ...prev, progress: msg.progress ?? 0, status: 'RUNNING' } : prev);
         }
@@ -375,11 +483,47 @@ function DLTaskDetailView({ taskId, navigate }) {
           ws.close();
           wsRef.current = null;
           void loadStatus();
+          // Reload logs once training finishes
+          setTimeout(() => {
+            void loadLogs();
+            if (logWsRef.current) {
+              logWsRef.current.close();
+              logWsRef.current = null;
+            }
+          }, 1000);
         }
       } catch { /* ignore */ }
     };
     ws.onerror = () => setWsConnected(false);
     ws.onclose = () => setWsConnected(false);
+  }
+
+  function openLogWebSocket() {
+    if (logWsRef.current) return;
+    const ws = new WebSocket(`${wsBase}/ws/logs/${taskId}`);
+    logWsRef.current = ws;
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type !== 'log') return;
+        const entry = {
+          level: msg.level ?? 'INFO',
+          message: msg.message ?? '',
+          extra: msg.extra ?? null,
+          created_at: msg.timestamp ?? msg.created_at ?? new Date().toISOString(),
+        };
+        setLogEntries(prev => {
+          const next = [...prev, entry];
+          return next.length > 1000 ? next.slice(-1000) : next;
+        });
+      } catch { /* ignore */ }
+    };
+    ws.onclose = () => {
+      if (logWsRef.current === ws) logWsRef.current = null;
+    };
+    ws.onerror = () => {
+      if (logWsRef.current === ws) logWsRef.current = null;
+    };
   }
 
   async function handleStop() {
@@ -398,7 +542,9 @@ function DLTaskDetailView({ taskId, navigate }) {
   const status = (taskInfo?.status ?? 'PENDING').toUpperCase();
   const isRunning = status === 'RUNNING';
   const taskType = taskInfo?.task_type ?? 'auto';
-  const tableData = [...lossHistory].slice(-20).reverse().map((row, idx) => ({ ...row, key: idx }));
+  // Epoch table: all epochs descending, client-side pagination
+  const tableData = [...lossHistory].reverse().map((row, idx) => ({ ...row, key: idx }));
+  const pagedEpochData = tableData.slice((epochPage - 1) * EPOCH_PAGE_SIZE, epochPage * EPOCH_PAGE_SIZE);
 
   return (
     <div>
@@ -456,35 +602,105 @@ function DLTaskDetailView({ taskId, navigate }) {
       </Card>
 
       {lossHistory.length > 0 && (
-        <Space size={16} style={{ width: '100%', display: 'flex', marginBottom: 24 }}>
-          <Card title="训练损失" style={{ flex: 1, minWidth: 0 }} bodyStyle={{ padding: 8 }}>
-            <EChart option={buildLossOption(lossHistory)} style={{ height: 300 }} notMerge />
-          </Card>
-          <Card title="验证指标" style={{ flex: 1, minWidth: 0 }} bodyStyle={{ padding: 8 }}>
-            <EChart option={buildMetricOption(lossHistory, taskType)} style={{ height: 300 }} notMerge />
-          </Card>
-        </Space>
+        <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+          <Col xs={24} xl={12}>
+            <Card title="训练损失" bodyStyle={{ padding: 12 }}>
+              <EChart option={buildLossOption(lossHistory)} style={{ height: 340, width: '100%' }} notMerge />
+            </Card>
+          </Col>
+          <Col xs={24} xl={12}>
+            <Card title="验证指标" bodyStyle={{ padding: 12 }}>
+              <EChart option={buildMetricOption(lossHistory, taskType)} style={{ height: 340, width: '100%' }} notMerge />
+            </Card>
+          </Col>
+        </Row>
       )}
 
       {lossHistory.length > 0 && (
-        <Card title={`近期 Epoch 记录（最近 ${Math.min(20, lossHistory.length)} 条）`}>
+        <Card title={`Epoch 记录（共 ${lossHistory.length} 条）`} style={{ marginBottom: 24 }}>
           <Table
             rowKey="key"
-            dataSource={tableData}
+            dataSource={pagedEpochData}
             columns={epochColumns}
             pagination={false}
             size="small"
+            scroll={{ y: 420, x: 960 }}
           />
+          <div style={{ marginTop: 12, textAlign: 'right' }}>
+            <Pagination
+              current={epochPage}
+              pageSize={EPOCH_PAGE_SIZE}
+              total={lossHistory.length}
+              onChange={p => setEpochPage(p)}
+              showTotal={t => `共 ${t} 条`}
+              showSizeChanger={false}
+              size="small"
+            />
+          </div>
         </Card>
       )}
 
       {lossHistory.length === 0 && taskInfo && (
-        <Card>
+        <Card style={{ marginBottom: 24 }}>
           <Text type="secondary">
             {status === 'PENDING' ? '训练尚未开始，等待 Epoch 数据…' : '暂无 Epoch 数据。'}
           </Text>
         </Card>
       )}
+
+      {/* Training log panel */}
+      <Card
+        title={
+          <Space>
+            <span>训练日志</span>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              ({logEntries.length} 条)
+            </Text>
+          </Space>
+        }
+        extra={
+          <Button size="small" onClick={() => void loadLogs()}>刷新日志</Button>
+        }
+      >
+        <div
+          data-testid="dl-log-panel"
+          style={{
+            height: 300,
+            overflowY: 'auto',
+            background: '#0f172a',
+            borderRadius: 8,
+            padding: 12,
+            fontFamily: 'monospace',
+            fontSize: 12,
+          }}
+        >
+          {logEntries.length === 0 ? (
+            <Text style={{ color: '#64748b' }}>
+              暂无日志。训练开始后日志将在这里显示。
+            </Text>
+          ) : (
+            logEntries.map((entry, i) => {
+              const color = entry.level === 'ERROR' ? '#f87171'
+                : entry.level === 'WARN' ? '#fbbf24'
+                : '#86efac';
+              const ts = entry.created_at
+                ? new Date(entry.created_at).toLocaleTimeString('zh-CN')
+                : '';
+              return (
+                <div key={i} data-testid="dl-log-entry" style={{ marginBottom: 2 }}>
+                  <span style={{ color: '#64748b' }}>{ts} </span>
+                  <span style={{ color }}>[{entry.level}] </span>
+                  <span style={{ color: '#e2e8f0' }}>{entry.message}</span>
+                  {entry.extra && (
+                    <span style={{ color: '#93c5fd' }}> | {formatLogExtra(entry.extra)}</span>
+                  )}
+                </div>
+              );
+            })
+          )}
+          <div ref={logEndRef} />
+        </div>
+      </Card>
     </div>
   );
 }
