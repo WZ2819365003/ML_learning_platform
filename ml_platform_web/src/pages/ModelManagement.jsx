@@ -846,7 +846,7 @@ function UniversalModelTab() {
             size="small"
             icon={<EyeOutlined />}
             disabled={r.status !== 'SUCCESS'}
-            onClick={() => navigate(`/ts/results?id=${r.id}`)}
+            onClick={() => navigate(`/ts/tasks/${r.id}`)}
           >
             查看结果
           </Button>

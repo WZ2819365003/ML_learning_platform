@@ -34,7 +34,7 @@ async def list_model_assets_route(
 @router.get("/list")
 async def list_models(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=500),
     model_type: str | None = Query(None, description="Filter by model type"),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:

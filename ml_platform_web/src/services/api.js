@@ -206,4 +206,21 @@ export const timesfmApi = {
   deleteForecast:  (id)               => api.delete(`/timesfm/${id}`),
 };
 
+export const tsApi = {
+  listTasks: (params = {}) => api.get('/ts/tasks', { params }),
+  createTask: (data) => api.post('/ts/tasks', data),
+  getTask: (taskId) => api.get(`/ts/tasks/${taskId}`),
+  updateTaskMeta: (taskId, data) => api.patch(`/ts/tasks/${taskId}/meta`, data),
+  deleteTask: (taskId) => api.delete(`/ts/tasks/${taskId}`),
+  modelStatus: () => api.get('/ts/model/status'),
+  preloadModel: (modelName) => api.post('/ts/model/preload', null, { params: { model_name: modelName } }),
+  listDeployments: (params = {}) => api.get('/ts/deployments', { params }),
+  createDeployment: (data) => api.post('/ts/deployments', data),
+  getDeployment: (deploymentId) => api.get(`/ts/deployments/${deploymentId}`),
+  updateDeploymentStatus: (deploymentId, status) =>
+    api.patch(`/ts/deployments/${deploymentId}/status`, null, { params: { status } }),
+  deleteDeployment: (deploymentId) => api.delete(`/ts/deployments/${deploymentId}`),
+  predictDeployment: (deploymentId, data) => api.post(`/ts/deployments/${deploymentId}/predict`, data),
+};
+
 export default api;

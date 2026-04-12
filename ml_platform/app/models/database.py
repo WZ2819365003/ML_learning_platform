@@ -369,6 +369,29 @@ class ModelTagLibrary(Base):
 # TimeSeriesForecastTask  – tracks async Chronos forecast jobs
 # ---------------------------------------------------------------------------
 
+class TimeSeriesDeployment(Base):
+    __tablename__ = "ts_deployments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    backend_label: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        default="amazon/chronos-t5-small",
+    )
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    config: Mapped[dict | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<TimeSeriesDeployment id={self.id!r} name={self.name!r} status={self.status!r}>"
+
+
 class TimeSeriesForecastTask(Base):
     __tablename__ = "ts_forecast_tasks"
 
@@ -389,6 +412,8 @@ class TimeSeriesForecastTask(Base):
 
     # Result payload (stored as JSON)
     result: Mapped[dict | None] = mapped_column(JSON, default=None)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    tags: Mapped[list | None] = mapped_column(JSON, default=None)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
