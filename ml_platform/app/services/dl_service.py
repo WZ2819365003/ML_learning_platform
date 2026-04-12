@@ -34,6 +34,7 @@ from app.models.database import (
     async_session_factory,
 )
 from app.services.prediction_service import load_dataframe, prepare_prediction_frame, prepare_training_frame
+from app.utils.storage_paths import resolve_runtime_path, to_portable_storage_path
 
 logger = logging.getLogger(__name__)
 
@@ -272,14 +273,15 @@ def _run_dl_sync(
     # Save model (with arch metadata for future inference)
     save_dir = Path(model_save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
-    model_path = str(save_dir / f"dl_{task_id}.pt")
+    model_file = save_dir / f"dl_{task_id}.pt"
     trainer.save(
-        model_path,
+        str(model_file),
         arch_config=arch_config,
         input_dim=X_train.shape[1],
         task_type=task_type,
         feature_columns=feature_columns,
     )
+    model_path = to_portable_storage_path(model_file)
     logger.info("[DL %s] Saved → %s", task_id, model_path)
 
     # Log final metrics
@@ -665,7 +667,7 @@ async def predict_dl_deployment(
         feature_cols = list(X_df.columns)
 
         trainer = get_dl_trainer(task.model_type)
-        meta = trainer.load_for_inference(task.model_path)
+        meta = trainer.load_for_inference(str(resolve_runtime_path(task.model_path)))
         task_type = meta["task_type"]
 
         preds, probas = trainer.predict(X, task_type)
@@ -724,7 +726,7 @@ async def predict_dl_task_direct(
         feature_cols = list(X_df.columns)
 
         trainer = get_dl_trainer(task.model_type)
-        meta = trainer.load_for_inference(task.model_path)
+        meta = trainer.load_for_inference(str(resolve_runtime_path(task.model_path)))
         task_type = meta["task_type"]
 
         preds, probas = trainer.predict(X, task_type)

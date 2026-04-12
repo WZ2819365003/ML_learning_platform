@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
@@ -16,6 +15,7 @@ from app.models.database import (
     ModelDeployment,
     TrainingTask,
 )
+from app.utils.storage_paths import resolve_runtime_path
 
 _BASE_URL = "http://127.0.0.1:8000"
 
@@ -134,7 +134,7 @@ async def list_model_assets(
 
     for task in ml_tasks:
         dataset = dataset_map.get(task.dataset_id)
-        model_path = Path(task.model_path) if task.model_path else None
+        model_path = resolve_runtime_path(task.model_path) if task.model_path else None
         if dataset is None or model_path is None or not model_path.exists():
             continue
 
@@ -154,7 +154,7 @@ async def list_model_assets(
                 "finished_at": task.finished_at,
                 "notes": task.notes,
                 "tags": task.tags,
-                "model_path": task.model_path,
+                "model_path": str(model_path),
                 "deployable": True,
                 "predictable": True,
                 "deployment_count": ml_counts.get(task.id, 0),
@@ -164,7 +164,7 @@ async def list_model_assets(
 
     for task in dl_tasks:
         dataset = dataset_map.get(task.dataset_id)
-        model_path = Path(task.model_path) if task.model_path else None
+        model_path = resolve_runtime_path(task.model_path) if task.model_path else None
         if dataset is None or model_path is None or not model_path.exists():
             continue
 
@@ -183,7 +183,7 @@ async def list_model_assets(
                 "finished_at": task.finished_at,
                 "notes": task.notes,
                 "tags": task.tags,
-                "model_path": task.model_path,
+                "model_path": str(model_path),
                 "deployable": True,
                 "predictable": False,
                 "deployment_count": dl_counts.get(task.id, 0),

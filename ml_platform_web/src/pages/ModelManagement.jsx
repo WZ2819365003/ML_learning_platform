@@ -28,6 +28,7 @@ import {
   CloudUploadOutlined,
   CopyOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EyeOutlined,
   PlayCircleOutlined,
   RocketOutlined,
@@ -104,7 +105,19 @@ function TagsNotesModal({ open, asset, tagLibrary, saving, onSave, onCancel }) {
     }
   }, [asset]);
 
-  const libraryOptions = tagLibrary.map((t) => ({ value: t, label: t }));
+  // Group tags by dimension for optgroup display
+  const grouped = {};
+  for (const t of tagLibrary) {
+    const dim = (typeof t === 'object' ? t.dimension : null) || '其他';
+    (grouped[dim] = grouped[dim] ?? []).push(t);
+  }
+  const libraryOptions = Object.entries(grouped).map(([dim, items]) => ({
+    label: dim,
+    options: items.map(t => {
+      const name = typeof t === 'object' ? t.name : t;
+      return { value: name, label: name };
+    }),
+  }));
 
   return (
     <Modal
@@ -138,7 +151,7 @@ function TagsNotesModal({ open, asset, tagLibrary, saving, onSave, onCancel }) {
           />
           {tagLibrary.length > 0 && (
             <Text type="secondary" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>
-              标签库：{tagLibrary.slice(0, 8).join('、')}{tagLibrary.length > 8 ? `…等 ${tagLibrary.length} 个` : ''}
+              共 {tagLibrary.length} 个标签可选，输入新标签后按回车可直接创建
             </Text>
           )}
         </div>
@@ -402,6 +415,35 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
               {renderMetricCards(detail.result_metrics, ML_METRIC_ORDER)}
             </Row>
 
+            <Card size="small" title="快捷操作">
+              <Space wrap>
+                <Button
+                  icon={<RocketOutlined />}
+                  onClick={() => { setDetailOpen(false); navigate(`/training?taskId=${detail.task_id}`); }}
+                >
+                  查看训练监控
+                </Button>
+                <Button
+                  type="primary"
+                  icon={<TrophyOutlined />}
+                  onClick={() => { setDetailOpen(false); navigate(`/results?taskId=${detail.task_id}`); }}
+                >
+                  查看结果可视化
+                </Button>
+                <Button
+                  icon={<DownloadOutlined />}
+                  onClick={() => {
+                    const a = document.createElement('a');
+                    a.href = modelApi.downloadModelUrl(detail.task_id);
+                    a.download = '';
+                    a.click();
+                  }}
+                >
+                  下载模型文件
+                </Button>
+              </Space>
+            </Card>
+
             <Card
               size="small"
               title={<Space><ApiOutlined />预测接口</Space>}
@@ -442,24 +484,6 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
                 >
                   {predictionResult || '点击「运行预测」后结果显示在这里'}
                 </pre>
-              </Space>
-            </Card>
-
-            <Card size="small" title="快捷操作">
-              <Space wrap>
-                <Button
-                  icon={<RocketOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/training?taskId=${detail.task_id}`); }}
-                >
-                  查看训练监控
-                </Button>
-                <Button
-                  type="primary"
-                  icon={<TrophyOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/results?taskId=${detail.task_id}`); }}
-                >
-                  查看结果可视化
-                </Button>
               </Space>
             </Card>
           </Space>

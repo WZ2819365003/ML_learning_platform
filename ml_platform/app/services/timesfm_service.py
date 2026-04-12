@@ -18,6 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from app.utils.storage_paths import resolve_runtime_path
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -136,7 +138,7 @@ async def run_forecast(
         )
 
     payload = {
-        "file_path":    file_path,
+        "file_path":    str(resolve_runtime_path(file_path)),
         "value_column": value_column,
         "time_column":  time_column,
         "horizon":      horizon,

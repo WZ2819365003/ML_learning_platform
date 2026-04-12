@@ -20,10 +20,11 @@ import asyncio
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from app.utils.storage_paths import resolve_runtime_path
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +103,12 @@ def _forecast_sync(
     import pandas as pd
 
     # ---- Load data ----------------------------------------------------------
-    suffix = Path(file_path).suffix.lower()
+    runtime_file_path = resolve_runtime_path(file_path)
+    suffix = runtime_file_path.suffix.lower()
     if suffix in {".xlsx", ".xls"}:
-        df = pd.read_excel(file_path)
+        df = pd.read_excel(runtime_file_path)
     else:
-        df = pd.read_csv(file_path)
+        df = pd.read_csv(runtime_file_path)
 
     if value_column not in df.columns:
         raise ValueError(

@@ -107,11 +107,17 @@ export const modelApi = {
   listTags() {
     return api.get('/models/tags');
   },
+  createTag(name, dimension, color) {
+    return api.post('/models/tags/create', { name, dimension, color });
+  },
   syncTags(tags) {
     return api.post('/models/tags/sync', { tags });
   },
   deleteTag(name) {
     return api.delete(`/models/tags/${encodeURIComponent(name)}`);
+  },
+  downloadModelUrl(taskId) {
+    return `${api.defaults.baseURL}/models/${taskId}/download`;
   },
 };
 

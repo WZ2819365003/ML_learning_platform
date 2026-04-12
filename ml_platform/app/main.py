@@ -9,13 +9,47 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.models.database import Base, async_engine
+from app.models.database import Base, async_engine, ModelTagLibrary, async_session_factory
 from app.api.routes import data, training, logs, experiment, visualization, model_mgmt
 from app.api.routes.deploy import deploy_router, inference_router
 from app.api.routes.dl import router as dl_router
 from app.api.routes.timesfm import router as timesfm_router, ts_router
 from app.api.websocket import router as ws_router
 from app.services.timeseries_service import resume_unfinished_ts_tasks
+
+# ---------------------------------------------------------------------------
+# Preset tag definitions — seeded once on first startup
+# ---------------------------------------------------------------------------
+_PRESET_TAGS = [
+    # 类别
+    {"name": "分类模型",  "dimension": "类别", "color": "blue"},
+    {"name": "回归模型",  "dimension": "类别", "color": "blue"},
+    {"name": "聚类模型",  "dimension": "类别", "color": "blue"},
+    {"name": "时序预测",  "dimension": "类别", "color": "blue"},
+    {"name": "异常检测",  "dimension": "类别", "color": "blue"},
+    # 规模
+    {"name": "轻量级",   "dimension": "规模", "color": "green"},
+    {"name": "中等规模", "dimension": "规模", "color": "green"},
+    {"name": "大型",     "dimension": "规模", "color": "green"},
+    # 目的
+    {"name": "实验探索", "dimension": "目的", "color": "orange"},
+    {"name": "生产部署", "dimension": "目的", "color": "orange"},
+    {"name": "对比基准", "dimension": "目的", "color": "orange"},
+    {"name": "数据分析", "dimension": "目的", "color": "orange"},
+    # 领域
+    {"name": "金融",     "dimension": "领域", "color": "purple"},
+    {"name": "医疗",     "dimension": "领域", "color": "purple"},
+    {"name": "电商",     "dimension": "领域", "color": "purple"},
+    {"name": "工业",     "dimension": "领域", "color": "purple"},
+    {"name": "教育",     "dimension": "领域", "color": "purple"},
+    {"name": "通用",     "dimension": "领域", "color": "purple"},
+    # 数据类型
+    {"name": "数值型",   "dimension": "数据类型", "color": "cyan"},
+    {"name": "文本型",   "dimension": "数据类型", "color": "cyan"},
+    {"name": "图像型",   "dimension": "数据类型", "color": "cyan"},
+    {"name": "混合型",   "dimension": "数据类型", "color": "cyan"},
+    {"name": "时序型",   "dimension": "数据类型", "color": "cyan"},
+]
 
 
 async def _ensure_sqlite_columns(table_name: str, columns: Iterable[tuple[str, str]]) -> None:
@@ -30,6 +64,27 @@ async def _ensure_sqlite_columns(table_name: str, columns: Iterable[tuple[str, s
                 await conn.exec_driver_sql(
                     f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}"
                 )
+
+
+async def _seed_tag_library() -> None:
+    """Insert preset tags on first startup; skip names that already exist."""
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from sqlalchemy import select
+
+    async with async_session_factory() as db:
+        # Check if any tags exist already
+        result = await db.execute(select(ModelTagLibrary).limit(1))
+        if result.scalar_one_or_none() is not None:
+            return  # already seeded
+
+        for tag in _PRESET_TAGS:
+            stmt = (
+                sqlite_insert(ModelTagLibrary)
+                .values(**tag)
+                .on_conflict_do_nothing(index_elements=["name"])
+            )
+            await db.execute(stmt)
+        await db.commit()
 
 
 @asynccontextmanager
@@ -51,6 +106,14 @@ async def lifespan(app: FastAPI):
             ("tags", "JSON"),
         ),
     )
+    await _ensure_sqlite_columns(
+        "model_tag_library",
+        (
+            ("dimension", "TEXT"),
+            ("color", "TEXT"),
+        ),
+    )
+    await _seed_tag_library()
     await resume_unfinished_ts_tasks()
 
     yield

@@ -11,6 +11,8 @@ env/
 ml_platform/timesfm_env/
 .tmp_pytest*/
 .tmp_pytest_run/
+**/.tmp_pytest*/
+**/.pytest_cache/
 
 # ML Platform runtime data (regenerated at runtime)
 ml_platform/storage/uploads/
@@ -22,6 +24,8 @@ ml_platform/mlruns/
 # Node
 node_modules/
 ml_platform_web/dist/
+ml_platform_web/node_modules/
+ml_platform_web/vite.*.log
 
 # IDE / Editor plugins
 .idea/
@@ -42,3 +46,11 @@ Thumbs.db
 # Environment
 .env
 *.log
+
+# Docker packaging/runtime artifacts
+docker/*.tar
+docker/runtime/
+
+# Old docker release packages
+docker/*.zip
+docker/ML_platform_release/

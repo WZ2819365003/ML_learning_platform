@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import io
 
 import pandas as pd
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings
 from app import main as app_main
 from app.main import app
-from app.models.database import Base, get_db
+from app.models.database import Base, Dataset, get_db
 from app.services import data_service
 
 
@@ -44,9 +46,10 @@ def client(test_db, tmp_path, monkeypatch):
 
     settings = Settings(
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'ignored.db').as_posix()}",
-        storage_uploads=tmp_path / "uploads",
-        storage_models=tmp_path / "models",
-        storage_logs=tmp_path / "logs",
+        storage_uploads=tmp_path / "storage" / "uploads",
+        storage_models=tmp_path / "storage" / "models",
+        storage_logs=tmp_path / "storage" / "logs",
+        project_root=tmp_path,
     )
     settings.ensure_storage_dirs()
     monkeypatch.setattr(data_service, "get_settings", lambda: settings)
@@ -91,3 +94,23 @@ def test_uploading_same_dataset_twice_reuses_existing_record(client: TestClient)
     list_response = client.get("/api/data/list")
     assert list_response.status_code == 200
     assert list_response.json()["total"] == 1
+
+
+def test_upload_stores_project_relative_file_path(client: TestClient, test_db):
+    response = client.post(
+        "/api/data/upload",
+        files={"file": ("portable.csv", io.BytesIO(_csv_bytes()), "text/csv")},
+    )
+    assert response.status_code == 201
+    dataset_id = response.json()["id"]
+
+    _, test_sessionmaker = test_db
+
+    async def _fetch_dataset() -> Dataset:
+        async with test_sessionmaker() as session:
+            result = await session.execute(select(Dataset).where(Dataset.id == dataset_id))
+            return result.scalar_one()
+
+    dataset = asyncio.run(_fetch_dataset())
+    assert dataset.file_path.startswith("storage/uploads/")
+    assert "\\" not in dataset.file_path

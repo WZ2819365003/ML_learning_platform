@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 import pytest_asyncio
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app import main as app_main
+from app.config import Settings
 from app.main import app
 from app.models.database import (
     Base,
@@ -21,6 +23,7 @@ from app.models.database import (
     TrainingTask,
     get_db,
 )
+from app.utils import storage_paths
 
 
 def _utcnow() -> datetime:
@@ -196,3 +199,99 @@ def test_list_unified_deployments_returns_standardized_fields(client: TestClient
     assert dl_deployment["supports_result_polling"] is False
     assert dl_deployment["predict_url"].endswith(f"/api/dl/deployments/{dl_deployment['deployment_id']}/predict")
     assert dl_deployment["result_url"] is None
+
+
+def test_list_model_assets_resolves_legacy_windows_paths(
+    client: TestClient,
+    test_db,
+    tmp_path,
+    monkeypatch,
+):
+    _, test_sessionmaker = test_db
+
+    settings = Settings(
+        database_url=f"sqlite+aiosqlite:///{(tmp_path / 'ignored.db').as_posix()}",
+        storage_uploads=tmp_path / "storage" / "uploads",
+        storage_models=tmp_path / "storage" / "models",
+        storage_logs=tmp_path / "storage" / "logs",
+        project_root=tmp_path,
+    )
+    settings.ensure_storage_dirs()
+    monkeypatch.setattr(storage_paths, "get_settings", lambda: settings)
+
+    dataset_path = settings.storage_uploads / "legacy-dataset.csv"
+    dataset_path.write_text("f1,f2,target\n1,2,0\n3,4,1\n", encoding="utf-8")
+
+    ml_model_path = settings.storage_models / "legacy-rf.joblib"
+    ml_model_path.write_text("fake-legacy-ml-model", encoding="utf-8")
+
+    dl_model_path = settings.storage_models / "legacy-mlp.pt"
+    dl_model_path.write_text("fake-legacy-dl-model", encoding="utf-8")
+
+    legacy_dataset_path = str(PureWindowsPath("C:/legacy/ml_platform/storage/uploads") / dataset_path.name)
+    legacy_ml_model_path = str(PureWindowsPath("C:/legacy/ml_platform/storage/models") / ml_model_path.name)
+    legacy_dl_model_path = str(PureWindowsPath("C:/legacy/ml_platform/storage/models") / dl_model_path.name)
+
+    async def _seed_legacy_assets() -> tuple[str, str]:
+        async with test_sessionmaker() as session:
+            dataset = Dataset(
+                name="legacy-dataset.csv",
+                file_path=legacy_dataset_path,
+                file_size=dataset_path.stat().st_size,
+                row_count=2,
+                column_count=3,
+                columns_info={"f1": {"dtype": "int"}, "f2": {"dtype": "int"}, "target": {"dtype": "int"}},
+            )
+            session.add(dataset)
+            await session.flush()
+
+            ml_task = TrainingTask(
+                dataset_id=dataset.id,
+                name="legacy-rf",
+                model_type="random_forest",
+                hyperparameters={"n_estimators": 10},
+                target_column="target",
+                status="SUCCESS",
+                progress=100.0,
+                result_metrics={"accuracy": 0.91},
+                model_path=legacy_ml_model_path,
+                created_at=_utcnow(),
+                finished_at=_utcnow(),
+            )
+            dl_task = DLTrainingTask(
+                dataset_id=dataset.id,
+                name="legacy-mlp",
+                target_column="target",
+                model_type="mlp_dl",
+                task_type="classification",
+                arch_config={"hidden_layers": [8, 4]},
+                opt_config={"optimizer": "adam"},
+                train_config={"epochs": 3},
+                status="SUCCESS",
+                progress=100.0,
+                current_epoch=3,
+                total_epochs=3,
+                result_metrics={"val_acc": 0.87},
+                model_path=legacy_dl_model_path,
+                created_at=_utcnow(),
+                finished_at=_utcnow(),
+            )
+            session.add_all([ml_task, dl_task])
+            await session.commit()
+            return ml_task.id, dl_task.id
+
+    ml_task_id, dl_task_id = asyncio.run(_seed_legacy_assets())
+
+    response = client.get("/api/models/assets")
+    assert response.status_code == 200
+
+    payload = response.json()
+    names = {item["name"] for item in payload["items"]}
+    assert "legacy-rf" in names
+    assert "legacy-mlp" in names
+
+    legacy_ml_asset = next(item for item in payload["items"] if item["asset_id"] == f"ml:{ml_task_id}")
+    assert legacy_ml_asset["model_path"].endswith("/storage/models/legacy-rf.joblib")
+
+    legacy_dl_asset = next(item for item in payload["items"] if item["asset_id"] == f"dl:{dl_task_id}")
+    assert legacy_dl_asset["model_path"].endswith("/storage/models/legacy-mlp.pt")

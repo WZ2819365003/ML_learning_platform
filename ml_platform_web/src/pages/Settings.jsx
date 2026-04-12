@@ -1,10 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   Button,
   Card,
+  Col,
   Divider,
   Form,
   Input,
+  Modal,
+  Row,
   Select,
   Slider,
   Space,
@@ -20,28 +23,33 @@ import { modelApi } from '../services/api'
 const { Title, Text } = Typography
 const { Option } = Select
 
+// ── Dimension config ──────────────────────────────────────────────────────────
+const DIMENSIONS = [
+  { key: '类别',    color: 'blue',    desc: '模型的算法类别（分类、回归等）' },
+  { key: '规模',    color: 'green',   desc: '模型的参数量与复杂度' },
+  { key: '目的',    color: 'orange',  desc: '模型的使用场景与意图' },
+  { key: '领域',    color: 'purple',  desc: '模型所属的业务领域' },
+  { key: '数据类型', color: 'cyan',   desc: '训练数据的类型' },
+  { key: '其他',    color: 'default', desc: '未分类标签' },
+]
+
 // ── Tag Library Management ────────────────────────────────────────────────────
 function TagLibrarySection() {
-  const [tags, setTags] = useState([])
+  const [grouped, setGrouped] = useState({})
+  const [allTags, setAllTags] = useState([])
   const [loading, setLoading] = useState(false)
-  const [inputVisible, setInputVisible] = useState(false)
-  const [inputValue, setInputValue] = useState('')
+  const [addModal, setAddModal] = useState(false)
+  const [addForm] = Form.useForm()
   const [adding, setAdding] = useState(false)
-  const inputRef = useRef(null)
 
   useEffect(() => { void fetchTags() }, [])
-
-  useEffect(() => {
-    if (inputVisible) {
-      setTimeout(() => inputRef.current?.focus(), 100)
-    }
-  }, [inputVisible])
 
   async function fetchTags() {
     setLoading(true)
     try {
       const res = await modelApi.listTags()
-      setTags(res.tags ?? [])
+      setAllTags(res.tags ?? [])
+      setGrouped(res.grouped ?? {})
     } catch {
       message.error('加载标签库失败')
     } finally {
@@ -49,101 +57,139 @@ function TagLibrarySection() {
     }
   }
 
-  async function handleAddTag() {
-    const trimmed = inputValue.trim()
-    if (!trimmed) { setInputVisible(false); setInputValue(''); return }
-    if (tags.includes(trimmed)) { message.warning('标签已存在'); return }
+  async function handleAddTag(values) {
+    const name = values.name?.trim()
+    if (!name) return
+    if (allTags.some(t => t.name === name)) { message.warning('标签已存在'); return }
     setAdding(true)
     try {
-      const res = await modelApi.syncTags([trimmed])
-      setTags(res.tags ?? [])
-      message.success(`已添加标签「${trimmed}」`)
+      const dim = DIMENSIONS.find(d => d.key === values.dimension)
+      await modelApi.createTag(name, values.dimension || null, dim?.color || null)
+      message.success(`已添加标签「${name}」`)
+      setAddModal(false)
+      addForm.resetFields()
+      void fetchTags()
     } catch {
       message.error('添加失败')
     } finally {
       setAdding(false)
-      setInputVisible(false)
-      setInputValue('')
     }
   }
 
   async function handleDeleteTag(name) {
     try {
       const res = await modelApi.deleteTag(name)
-      setTags(res.tags ?? [])
+      setAllTags(res.tags ?? [])
+      const g = {}
+      for (const t of res.tags ?? []) {
+        const dim = t.dimension || '其他'
+        ;(g[dim] = g[dim] ?? []).push(t)
+      }
+      setGrouped(g)
       message.success(`已删除标签「${name}」`)
     } catch {
       message.error('删除失败')
     }
   }
 
+  const dimOrder = DIMENSIONS.map(d => d.key)
+  const sortedDims = Object.keys(grouped).sort(
+    (a, b) => dimOrder.indexOf(a) - dimOrder.indexOf(b)
+  )
+
   return (
     <Card
-      title={
-        <Space>
-          <TagOutlined style={{ color: '#1890ff' }} />
-          <span>标签库管理</span>
-        </Space>
-      }
+      title={<Space><TagOutlined style={{ color: '#1890ff' }} /><span>标签库管理</span></Space>}
       extra={
-        <Button size="small" onClick={() => void fetchTags()}>
-          刷新
-        </Button>
+        <Space>
+          <Button size="small" onClick={() => void fetchTags()}>刷新</Button>
+          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddModal(true)}>
+            新建标签
+          </Button>
+        </Space>
       }
     >
       <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-        在此管理模型标签库。标签可在「模型管理」页面为模型打标签时复用。
+        标签按维度分类管理，可在「模型管理」页面为模型打标签时复用。
       </Text>
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 24 }}>
-          <Spin />
-        </div>
+        <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
       ) : (
-        <Space wrap size={[8, 8]} style={{ marginBottom: 16 }}>
-          {tags.map((tag) => (
-            <Tag
-              key={tag}
-              color="geekblue"
-              closable
-              onClose={(e) => { e.preventDefault(); void handleDeleteTag(tag) }}
-              style={{ fontSize: 13, padding: '2px 8px' }}
-            >
-              {tag}
-            </Tag>
-          ))}
-
-          {inputVisible ? (
-            <Input
-              ref={inputRef}
-              size="small"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onBlur={() => void handleAddTag()}
-              onPressEnter={() => void handleAddTag()}
-              style={{ width: 120 }}
-              placeholder="输入后回车"
-              disabled={adding}
-            />
-          ) : (
-            <Tag
-              onClick={() => setInputVisible(true)}
-              style={{ cursor: 'pointer', borderStyle: 'dashed', background: '#fff' }}
-            >
-              <PlusOutlined /> 新建标签
-            </Tag>
-          )}
-        </Space>
+        <Row gutter={[16, 16]}>
+          {DIMENSIONS.filter(d => grouped[d.key]?.length > 0).map(dim => {
+            const tags = grouped[dim.key] ?? []
+            return (
+              <Col xs={24} sm={12} xl={8} key={dim.key}>
+                <Card
+                  size="small"
+                  title={
+                    <Space size={6}>
+                      <Tag color={dim.color} style={{ margin: 0 }}>{dim.key}</Tag>
+                      <Text type="secondary" style={{ fontSize: 11 }}>{dim.desc}</Text>
+                    </Space>
+                  }
+                  bodyStyle={{ padding: '8px 12px' }}
+                >
+                  <Space wrap size={[6, 6]}>
+                    {tags.map(tag => (
+                      <Tag
+                        key={tag.name}
+                        color={tag.color ?? dim.color}
+                        closable
+                        onClose={e => { e.preventDefault(); void handleDeleteTag(tag.name) }}
+                        style={{ fontSize: 13, padding: '2px 8px' }}
+                      >
+                        {tag.name}
+                      </Tag>
+                    ))}
+                  </Space>
+                </Card>
+              </Col>
+            )
+          })}
+        </Row>
       )}
 
-      {tags.length === 0 && !loading && (
+      {allTags.length === 0 && !loading && (
         <Text type="secondary">暂无标签，点击「新建标签」添加。</Text>
       )}
 
-      <Divider style={{ margin: '8px 0 0' }} />
+      <Divider style={{ margin: '12px 0 4px' }} />
       <Text type="secondary" style={{ fontSize: 12 }}>
-        共 {tags.length} 个标签 · 点击标签右侧 × 可删除
+        共 {allTags.length} 个标签，{sortedDims.length} 个维度 · 点击标签右侧 × 可删除
       </Text>
+
+      <Modal
+        title={<Space><PlusOutlined />新建标签</Space>}
+        open={addModal}
+        onCancel={() => { setAddModal(false); addForm.resetFields() }}
+        onOk={() => addForm.submit()}
+        okText="添加"
+        confirmLoading={adding}
+        destroyOnHidden
+        width={400}
+      >
+        <Form form={addForm} layout="vertical" onFinish={handleAddTag} style={{ marginTop: 16 }}>
+          <Form.Item
+            name="name"
+            label="标签名称"
+            rules={[{ required: true, message: '请输入标签名称' }]}
+          >
+            <Input placeholder="例：高精度、季节性数据" maxLength={30} />
+          </Form.Item>
+          <Form.Item name="dimension" label="所属维度">
+            <Select placeholder="选择维度（可选）" allowClear>
+              {DIMENSIONS.filter(d => d.key !== '其他').map(d => (
+                <Option key={d.key} value={d.key}>
+                  <Tag color={d.color} style={{ marginRight: 6 }}>{d.key}</Tag>
+                  {d.desc}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+        </Form>
+      </Modal>
     </Card>
   )
 }

@@ -359,10 +359,12 @@ class ModelTagLibrary(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    dimension: Mapped[str | None] = mapped_column(String(50), default=None)   # 类别/规模/目的/领域/数据类型
+    color: Mapped[str | None] = mapped_column(String(30), default=None)        # Ant Design Tag color token
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     def __repr__(self) -> str:
-        return f"<ModelTagLibrary name={self.name!r}>"
+        return f"<ModelTagLibrary name={self.name!r} dimension={self.dimension!r}>"
 
 
 # ---------------------------------------------------------------------------

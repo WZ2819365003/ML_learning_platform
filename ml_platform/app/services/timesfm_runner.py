@@ -23,8 +23,9 @@ try:
 finally:
     sys.stdout = _real_stdout  # restore before any JSON output
 
-from pathlib import Path
 import pandas as pd
+
+from app.utils.storage_paths import resolve_runtime_path
 
 # ----- helpers ---------------------------------------------------------------
 
@@ -33,16 +34,16 @@ _FREQ_PD_MAP  = {"high": "h", "medium": "W", "low": "MS"}
 
 
 def _load_df(file_path: str) -> pd.DataFrame:
-    p = Path(file_path)
+    p = resolve_runtime_path(file_path)
     suffix = p.suffix.lower()
     if suffix == ".csv":
-        return pd.read_csv(file_path)
+        return pd.read_csv(p)
     if suffix == ".parquet":
-        return pd.read_parquet(file_path)
+        return pd.read_parquet(p)
     if suffix in (".xlsx", ".xls"):
-        return pd.read_excel(file_path)
+        return pd.read_excel(p)
     try:
-        return pd.read_csv(file_path)
+        return pd.read_csv(p)
     except Exception as exc:
         raise ValueError(f"Unsupported file format '{suffix}'.") from exc
 

@@ -13,6 +13,7 @@ from sklearn.preprocessing import LabelEncoder
 from sqlalchemy import select
 
 from app.models.database import AsyncSession, Dataset, TrainingTask
+from app.utils.storage_paths import resolve_runtime_path
 
 DERIVED_TARGET_COLUMNS: dict[str, set[str]] = {
     "Target": {"Failure Type"},
@@ -22,7 +23,7 @@ DERIVED_TARGET_COLUMNS: dict[str, set[str]] = {
 
 def load_dataframe(file_path: str | Path) -> pd.DataFrame:
     """Load a dataframe from a supported file path."""
-    path = Path(file_path)
+    path = resolve_runtime_path(file_path)
     ext = path.suffix.lower()
 
     if ext == ".csv":
@@ -134,7 +135,7 @@ async def predict_rows(
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    model_path = Path(task.model_path)
+    model_path = resolve_runtime_path(task.model_path)
     if not model_path.exists():
         raise HTTPException(status_code=404, detail="Saved model file not found")
 

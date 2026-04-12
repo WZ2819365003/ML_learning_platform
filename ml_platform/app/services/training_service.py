@@ -18,6 +18,7 @@ from app.core.trainer import detect_task_type, get_trainer, list_available_model
 from app.core.logger import TrainingLogger
 from app.models.database import AsyncSession, Dataset, TrainingTask, async_session_factory
 from app.services.prediction_service import load_dataframe, prepare_training_frame
+from app.utils.storage_paths import to_portable_storage_path
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +177,9 @@ def _run_training_sync(
     save_dir.mkdir(parents=True, exist_ok=True)
 
     # Save model
-    model_path = str(save_dir / f"{task_id}.joblib")
-    trainer.save(model_path)
+    model_file = save_dir / f"{task_id}.joblib"
+    trainer.save(str(model_file))
+    model_path = to_portable_storage_path(model_file)
     tl.log("INFO", "Model saved", path=model_path)
 
     # Log final metrics
