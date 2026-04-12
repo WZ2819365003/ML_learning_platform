@@ -14,16 +14,21 @@ from app.core.model_registry import (
 )
 from app.models.database import get_db
 from app.models.schemas import (
+    ModelMetaUpdateRequest,
     ModelsListResponse,
+    TaskRenameRequest,
     TrainingListResponse,
     TrainingRequest,
     TrainingTaskResponse,
 )
 from app.services.training_service import (
+    delete_training_task,
     get_training_status,
     list_training_tasks,
+    rename_training_task,
     start_training,
     stop_training,
+    update_training_task_meta,
 )
 
 router = APIRouter(prefix="/training", tags=["Training"])
@@ -66,6 +71,35 @@ async def list_training_tasks_route(
 ):
     """List all training tasks with optional filtering and pagination."""
     return await list_training_tasks(db, page=page, page_size=page_size, status_filter=status)
+
+
+@router.patch("/{task_id}/name", response_model=TrainingTaskResponse)
+async def rename_training_task_route(
+    task_id: str,
+    body: TaskRenameRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename a training task."""
+    return await rename_training_task(task_id, body.name, db)
+
+
+@router.patch("/{task_id}/meta", response_model=TrainingTaskResponse)
+async def update_training_task_meta_route(
+    task_id: str,
+    body: ModelMetaUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update notes and/or tags of a training task."""
+    return await update_training_task_meta(task_id, body.notes, body.tags, db)
+
+
+@router.delete("/{task_id}", status_code=204)
+async def delete_training_task_route(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a training task (not allowed while RUNNING)."""
+    await delete_training_task(task_id, db)
 
 
 @router.get("/models", response_model=ModelsListResponse)

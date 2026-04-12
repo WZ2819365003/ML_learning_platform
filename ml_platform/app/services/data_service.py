@@ -6,6 +6,7 @@ async SQLAlchemy sessions and pandas-based file inspection.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 from pathlib import Path
@@ -17,11 +18,35 @@ from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.models.database import AsyncSession, Dataset
+from app.utils.storage_paths import resolve_runtime_path, to_portable_storage_path
 from app.utils.file_utils import generate_unique_filename
 
 logger = logging.getLogger(__name__)
 
 _ALLOWED_EXTENSIONS = {".csv", ".parquet", ".xlsx"}
+
+
+def _compute_content_digest(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+async def _find_existing_dataset_by_content(
+    db: AsyncSession,
+    content: bytes,
+    file_size: int,
+) -> Dataset | None:
+    digest = _compute_content_digest(content)
+    result = await db.execute(select(Dataset).where(Dataset.file_size == file_size))
+    for dataset in result.scalars():
+        path = resolve_runtime_path(dataset.file_path)
+        if not path.exists():
+            continue
+        try:
+            if _compute_content_digest(path.read_bytes()) == digest:
+                return dataset
+        except OSError:
+            logger.warning("Failed to inspect dataset file for dedup: %s", path, exc_info=True)
+    return None
 
 
 def _validate_extension(filename: str) -> str:
@@ -101,6 +126,12 @@ async def upload_dataset(file: UploadFile, db: AsyncSession) -> Dataset:
             ),
         )
 
+    # -- dedup: reuse existing dataset if file content is identical --
+    existing_dataset = await _find_existing_dataset_by_content(db, content=content, file_size=file_size)
+    if existing_dataset is not None:
+        logger.info("Reusing existing dataset %s for '%s' by content digest", existing_dataset.id, original_name)
+        return existing_dataset
+
     # -- save to disk --
     unique_name = generate_unique_filename(original_name)
     dest_path = settings.storage_uploads / unique_name
@@ -125,7 +156,7 @@ async def upload_dataset(file: UploadFile, db: AsyncSession) -> Dataset:
     # -- persist to DB --
     dataset = Dataset(
         name=original_name,
-        file_path=str(dest_path),
+        file_path=to_portable_storage_path(dest_path),
         file_size=file_size,
         row_count=len(df),
         column_count=len(df.columns),
@@ -153,7 +184,7 @@ async def get_dataset_preview(
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    file_path = Path(dataset.file_path)
+    file_path = resolve_runtime_path(dataset.file_path)
     ext = file_path.suffix.lower()
 
     df = _read_dataframe(file_path, ext, nrows=rows)
@@ -240,7 +271,7 @@ async def get_correlation(
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    file_path = Path(dataset.file_path)
+    file_path = resolve_runtime_path(dataset.file_path)
     df = _read_dataframe(file_path, file_path.suffix.lower())
     numeric_df = df.select_dtypes(include="number")
 
@@ -265,7 +296,7 @@ async def get_target_distribution(
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    file_path = Path(dataset.file_path)
+    file_path = resolve_runtime_path(dataset.file_path)
     df = _read_dataframe(file_path, file_path.suffix.lower())
 
     if target_column not in df.columns:
@@ -322,7 +353,7 @@ async def delete_dataset(dataset_id: str, db: AsyncSession) -> bool:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     # -- remove file from disk --
-    file_path = Path(dataset.file_path)
+    file_path = resolve_runtime_path(dataset.file_path)
     if file_path.exists():
         file_path.unlink()
         logger.info("Deleted file %s", file_path)

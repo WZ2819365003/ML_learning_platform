@@ -18,6 +18,7 @@ from app.core.trainer import detect_task_type, get_trainer, list_available_model
 from app.core.logger import TrainingLogger
 from app.models.database import AsyncSession, Dataset, TrainingTask, async_session_factory
 from app.services.prediction_service import load_dataframe, prepare_training_frame
+from app.utils.storage_paths import to_portable_storage_path
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +177,9 @@ def _run_training_sync(
     save_dir.mkdir(parents=True, exist_ok=True)
 
     # Save model
-    model_path = str(save_dir / f"{task_id}.joblib")
-    trainer.save(model_path)
+    model_file = save_dir / f"{task_id}.joblib"
+    trainer.save(str(model_file))
+    model_path = to_portable_storage_path(model_file)
     tl.log("INFO", "Model saved", path=model_path)
 
     # Log final metrics
@@ -229,9 +231,12 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
 
     # Create task record
     cv_config = request_data.get("cross_validation") or {}
+    import uuid as _uuid_mod
+    short_id = str(_uuid_mod.uuid4())[:8]
     task = TrainingTask(
         dataset_id=dataset_id,
         model_type=request_data["model_type"],
+        name=f"{request_data['model_type']}_{short_id}",
         hyperparameters=request_data.get("hyperparameters", {}),
         target_column=request_data["target_column"],
         test_size=request_data.get("test_size", 0.2),
@@ -401,3 +406,42 @@ async def list_training_tasks(
         "page": page,
         "page_size": page_size,
     }
+
+
+async def rename_training_task(task_id: str, name: str, db: AsyncSession) -> TrainingTask:
+    """Rename a training task."""
+    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Training task not found")
+    task.name = name
+    await db.flush()
+    return task
+
+
+async def delete_training_task(task_id: str, db: AsyncSession) -> None:
+    """Delete a training task (only if not RUNNING)."""
+    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Training task not found")
+    if task.status == "RUNNING":
+        raise HTTPException(status_code=422, detail="Cannot delete a running task. Stop it first.")
+    await db.delete(task)
+    await db.flush()
+
+
+async def update_training_task_meta(
+    task_id: str, notes: str | None, tags: list[str] | None, db: AsyncSession
+) -> TrainingTask:
+    """Update notes and/or tags of a training task."""
+    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Training task not found")
+    if notes is not None:
+        task.notes = notes
+    if tags is not None:
+        task.tags = tags
+    await db.flush()
+    return task

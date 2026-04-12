@@ -20,3 +20,4 @@ httpx==0.28.1
 pytest==8.3.4
 pytest-asyncio==0.25.0
 torch>=2.2.0
+chronos-forecasting>=2.2.0

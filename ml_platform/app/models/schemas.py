@@ -90,6 +90,7 @@ class TrainingTaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    name: str | None = None
     dataset_id: str
     model_type: str
     hyperparameters: dict[str, Any] | None = None
@@ -98,6 +99,8 @@ class TrainingTaskResponse(BaseModel):
     progress: float
     result_metrics: dict[str, Any] | None = None
     error_message: str | None = None
+    notes: str | None = None
+    tags: list[str] | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     created_at: datetime
@@ -255,6 +258,66 @@ class DeploymentListResponse(BaseModel):
     page_size: int
 
 
+class MetricsSummaryResponse(BaseModel):
+    primary_metric_name: str | None = None
+    primary_metric_value: float | None = None
+    secondary_metric_name: str | None = None
+    secondary_metric_value: float | None = None
+
+
+class ModelAssetResponse(BaseModel):
+    asset_id: str
+    runtime_type: str
+    task_id: str
+    name: str | None = None
+    dataset_id: str
+    dataset_name: str | None = None
+    model_type: str
+    task_type: str
+    status: str
+    created_at: datetime
+    finished_at: datetime | None = None
+    notes: str | None = None
+    tags: list[str] | None = None
+    model_path: str | None = None
+    deployable: bool
+    predictable: bool
+    deployment_count: int = 0
+    metrics_summary: MetricsSummaryResponse = Field(default_factory=MetricsSummaryResponse)
+
+
+class ModelAssetListResponse(BaseModel):
+    items: list[ModelAssetResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class UnifiedDeploymentResponse(BaseModel):
+    deployment_id: str
+    runtime_type: str
+    source_task_id: str
+    source_asset_id: str
+    source_name: str | None = None
+    model_type: str
+    task_type: str
+    name: str
+    description: str | None = None
+    status: str
+    request_count: int
+    created_at: datetime
+    predict_url: str
+    result_url: str | None = None
+    supports_result_polling: bool
+
+
+class UnifiedDeploymentListResponse(BaseModel):
+    deployments: list[UnifiedDeploymentResponse]
+    total: int
+    page: int
+    page_size: int
+
+
 class InferenceRequest(BaseModel):
     """Request body for submitting an inference (predict) job."""
 
@@ -292,12 +355,24 @@ class DLTrainingRequest(BaseModel):
     train_config:  dict[str, Any] = Field(default_factory=dict)
 
 
+class TaskRenameRequest(BaseModel):
+    """Request body for renaming a task."""
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class ModelMetaUpdateRequest(BaseModel):
+    """Request body for updating model notes/tags."""
+    notes: str | None = None
+    tags:  list[str] | None = None
+
+
 class DLTaskResponse(BaseModel):
     """Serialised DLTrainingTask."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id:            str
+    name:          str | None = None
     dataset_id:    str
     target_column: str
     model_type:    str
@@ -309,6 +384,8 @@ class DLTaskResponse(BaseModel):
     result_metrics: dict[str, Any] | None = None
     model_path:    str | None = None
     error_message: str | None = None
+    notes:         str | None = None
+    tags:          list[str] | None = None
     created_at:    datetime
     started_at:    datetime | None = None
     finished_at:   datetime | None = None
@@ -323,6 +400,31 @@ class DLTaskListResponse(BaseModel):
     page_size: int
 
 
+class DLEpochResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    task_id: str
+    epoch: int
+    total_epochs: int
+    train_loss: float | None = None
+    val_loss: float | None = None
+    val_acc: float | None = None
+    val_f1_macro: float | None = None
+    val_rmse: float | None = None
+    val_mae: float | None = None
+    val_r2: float | None = None
+    lr: float | None = None
+    created_at: datetime
+
+
+class DLEpochListResponse(BaseModel):
+    items: list[DLEpochResponse]
+    total: int
+    page: int
+    page_size: int
+
+
 class DLModelsResponse(BaseModel):
     """Full DL model registry response from GET /api/dl/models."""
 
@@ -330,4 +432,46 @@ class DLModelsResponse(BaseModel):
     models:          list[dict[str, Any]]
     optimizer_params: list[dict[str, Any]]
     train_params:    list[dict[str, Any]]
+
+
+# ===================================================================
+# DL Deployment schemas
+# ===================================================================
+
+class DLDeployRequest(BaseModel):
+    """Request body for deploying a DL trained model."""
+    name:        str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+
+
+class DLDeploymentResponse(BaseModel):
+    """Serialised DLModelDeployment."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id:            str
+    dl_task_id:    str
+    name:          str
+    description:   str | None = None
+    status:        str
+    request_count: int
+    created_at:    datetime
+
+
+class DLDeploymentListResponse(BaseModel):
+    deployments: list[DLDeploymentResponse]
+    total:       int
+
+
+class DLPredictionRequest(BaseModel):
+    """Rows submitted for DL model inference."""
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DLPredictionResponse(BaseModel):
+    deployment_id: str
+    task_type:     str
+    rows:          int
+    predictions:   list[Any]
+    probabilities: list[dict[str, float]] | None = None
 

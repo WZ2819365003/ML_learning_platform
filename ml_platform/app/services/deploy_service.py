@@ -5,17 +5,16 @@ from __future__ import annotations
 import logging
 from collections import OrderedDict
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import joblib
-import pandas as pd
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import InferenceJob, ModelDeployment, TrainingTask, Dataset
 from app.services.prediction_service import load_dataframe, prepare_prediction_frame, prepare_training_frame
+from app.utils.storage_paths import resolve_runtime_path
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +70,7 @@ async def create_deployment(
         raise HTTPException(status_code=404, detail="Training task not found")
     if task.status != "SUCCESS":
         raise HTTPException(status_code=400, detail=f"Task not completed (status={task.status})")
-    if not task.model_path or not Path(task.model_path).exists():
+    if not task.model_path or not resolve_runtime_path(task.model_path).exists():
         raise HTTPException(status_code=400, detail="Model file not found on disk")
 
     deployment = ModelDeployment(
@@ -184,7 +183,7 @@ async def run_inference(
     if task is None or not task.model_path:
         raise HTTPException(status_code=404, detail="Associated task or model not found")
 
-    model = _model_cache.get(deployment_id, task.model_path)
+    model = _model_cache.get(deployment_id, str(resolve_runtime_path(task.model_path)))
 
     # Load training data for prepare_prediction_frame
     ds_result = await db.execute(select(Dataset).where(Dataset.id == task.dataset_id))
@@ -193,10 +192,8 @@ async def run_inference(
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     training_df = load_dataframe(dataset.file_path)
-    input_df = pd.DataFrame(rows)
-    # prepare_prediction_frame(training_df, rows_df, target_column) → np.ndarray
-    X_pred = prepare_prediction_frame(training_df, input_df, task.target_column)
-    predictions_raw = model.predict(X_pred).tolist()
+    X_pred = prepare_prediction_frame(training_df, rows, task.target_column)
+    predictions_raw = model.predict(X_pred.values).tolist()
 
     # Decode classification labels if applicable
     _, _, _, target_encoder = prepare_training_frame(training_df, task.target_column)

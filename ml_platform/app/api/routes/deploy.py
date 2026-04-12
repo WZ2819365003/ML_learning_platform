@@ -15,6 +15,7 @@ from app.models.schemas import (
     DeploymentResponse,
     InferenceJobResponse,
     InferenceRequest,
+    UnifiedDeploymentListResponse,
 )
 from app.services.deploy_service import (
     create_deployment,
@@ -24,9 +25,26 @@ from app.services.deploy_service import (
     run_inference,
     update_deployment_status,
 )
+from app.services.model_asset_service import list_unified_deployments
 
 deploy_router = APIRouter(prefix="/deploy", tags=["Model Deployment"])
 inference_router = APIRouter(prefix="/inference", tags=["Inference"])
+
+
+@deploy_router.get("/assets", response_model=UnifiedDeploymentListResponse)
+async def list_unified_deployments_route(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    runtime_type: str | None = Query(default=None, pattern="^(ml|dl)$"),
+    db: AsyncSession = Depends(get_db),
+):
+    """List ML and DL deployments through one standardized view."""
+    return await list_unified_deployments(
+        db=db,
+        page=page,
+        page_size=page_size,
+        runtime_type=runtime_type,
+    )
 
 
 @deploy_router.post("/{task_id}", response_model=DeploymentResponse)

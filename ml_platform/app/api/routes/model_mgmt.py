@@ -1,23 +1,42 @@
 """Model management routes — list, detail, compare, delete saved models."""
 
 from typing import Any
-from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy import select, func
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import get_db, TrainingTask, Dataset
-from app.models.schemas import PredictionRequest, PredictionResponse
+from app.models.database import get_db, TrainingTask, Dataset, ModelTagLibrary
+from app.models.schemas import (
+    ModelAssetListResponse,
+    PredictionRequest,
+    PredictionResponse,
+)
 from app.services.prediction_service import predict_rows
+from app.services.model_asset_service import list_model_assets
+from app.utils.storage_paths import resolve_runtime_path
 
 router = APIRouter(prefix="/models", tags=["Model Management"])
+
+
+@router.get("/assets", response_model=ModelAssetListResponse)
+async def list_model_assets_route(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    runtime_type: str | None = Query(default=None, pattern="^(ml|dl)$"),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """List ML and DL models through a unified asset view."""
+    return await list_model_assets(db=db, page=page, page_size=page_size, runtime_type=runtime_type)
 
 
 @router.get("/list")
 async def list_models(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=500),
     model_type: str | None = Query(None, description="Filter by model type"),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
@@ -52,8 +71,8 @@ async def list_models(
     items = []
     for task in tasks:
         dataset = dataset_map.get(task.dataset_id)
-        model_file = Path(task.model_path) if task.model_path else None
-        dataset_file = Path(dataset.file_path) if dataset else None
+        model_file = resolve_runtime_path(task.model_path) if task.model_path else None
+        dataset_file = resolve_runtime_path(dataset.file_path) if dataset else None
 
         if dataset is None or dataset_file is None or not dataset_file.exists():
             continue
@@ -64,19 +83,22 @@ async def list_models(
 
         items.append({
             "task_id": task.id,
+            "name": task.name,
             "dataset_id": task.dataset_id,
             "dataset_name": dataset.name,
             "model_type": task.model_type,
             "hyperparameters": task.hyperparameters,
             "target_column": task.target_column,
             "result_metrics": task.result_metrics,
-            "model_path": task.model_path,
+            "model_path": str(model_file),
             "model_size": model_size,
+            "notes": task.notes,
+            "tags": task.tags,
             "started_at": task.started_at.isoformat() if task.started_at else None,
             "finished_at": task.finished_at.isoformat() if task.finished_at else None,
         })
 
-    return {"items": items, "total": len(items), "page": page, "page_size": page_size}
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @router.get("/compare")
@@ -109,6 +131,98 @@ async def compare_models(
     return results
 
 
+# ---------------------------------------------------------------------------
+# Tag library — MUST be declared before /{task_id} parametric routes
+# ---------------------------------------------------------------------------
+
+@router.get("/tags")
+async def list_tag_library(
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Return all tags in the shared tag library with dimension/color, grouped by dimension."""
+    result = await db.execute(
+        select(ModelTagLibrary).order_by(ModelTagLibrary.dimension.asc(), ModelTagLibrary.name.asc())
+    )
+    rows = result.scalars().all()
+    tags = [{"name": t.name, "dimension": t.dimension, "color": t.color} for t in rows]
+    grouped: dict[str, list[dict]] = {}
+    for t in tags:
+        dim = t["dimension"] or "其他"
+        grouped.setdefault(dim, []).append(t)
+    return {"tags": tags, "grouped": grouped}
+
+
+class _TagCreateBody(BaseModel):
+    name: str
+    dimension: str | None = None
+    color: str | None = None
+
+
+@router.post("/tags/create")
+async def create_tag(
+    body: _TagCreateBody,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a tag with name, dimension, and color (upsert by name)."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+    stmt = (
+        sqlite_insert(ModelTagLibrary)
+        .values(name=name, dimension=body.dimension or None, color=body.color or None)
+        .on_conflict_do_nothing(index_elements=["name"])
+    )
+    await db.execute(stmt)
+    await db.flush()
+    result = await db.execute(select(ModelTagLibrary).where(ModelTagLibrary.name == name))
+    tag = result.scalar_one_or_none()
+    return {"name": tag.name, "dimension": tag.dimension, "color": tag.color}
+
+
+@router.post("/tags/sync")
+async def sync_tags_to_library(
+    tags: list[str] = Body(..., embed=True),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Upsert tag names into the library (adds new ones without dimension, ignores existing)."""
+    cleaned = [t.strip() for t in tags if t.strip()]
+    for name in cleaned:
+        stmt = sqlite_insert(ModelTagLibrary).values(name=name).on_conflict_do_nothing(index_elements=["name"])
+        await db.execute(stmt)
+    await db.flush()
+    result = await db.execute(
+        select(ModelTagLibrary).order_by(ModelTagLibrary.dimension.asc(), ModelTagLibrary.name.asc())
+    )
+    rows = result.scalars().all()
+    return {"tags": [{"name": t.name, "dimension": t.dimension, "color": t.color} for t in rows]}
+
+
+@router.delete("/tags/{tag_name}")
+async def delete_tag_from_library(
+    tag_name: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Remove a tag from the shared library."""
+    result = await db.execute(
+        select(ModelTagLibrary).where(ModelTagLibrary.name == tag_name)
+    )
+    tag = result.scalar_one_or_none()
+    if tag is None:
+        raise HTTPException(status_code=404, detail=f"Tag '{tag_name}' not found")
+    await db.delete(tag)
+    await db.flush()
+    all_result = await db.execute(
+        select(ModelTagLibrary).order_by(ModelTagLibrary.dimension.asc(), ModelTagLibrary.name.asc())
+    )
+    rows = all_result.scalars().all()
+    tags = [{"name": t.name, "dimension": t.dimension, "color": t.color} for t in rows]
+    return {"tags": tags, "deleted": tag_name}
+
+
+# ---------------------------------------------------------------------------
+# Parametric routes — must come AFTER all literal routes above
+# ---------------------------------------------------------------------------
+
 @router.get("/{task_id}/detail")
 async def model_detail(
     task_id: str,
@@ -120,26 +234,30 @@ async def model_detail(
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
 
-    # Get dataset info
     ds_result = await db.execute(select(Dataset).where(Dataset.id == task.dataset_id))
     dataset = ds_result.scalar_one_or_none()
 
     model_size = None
-    if task.model_path and Path(task.model_path).exists():
-        model_size = Path(task.model_path).stat().st_size
+    if task.model_path:
+        model_file = resolve_runtime_path(task.model_path)
+        if model_file.exists():
+            model_size = model_file.stat().st_size
 
     return {
         "task_id": task.id,
+        "name": task.name,
         "model_type": task.model_type,
         "hyperparameters": task.hyperparameters,
         "target_column": task.target_column,
         "test_size": task.test_size,
         "eval_metrics": task.eval_metrics,
         "result_metrics": task.result_metrics,
-        "model_path": task.model_path,
+        "model_path": str(resolve_runtime_path(task.model_path)) if task.model_path else None,
         "model_size": model_size,
         "status": task.status,
         "error_message": task.error_message,
+        "notes": task.notes,
+        "tags": task.tags,
         "started_at": task.started_at.isoformat() if task.started_at else None,
         "finished_at": task.finished_at.isoformat() if task.finished_at else None,
         "dataset": {
@@ -149,6 +267,30 @@ async def model_detail(
             "column_count": dataset.column_count,
         } if dataset else None,
     }
+
+
+@router.get("/{task_id}/download")
+async def download_model_file(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    """Download the saved model file (.joblib)."""
+    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Training task not found")
+    if not task.model_path:
+        raise HTTPException(status_code=404, detail="Model file not found on disk")
+
+    file_path = resolve_runtime_path(task.model_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Model file not found on disk")
+    safe_name = f"{task.model_type or 'model'}_{task_id[:8]}.joblib"
+    return FileResponse(
+        path=str(file_path),
+        filename=safe_name,
+        media_type="application/octet-stream",
+    )
 
 
 @router.delete("/{task_id}")
@@ -163,7 +305,7 @@ async def delete_model(
         raise HTTPException(status_code=404, detail="Training task not found")
 
     if task.model_path:
-        p = Path(task.model_path)
+        p = resolve_runtime_path(task.model_path)
         if p.exists():
             p.unlink()
         task.model_path = None

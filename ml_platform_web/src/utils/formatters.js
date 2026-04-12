@@ -8,6 +8,17 @@ export const metricLabels = {
   cv_avg_f1: '交叉验证 F1',
   cv_std_accuracy: '准确率波动',
   cv_std_f1: 'F1 波动',
+  val_acc: '验证准确率',
+  val_f1_macro: '验证 F1',
+  val_auc_roc: '验证 AUC',
+  val_precision: '验证精确率',
+  val_recall: '验证召回率',
+  val_rmse: '验证 RMSE',
+  val_mae: '验证 MAE',
+  val_r2: '验证 R2',
+  val_mape: '验证 MAPE',
+  val_loss: '验证损失',
+  best_val_loss: '最佳验证损失',
 };
 
 export function formatDateTime(value) {

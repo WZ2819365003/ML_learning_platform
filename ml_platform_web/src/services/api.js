@@ -64,6 +64,15 @@ export const trainingApi = {
   stopTraining(taskId) {
     return api.post(`/training/${taskId}/stop`);
   },
+  renameTask(taskId, name) {
+    return api.patch(`/training/${taskId}/name`, { name });
+  },
+  updateMeta(taskId, meta) {
+    return api.patch(`/training/${taskId}/meta`, meta);
+  },
+  deleteTask(taskId) {
+    return api.delete(`/training/${taskId}`);
+  },
 };
 
 export const logsApi = {
@@ -73,6 +82,9 @@ export const logsApi = {
 };
 
 export const modelApi = {
+  listAssets(params) {
+    return api.get('/models/assets', { params });
+  },
   listModels(params) {
     return api.get('/models/list', { params });
   },
@@ -91,6 +103,21 @@ export const modelApi = {
   },
   predict(taskId, payload) {
     return api.post(`/models/${taskId}/predict`, payload);
+  },
+  listTags() {
+    return api.get('/models/tags');
+  },
+  createTag(name, dimension, color) {
+    return api.post('/models/tags/create', { name, dimension, color });
+  },
+  syncTags(tags) {
+    return api.post('/models/tags/sync', { tags });
+  },
+  deleteTag(name) {
+    return api.delete(`/models/tags/${encodeURIComponent(name)}`);
+  },
+  downloadModelUrl(taskId) {
+    return `${api.defaults.baseURL}/models/${taskId}/download`;
   },
 };
 
@@ -131,6 +158,9 @@ export const dataEnhancedApi = {
 // - /api/deploy/... → api (has /api base)
 // - /inference/... → inferenceApi (no /api prefix)
 export const deployApi = {
+  listUnifiedDeployments(params = {}) {
+    return api.get('/deploy/assets', { params });
+  },
   createDeployment(taskId, payload) {
     return api.post(`/deploy/${taskId}`, payload);
   },
@@ -152,11 +182,51 @@ export const deployApi = {
 };
 
 export const dlApi = {
-  listModels:    ()       => api.get('/dl/models'),
-  startTraining: (data)   => api.post('/dl/train', data),
-  listTasks:     (params) => api.get('/dl/list', { params }),
-  getStatus:     (id)     => api.get(`/dl/${id}/status`),
-  stopTask:      (id)     => api.post(`/dl/${id}/stop`),
+  listModels:        ()             => api.get('/dl/models'),
+  startTraining:     (data)         => api.post('/dl/train', data),
+  listTasks:         (params)       => api.get('/dl/list', { params }),
+  getStatus:         (id)           => api.get(`/dl/${id}/status`),
+  stopTask:          (id)           => api.post(`/dl/${id}/stop`),
+  renameTask:        (id, name)     => api.patch(`/dl/${id}/name`, { name }),
+  updateMeta:        (id, meta)     => api.patch(`/dl/${id}/meta`, meta),
+  deleteTask:        (id)           => api.delete(`/dl/${id}`),
+  listTrainedModels: (params)       => api.get('/dl/trained-models', { params }),
+  getLogs:           (id, params)   => api.get(`/dl/${id}/logs`, { params }),
+  getEpochs:         (id, params)   => api.get(`/dl/${id}/epochs`, { params }),
+  // Direct model prediction (no deployment needed)
+  predictTask:       (taskId, data)   => api.post(`/dl/${taskId}/predict`, data),
+  // Deployments
+  createDeployment:  (dlTaskId, data) => api.post(`/dl/deployments/${dlTaskId}`, data),
+  listDeployments:   ()             => api.get('/dl/deployments'),
+  deleteDeployment:  (depId)        => api.delete(`/dl/deployments/${depId}`),
+  toggleDeployment:  (depId, status) => api.patch(`/dl/deployments/${depId}/status`, null, { params: { status } }),
+  predictDeployment: (depId, data)  => api.post(`/dl/deployments/${depId}/predict`, data),
+};
+
+export const timesfmApi = {
+  modelStatus:     ()                 => api.get('/timesfm/model/status'),
+  preloadModel:    (modelName)        => api.post('/timesfm/model/preload', null, { params: { model_name: modelName } }),
+  startForecast:   (data)             => api.post('/timesfm/start', data),
+  listForecasts:   (params)           => api.get('/timesfm/list', { params }),
+  getForecast:     (id)               => api.get(`/timesfm/${id}`),
+  deleteForecast:  (id)               => api.delete(`/timesfm/${id}`),
+};
+
+export const tsApi = {
+  listTasks: (params = {}) => api.get('/ts/tasks', { params }),
+  createTask: (data) => api.post('/ts/tasks', data),
+  getTask: (taskId) => api.get(`/ts/tasks/${taskId}`),
+  updateTaskMeta: (taskId, data) => api.patch(`/ts/tasks/${taskId}/meta`, data),
+  deleteTask: (taskId) => api.delete(`/ts/tasks/${taskId}`),
+  modelStatus: () => api.get('/ts/model/status'),
+  preloadModel: (modelName) => api.post('/ts/model/preload', null, { params: { model_name: modelName } }),
+  listDeployments: (params = {}) => api.get('/ts/deployments', { params }),
+  createDeployment: (data) => api.post('/ts/deployments', data),
+  getDeployment: (deploymentId) => api.get(`/ts/deployments/${deploymentId}`),
+  updateDeploymentStatus: (deploymentId, status) =>
+    api.patch(`/ts/deployments/${deploymentId}/status`, null, { params: { status } }),
+  deleteDeployment: (deploymentId) => api.delete(`/ts/deployments/${deploymentId}`),
+  predictDeployment: (deploymentId, data) => api.post(`/ts/deployments/${deploymentId}/predict`, data),
 };
 
 export default api;

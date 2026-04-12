@@ -2,7 +2,6 @@
 
 import json
 import logging
-from pathlib import Path
 from typing import Any
 
 import joblib
@@ -16,13 +15,14 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.models.database import AsyncSession, Dataset, TrainingTask
 from app.services.prediction_service import load_dataframe, prepare_training_frame
+from app.utils.storage_paths import resolve_runtime_path
 
 logger = logging.getLogger(__name__)
 
 
 def _load_model(model_path: str):
     """Load a saved sklearn model."""
-    path = Path(model_path)
+    path = resolve_runtime_path(model_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Model file not found: {model_path}")
     return joblib.load(path)

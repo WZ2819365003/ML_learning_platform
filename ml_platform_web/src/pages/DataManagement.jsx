@@ -1,194 +1,150 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Button,
-  Card,
-  Descriptions,
-  message,
-  Modal,
+import React, { useState, useEffect } from 'react'
+import { 
+  Card, 
+  Button, 
+  Table, 
+  Tag, 
+  Modal, 
+  Upload, 
+  message, 
+  Typography, 
+  Space, 
   Progress,
-  Space,
-  Table,
-  Tag,
-  Typography,
-  Upload,
-} from 'antd';
-import { DeleteOutlined, EyeOutlined, FileTextOutlined, RocketOutlined } from '@ant-design/icons';
-import { InboxOutlined } from '@ant-design/icons';
-import { dataApi } from '../services/api';
+  Descriptions,
+  Statistic,
+  Row,
+  Col
+} from 'antd'
+import { 
+  UploadOutlined, 
+  DeleteOutlined, 
+  EyeOutlined, 
+  FileTextOutlined, 
+  DatabaseOutlined 
+} from '@ant-design/icons'
+import { InboxOutlined } from '@ant-design/icons'
+import api from '../services/api'
 
-const { Dragger } = Upload;
-const { Text, Title } = Typography;
-
-function formatDataset(dataset) {
-  return {
-    ...dataset,
-    key: dataset.id,
-    sizeLabel: `${Math.round(dataset.file_size / 1024)} KB`,
-    typeLabel: dataset.name.split('.').pop()?.toUpperCase() ?? 'FILE',
-    createdLabel: new Date(dataset.created_at).toLocaleString('zh-CN'),
-  };
-}
-
-function buildPreviewColumns(rows) {
-  if (!rows.length) {
-    return [];
-  }
-
-  return Object.keys(rows[0]).map((key) => ({
-    title: key,
-    dataIndex: key,
-    key,
-    ellipsis: true,
-  }));
-}
+const { Title, Text } = Typography
+const { Dragger } = Upload
 
 const DataManagement = () => {
-  const navigate = useNavigate();
-  const [datasets, setDatasets] = useState([]);
-  const [selectedDatasetId, setSelectedDatasetId] = useState(null);
-  const [previewDataset, setPreviewDataset] = useState(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [datasets, setDatasets] = useState([])
+  const [previewModal, setPreviewModal] = useState(false)
+  const [selectedDataset, setSelectedDataset] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [previewData, setPreviewData] = useState([])
 
-  const selectedDataset = useMemo(
-    () => datasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
-    [datasets, selectedDatasetId]
-  );
-
+  // 获取数据集列表
   useEffect(() => {
-    void fetchDatasets();
-  }, []);
+    fetchDatasets()
+  }, [])
 
-  async function fetchDatasets() {
+  const fetchDatasets = async () => {
     try {
-      const response = await dataApi.listDatasets();
-      const items = (response.items ?? []).map(formatDataset);
-      setDatasets(items);
-      if (!selectedDatasetId && items.length > 0) {
-        setSelectedDatasetId(items[0].id);
-      }
+      const response = await api.get('/data/datasets')
+      setDatasets(response.map((dataset, index) => ({
+        ...dataset,
+        key: String(index + 1)
+      })))
     } catch (error) {
-      console.error('获取数据集列表失败:', error);
-      message.error('获取数据集列表失败');
+      console.error('获取数据集列表失败:', error)
+      message.error('获取数据集列表失败')
     }
   }
 
-  async function handleUpload(file) {
-    setUploading(true);
-    setUploadProgress(0);
-
+  const handleUpload = async (file) => {
+    setUploading(true)
+    setUploadProgress(0)
+    
+    const formData = new FormData()
+    formData.append('file', file)
+    
     try {
-      const uploaded = await dataApi.uploadDataset(file, (progressEvent) => {
-        if (!progressEvent.total) {
-          return;
+      const response = await api.post('/data/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+          setUploadProgress(percentCompleted)
         }
-        setUploadProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total));
-      });
-
-      const formatted = formatDataset(uploaded);
-      setDatasets((current) => {
-        const rest = current.filter((item) => item.id !== formatted.id);
-        return [formatted, ...rest];
-      });
-      setSelectedDatasetId(formatted.id);
-      message.success(`${file.name} 上传成功`);
+      })
+      
+      setUploading(false)
+      message.success(`${file.name} 上传成功`)
+      
+      // 重新获取数据集列表
+      fetchDatasets()
     } catch (error) {
-      console.error('上传文件失败:', error);
-      message.error('上传文件失败');
-    } finally {
-      setUploading(false);
+      console.error('上传文件失败:', error)
+      message.error('上传文件失败')
+      setUploading(false)
     }
 
-    return false;
+    return false
   }
 
-  async function handlePreview(dataset) {
+  const handlePreview = async (dataset) => {
+    setSelectedDataset(dataset)
+    
     try {
-      const response = await dataApi.previewDataset(dataset.id);
-      setPreviewDataset(response);
-      setPreviewOpen(true);
-      setSelectedDatasetId(dataset.id);
+      const response = await api.get(`/data/preview/${dataset.id}`)
+      setPreviewData(response.data)
+      setPreviewModal(true)
     } catch (error) {
-      console.error('获取数据预览失败:', error);
-      message.error('获取数据预览失败');
+      console.error('获取数据预览失败:', error)
+      message.error('获取数据预览失败')
     }
   }
 
-  async function handleDelete(datasetId) {
+  const handleDelete = async (id) => {
     try {
-      await dataApi.deleteDataset(datasetId);
-      setDatasets((current) => current.filter((item) => item.id !== datasetId));
-      if (selectedDatasetId === datasetId) {
-        setSelectedDatasetId(null);
-      }
-      message.success('数据集删除成功');
+      await api.delete(`/data/delete/${id}`)
+      message.success('数据集删除成功')
+      // 重新获取数据集列表
+      fetchDatasets()
     } catch (error) {
-      console.error('删除数据集失败:', error);
-      message.error('删除数据集失败');
+      console.error('删除数据集失败:', error)
+      message.error('删除数据集失败')
     }
   }
 
-  function goToTraining() {
-    if (!selectedDataset) {
-      message.warning('请先上传或选择一个数据集');
-      return;
-    }
-
-    navigate('/training/config', {
-      state: {
-        preferredDatasetId: selectedDataset.id,
-      },
-    });
+  const uploadProps = {
+    name: 'file',
+    multiple: false,
+    accept: '.csv,.parquet',
+    beforeUpload: handleUpload,
+    showUploadList: false
   }
-
-  const previewColumns = buildPreviewColumns(previewDataset?.rows ?? []);
 
   return (
     <div>
-      <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 24 }}>
-        <Title level={2} style={{ margin: 0 }}>
-          数据管理
-        </Title>
-        <Button
-          type="primary"
-          icon={<RocketOutlined />}
-          data-testid="configure-training-button"
-          disabled={!selectedDataset}
-          onClick={goToTraining}
-        >
-          配置训练
-        </Button>
-      </Space>
-
-      <Card style={{ marginBottom: 24 }}>
-        <Dragger
-          name="file"
-          multiple={false}
-          accept=".csv,.parquet,.xlsx"
-          beforeUpload={handleUpload}
-          showUploadList={false}
-        >
+      <Title level={2}>数据管理</Title>
+      
+      {/* 上传区域 */}
+      <Card className="mb-6" hoverable>
+        <Dragger {...uploadProps}>
           <p className="ant-upload-drag-icon">
-            <InboxOutlined style={{ fontSize: 48, color: '#1677ff' }} />
+            <InboxOutlined style={{ fontSize: 48, color: '#1890ff' }} />
           </p>
           <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
-          <p className="ant-upload-hint">支持 CSV、Parquet、Excel，单文件最大 200MB</p>
-          {uploading ? <Progress percent={uploadProgress} status="active" /> : null}
+          <p className="ant-upload-hint">
+            支持 CSV 和 Parquet 文件，单个文件最大 200MB
+          </p>
+          {uploading && (
+            <div className="mt-4">
+              <Progress percent={uploadProgress} status="active" />
+            </div>
+          )}
         </Dragger>
       </Card>
 
-      <Card title="数据集列表">
-        <Table
-          rowKey="id"
-          dataSource={datasets}
-          pagination={{ pageSize: 10 }}
-          rowSelection={{
-            type: 'radio',
-            selectedRowKeys: selectedDatasetId ? [selectedDatasetId] : [],
-            onChange: (keys) => setSelectedDatasetId(keys[0] ?? null),
-          }}
+      {/* 数据集列表 */}
+      <Card title="数据集列表" hoverable>
+        <Table 
+          dataSource={datasets} 
           columns={[
             {
               title: '名称',
@@ -196,89 +152,125 @@ const DataManagement = () => {
               key: 'name',
               render: (name) => (
                 <Space>
-                  <FileTextOutlined style={{ color: '#1677ff' }} />
+                  <FileTextOutlined style={{ color: '#1890ff' }} />
                   <Text strong>{name}</Text>
                 </Space>
-              ),
+              )
             },
             {
               title: '类型',
-              dataIndex: 'typeLabel',
-              key: 'typeLabel',
-              render: (type) => <Tag color="blue">{type}</Tag>,
+              dataIndex: 'type',
+              key: 'type',
+              render: (type) => <Tag color="blue">{type}</Tag>
             },
             {
               title: '大小',
-              dataIndex: 'sizeLabel',
-              key: 'sizeLabel',
+              dataIndex: 'size',
+              key: 'size'
             },
             {
               title: '行数',
-              dataIndex: 'row_count',
-              key: 'row_count',
+              dataIndex: 'rows',
+              key: 'rows'
             },
             {
               title: '列数',
-              dataIndex: 'column_count',
-              key: 'column_count',
+              dataIndex: 'columns',
+              key: 'columns'
             },
             {
               title: '创建时间',
-              dataIndex: 'createdLabel',
-              key: 'createdLabel',
+              dataIndex: 'created',
+              key: 'created'
             },
             {
               title: '操作',
               key: 'action',
               render: (_, record) => (
-                <Space>
-                  <Button type="text" icon={<EyeOutlined />} onClick={() => void handlePreview(record)}>
+                <Space size="middle">
+                  <Button 
+                    type="text" 
+                    icon={<EyeOutlined />} 
+                    onClick={() => handlePreview(record)}
+                  >
                     预览
                   </Button>
-                  <Button type="text" icon={<RocketOutlined />} onClick={() => {
-                    setSelectedDatasetId(record.id);
-                    navigate('/training/config', { state: { preferredDatasetId: record.id } });
-                  }}>
-                    训练
-                  </Button>
-                  <Button danger type="text" icon={<DeleteOutlined />} onClick={() => void handleDelete(record.id)}>
+                  <Button 
+                    type="text" 
+                    danger 
+                    icon={<DeleteOutlined />} 
+                    onClick={() => handleDelete(record.id)}
+                  >
                     删除
                   </Button>
                 </Space>
-              ),
-            },
+              )
+            }
           ]}
+          pagination={{ pageSize: 10 }}
         />
       </Card>
 
+      {/* 预览模态框 */}
       <Modal
-        title={previewDataset ? `数据预览 - ${previewDataset.name}` : '数据预览'}
-        open={previewOpen}
-        onCancel={() => setPreviewOpen(false)}
-        footer={null}
-        width={960}
+        title={`数据预览 - ${selectedDataset?.name}`}
+        open={previewModal}
+        onCancel={() => setPreviewModal(false)}
+        width={800}
+        footer={[
+          <Button key="close" onClick={() => setPreviewModal(false)}>
+            关闭
+          </Button>
+        ]}
       >
-        {previewDataset ? (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="文件名">{previewDataset.name}</Descriptions.Item>
-              <Descriptions.Item label="文件大小">{Math.round(previewDataset.file_size / 1024)} KB</Descriptions.Item>
-              <Descriptions.Item label="行数">{previewDataset.row_count}</Descriptions.Item>
-              <Descriptions.Item label="列数">{previewDataset.column_count}</Descriptions.Item>
+        {selectedDataset && (
+          <div>
+            <Descriptions bordered className="mb-4">
+              <Descriptions.Item label="文件名称">{selectedDataset.name}</Descriptions.Item>
+              <Descriptions.Item label="文件类型">{selectedDataset.type}</Descriptions.Item>
+              <Descriptions.Item label="文件大小">{selectedDataset.size}</Descriptions.Item>
+              <Descriptions.Item label="行数">{selectedDataset.rows}</Descriptions.Item>
+              <Descriptions.Item label="列数">{selectedDataset.columns}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{selectedDataset.created}</Descriptions.Item>
             </Descriptions>
-            <Table
-              size="small"
-              rowKey={(_, index) => `${previewDataset.id}-${index}`}
-              dataSource={previewDataset.rows.slice(0, 5)}
-              columns={previewColumns}
+            
+            <Title level={4}>数据预览（前5行）</Title>
+            <Table 
+              dataSource={previewData} 
+              columns={Object.keys(previewData[0]).map(key => ({
+                title: key,
+                dataIndex: key,
+                key: key
+              }))} 
               pagination={false}
-              scroll={{ x: 'max-content' }}
+              size="small"
             />
-          </Space>
-        ) : null}
+            
+            <div className="mt-4">
+              <Title level={4}>基本统计信息</Title>
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Card>
+                    <Statistic title="均值" value={0.5} />
+                  </Card>
+                </Col>
+                <Col span={8}>
+                  <Card>
+                    <Statistic title="标准差" value={0.3} />
+                  </Card>
+                </Col>
+                <Col span={8}>
+                  <Card>
+                    <Statistic title="缺失值" value="0%" />
+                  </Card>
+                </Col>
+              </Row>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
-  );
-};
+  )
+}
 
-export default DataManagement;
+export default DataManagement
