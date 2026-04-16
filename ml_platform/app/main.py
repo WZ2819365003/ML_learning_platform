@@ -2,20 +2,25 @@
 ML Training Platform -- FastAPI application entry point.
 """
 
+import shutil
 from contextlib import asynccontextmanager
-from typing import Iterable
+from typing import Any, Iterable
 
+import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
 
 from app.config import get_settings
-from app.models.database import Base, async_engine, ModelTagLibrary, async_session_factory
+from app.models.database import Base, async_engine, Dataset, ModelTagLibrary, async_session_factory
 from app.api.routes import data, training, logs, experiment, visualization, model_mgmt
 from app.api.routes.deploy import deploy_router, inference_router
 from app.api.routes.dl import router as dl_router
 from app.api.routes.timesfm import router as timesfm_router, ts_router
 from app.api.websocket import router as ws_router
 from app.services.timeseries_service import resume_unfinished_ts_tasks
+from app.utils.file_utils import generate_unique_filename
+from app.utils.storage_paths import to_portable_storage_path
 
 # ---------------------------------------------------------------------------
 # Preset tag definitions — seeded once on first startup
@@ -87,6 +92,51 @@ async def _seed_tag_library() -> None:
         await db.commit()
 
 
+def _build_columns_info(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    total = len(df)
+    return {
+        col: {
+            "dtype": str(df[col].dtype),
+            "missing_count": int(df[col].isna().sum()),
+            "missing_rate": round(df[col].isna().sum() / total, 4) if total else 0.0,
+        }
+        for col in df.columns
+    }
+
+
+async def _seed_example_datasets() -> None:
+    """On first startup, import example CSVs from examples/data/ into the DB."""
+    settings = get_settings()
+    examples_dir = settings.project_root.parent / "examples" / "data"
+    if not examples_dir.exists():
+        return
+
+    async with async_session_factory() as db:
+        result = await db.execute(select(Dataset).limit(1))
+        if result.scalar_one_or_none() is not None:
+            return  # already seeded
+
+        for csv_path in sorted(examples_dir.glob("*.csv")):
+            content = csv_path.read_bytes()
+            unique_name = generate_unique_filename(csv_path.name)
+            dest = settings.storage_uploads / unique_name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(csv_path, dest)
+
+            df = pd.read_csv(dest)
+            dataset = Dataset(
+                name=csv_path.name,
+                file_path=to_portable_storage_path(dest),
+                file_size=len(content),
+                row_count=len(df),
+                column_count=len(df.columns),
+                columns_info=_build_columns_info(df),
+            )
+            db.add(dataset)
+
+        await db.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage startup and shutdown lifecycle events."""
@@ -114,6 +164,7 @@ async def lifespan(app: FastAPI):
         ),
     )
     await _seed_tag_library()
+    await _seed_example_datasets()
     await resume_unfinished_ts_tasks()
 
     yield
