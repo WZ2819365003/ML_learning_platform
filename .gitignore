@@ -14,12 +14,16 @@ ml_platform/timesfm_env/
 **/.tmp_pytest*/
 **/.pytest_cache/
 
-# ML Platform runtime data (regenerated at runtime)
-ml_platform/storage/uploads/
-ml_platform/storage/models/
-ml_platform/storage/logs/
-ml_platform/storage/*.db
+# ML Platform runtime data
+# uploads/ and models/ can be large binaries — track intentionally with git add -f if needed
 ml_platform/mlruns/
+
+# Keep storage directory structure in git (uploads, models, logs, db are tracked)
+# Uncomment below to ignore large files if needed:
+# ml_platform/storage/uploads/
+# ml_platform/storage/models/
+# ml_platform/storage/logs/
+# ml_platform/storage/*.db
 
 # Node
 node_modules/
@@ -45,7 +49,7 @@ Thumbs.db
 
 # Environment
 .env
-*.log
+# *.log  # removed: storage/logs/*.log should be tracked
 
 # Docker packaging/runtime artifacts
 docker/*.tar
