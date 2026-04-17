@@ -35,6 +35,7 @@ from app.models.database import (
 )
 from app.services.prediction_service import load_dataframe, prepare_prediction_frame, prepare_training_frame
 from app.utils.storage_paths import resolve_runtime_path, to_portable_storage_path
+from app.services.object_storage import upload_training_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +288,17 @@ def _run_dl_sync(
     # Log final metrics
     final_message, scalar_metrics = _build_dl_completion_log_entry(result)
     emit_log("INFO", final_message, **scalar_metrics)
+
+    # Upload artifacts to object storage (MinIO)
+    settings = get_settings()
+    scaler_file = Path(str(model_file) + ".scaler.joblib")
+    log_file = settings.storage_logs / f"{task_id}.log"
+    metrics_file = settings.storage_logs / f"{task_id}_metrics.json"
+    upload_training_artifacts(
+        task_id=task_id,
+        model_files=[f for f in [model_file, scaler_file] if f.exists()],
+        log_files=[f for f in [log_file, metrics_file] if f.exists()],
+    )
 
     return {"result_metrics": result, "model_path": model_path, "task_type": task_type}
 

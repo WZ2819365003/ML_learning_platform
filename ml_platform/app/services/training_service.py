@@ -19,6 +19,7 @@ from app.core.logger import TrainingLogger
 from app.models.database import AsyncSession, Dataset, TrainingTask, async_session_factory
 from app.services.prediction_service import load_dataframe, prepare_training_frame
 from app.utils.storage_paths import to_portable_storage_path
+from app.services.object_storage import upload_training_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,13 @@ def _run_training_sync(
     clean_metrics = {k: v for k, v in result_metrics.items() if k != "cv_folds"}
     tl.log("INFO", "Training completed", **{k: str(v) for k, v in clean_metrics.items()})
     tl.log_status("SUCCESS", "Training completed successfully", result_metrics=clean_metrics)
+
+    # Upload artifacts to object storage (MinIO)
+    upload_training_artifacts(
+        task_id=task_id,
+        model_files=[model_file],
+        log_files=[tl.log_file, tl.metrics_file],
+    )
 
     # Finalize MLflow run
     if mlflow and mlflow_run:

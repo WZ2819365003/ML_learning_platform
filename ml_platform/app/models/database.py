@@ -17,7 +17,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.dialects.sqlite import JSON
+from sqlalchemy import JSON
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -36,7 +36,7 @@ def _utcnow() -> datetime:
 
 DATABASE_URL: str = os.getenv(
     "DATABASE_URL",
-    "sqlite+aiosqlite:///./storage/ml_platform.db",
+    "mysql+aiomysql://root:123456@localhost:3307/ml_platform",
 )
 
 async_engine = create_async_engine(

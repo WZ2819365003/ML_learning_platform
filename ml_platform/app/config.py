@@ -94,6 +94,24 @@ class Settings:
         )
     )
 
+    # Object storage (MinIO / S3-compatible)
+    s3_endpoint_url: str = field(
+        default_factory=lambda: os.getenv("S3_ENDPOINT_URL", "http://127.0.0.1:9000")
+    )
+    s3_access_key: str = field(
+        default_factory=lambda: os.getenv("S3_ACCESS_KEY", "mlplatform")
+    )
+    s3_secret_key: str = field(
+        default_factory=lambda: os.getenv("S3_SECRET_KEY", "mlplatform123")
+    )
+    s3_bucket: str = field(
+        default_factory=lambda: os.getenv("S3_BUCKET", "ml-platform")
+    )
+    # Set to "false" to disable object storage (e.g. local-only dev)
+    s3_enabled: bool = field(
+        default_factory=lambda: os.getenv("S3_ENABLED", "true").lower() == "true"
+    )
+
     # Convenience: project root
     project_root: Path = field(default_factory=lambda: _PROJECT_ROOT)
 

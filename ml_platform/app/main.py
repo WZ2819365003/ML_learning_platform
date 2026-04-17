@@ -4,7 +4,7 @@ ML Training Platform -- FastAPI application entry point.
 
 import shutil
 from contextlib import asynccontextmanager
-from typing import Any, Iterable
+from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI
@@ -57,38 +57,23 @@ _PRESET_TAGS = [
 ]
 
 
-async def _ensure_sqlite_columns(table_name: str, columns: Iterable[tuple[str, str]]) -> None:
-    if async_engine.url.get_backend_name() != "sqlite":
-        return
-
-    async with async_engine.begin() as conn:
-        rows = await conn.exec_driver_sql(f"PRAGMA table_info({table_name})")
-        existing = {row[1] for row in rows.fetchall()}
-        for column_name, column_sql in columns:
-            if column_name not in existing:
-                await conn.exec_driver_sql(
-                    f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}"
-                )
-
-
 async def _seed_tag_library() -> None:
-    """Insert preset tags on first startup; skip names that already exist."""
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-    from sqlalchemy import select
+    """Insert preset tags on first startup; skip names that already exist.
 
+    Uses a SELECT-then-INSERT pattern so it works with both SQLite and MySQL.
+    """
     async with async_session_factory() as db:
-        # Check if any tags exist already
         result = await db.execute(select(ModelTagLibrary).limit(1))
         if result.scalar_one_or_none() is not None:
             return  # already seeded
 
+        existing_names_result = await db.execute(select(ModelTagLibrary.name))
+        existing_names = {row[0] for row in existing_names_result.fetchall()}
+
         for tag in _PRESET_TAGS:
-            stmt = (
-                sqlite_insert(ModelTagLibrary)
-                .values(**tag)
-                .on_conflict_do_nothing(index_elements=["name"])
-            )
-            await db.execute(stmt)
+            if tag["name"] not in existing_names:
+                db.add(ModelTagLibrary(**tag))
+
         await db.commit()
 
 
@@ -149,20 +134,6 @@ async def lifespan(app: FastAPI):
     # Create all database tables
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    await _ensure_sqlite_columns(
-        "ts_forecast_tasks",
-        (
-            ("notes", "TEXT"),
-            ("tags", "JSON"),
-        ),
-    )
-    await _ensure_sqlite_columns(
-        "model_tag_library",
-        (
-            ("dimension", "TEXT"),
-            ("color", "TEXT"),
-        ),
-    )
     await _seed_tag_library()
     await _seed_example_datasets()
     await resume_unfinished_ts_tasks()
