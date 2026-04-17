@@ -369,12 +369,30 @@ async def list_ts_tasks(
         count_stmt = count_stmt.where(TimeSeriesForecastTask.model_name == deployment_id)
 
     total = (await db.execute(count_stmt)).scalar_one()
-    rows = await db.execute(
-        stmt.order_by(TimeSeriesForecastTask.created_at.desc())
+
+    # Late-row-lookup: sort on lightweight id+created_at first (index-only),
+    # then fetch full rows by PK to avoid loading large JSON result columns
+    # into MySQL's sort buffer.
+    id_filters = stmt.whereclause  # reuse existing WHERE conditions
+    id_query = (
+        select(TimeSeriesForecastTask.id, TimeSeriesForecastTask.created_at)
+        .where(id_filters if id_filters is not None else True)
+        .order_by(TimeSeriesForecastTask.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
-    tasks = rows.scalars().all()
+    id_rows = await db.execute(id_query)
+    page_ids = [row[0] for row in id_rows.fetchall()]
+
+    if not page_ids:
+        tasks = []
+    else:
+        full_rows = await db.execute(
+            select(TimeSeriesForecastTask).where(TimeSeriesForecastTask.id.in_(page_ids))
+        )
+        # Preserve the original DESC order
+        id_order = {pid: idx for idx, pid in enumerate(page_ids)}
+        tasks = sorted(full_rows.scalars().all(), key=lambda t: id_order.get(t.id, 0))
 
     deployment_ids = {task.model_name for task in tasks if task.model_name}
     deployment_map: dict[str, TimeSeriesDeployment] = {}

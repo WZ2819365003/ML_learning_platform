@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -396,6 +397,10 @@ class TimeSeriesDeployment(Base):
 
 class TimeSeriesForecastTask(Base):
     __tablename__ = "ts_forecast_tasks"
+    __table_args__ = (
+        Index("ix_ts_forecast_tasks_created_at", "created_at"),
+        Index("ix_ts_forecast_tasks_status", "status"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
 

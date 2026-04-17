@@ -10,7 +10,12 @@ services:
       - "3307:3306"
     volumes:
       - ml_mysql_data:/var/lib/mysql
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-authentication-plugin=mysql_native_password
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+      --sort-buffer-size=8388608
+      --read-rnd-buffer-size=4194304
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-u", "root", "-p123456", "--silent"]
       interval: 5s
