@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Layout, Menu, Avatar } from 'antd'
+import { Layout, Menu, Tooltip } from 'antd'
 import { Link, useLocation } from 'react-router-dom'
 import {
   DashboardOutlined,
@@ -10,9 +10,30 @@ import {
   SettingOutlined,
   ExperimentOutlined,
   LineChartOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons'
 
 const { Sider } = Layout
+
+/* Brand logo mark — rendered as SVG so no external assets needed */
+function BrandMark({ size = 36 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="36" height="36" rx="10" fill="url(#grad)" />
+      <path d="M10 26 L18 10 L26 26" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.9"/>
+      <circle cx="18" cy="10" r="2.5" fill="#60a5fa" />
+      <circle cx="10" cy="26" r="2" fill="white" opacity="0.7" />
+      <circle cx="26" cy="26" r="2" fill="white" opacity="0.7" />
+      <defs>
+        <linearGradient id="grad" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#1d4ed8" />
+          <stop offset="1" stopColor="#3b82f6" />
+        </linearGradient>
+      </defs>
+    </svg>
+  )
+}
 
 const Sidebar = () => {
   const location = useLocation()
@@ -34,9 +55,9 @@ const Sidebar = () => {
       icon: <RocketOutlined />,
       label: '机器学习',
       children: [
-        { key: 'training-config', label: <Link to="/training/config">训练配置</Link> },
-        { key: 'training-monitor', label: <Link to="/training/monitor">训练监控</Link> },
-        { key: 'training-results', label: <Link to="/training/results">结果可视化</Link> },
+        { key: 'training-config',   label: <Link to="/training/config">训练配置</Link> },
+        { key: 'training-monitor',  label: <Link to="/training/monitor">训练监控</Link> },
+        { key: 'training-results',  label: <Link to="/training/results">结果可视化</Link> },
       ],
     },
     {
@@ -44,9 +65,9 @@ const Sidebar = () => {
       icon: <ExperimentOutlined />,
       label: '深度学习',
       children: [
-        { key: 'dl-config', label: <Link to="/dl/config">模型配置</Link> },
-        { key: 'dl-monitor', label: <Link to="/dl/monitor">训练监控</Link> },
-        { key: 'dl-results', label: <Link to="/dl/results">结果可视化</Link> },
+        { key: 'dl-config',   label: <Link to="/dl/config">模型配置</Link> },
+        { key: 'dl-monitor',  label: <Link to="/dl/monitor">训练监控</Link> },
+        { key: 'dl-results',  label: <Link to="/dl/results">结果可视化</Link> },
       ],
     },
     {
@@ -54,7 +75,7 @@ const Sidebar = () => {
       icon: <LineChartOutlined />,
       label: '时序任务',
       children: [
-        { key: 'ts-new', label: <Link to="/ts/tasks/new">新建任务</Link> },
+        { key: 'ts-new',  label: <Link to="/ts/tasks/new">新建任务</Link> },
         { key: 'ts-list', label: <Link to="/ts/tasks">任务列表</Link> },
       ],
     },
@@ -98,23 +119,91 @@ const Sidebar = () => {
       collapsible
       collapsed={collapsed}
       onCollapse={setCollapsed}
+      trigger={null}
+      width={220}
+      collapsedWidth={72}
       style={{
-        background: '#f8fafc',
-        boxShadow: '2px 0 12px rgba(15, 23, 42, 0.08)',
-        borderRight: '1px solid rgba(148, 163, 184, 0.18)',
+        background: 'linear-gradient(180deg, #090f1e 0%, #0d1b38 60%, #0f2046 100%)',
+        boxShadow: '4px 0 24px rgba(9, 15, 30, 0.45)',
+        borderRight: 'none',
+        position: 'relative',
+        zIndex: 10,
       }}
     >
-      <div className="flex flex-col items-center pt-6 pb-4">
-        <Avatar size={48} style={{ backgroundColor: '#0f4c81' }}>AI</Avatar>
-        {!collapsed && <h2 className="mt-2 text-xl font-semibold" style={{ color: '#0f172a' }}>ML Platform</h2>}
+      {/* Logo area */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: collapsed ? '20px 18px' : '20px 20px',
+          borderBottom: '1px solid rgba(255,255,255,0.06)',
+          marginBottom: 8,
+          cursor: 'pointer',
+          transition: 'padding 0.2s',
+        }}
+      >
+        <BrandMark size={36} />
+        {!collapsed && (
+          <div style={{ overflow: 'hidden' }}>
+            <div style={{ color: '#fff', fontWeight: 700, fontSize: 15, lineHeight: 1.2, letterSpacing: '-0.02em', whiteSpace: 'nowrap' }}>
+              ML Platform
+            </div>
+            <div style={{ color: 'rgba(255,255,255,0.38)', fontSize: 10, fontWeight: 500, letterSpacing: '0.1em', textTransform: 'uppercase', marginTop: 2 }}>
+              Enterprise
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Nav menu */}
       <Menu
+        theme="dark"
         mode="inline"
         selectedKeys={[getSelectedKey()]}
         defaultOpenKeys={['training', 'dl', 'ts']}
         items={menuItems}
-        style={{ borderRight: 0, background: 'transparent' }}
+        style={{
+          background: 'transparent',
+          borderRight: 0,
+          flex: 1,
+          overflow: 'hidden auto',
+        }}
       />
+
+      {/* Collapse toggle */}
+      <div
+        onClick={() => setCollapsed(!collapsed)}
+        style={{
+          position: 'absolute',
+          bottom: 20,
+          left: 0,
+          right: 0,
+          display: 'flex',
+          justifyContent: 'center',
+          cursor: 'pointer',
+        }}
+      >
+        <Tooltip title={collapsed ? '展开' : '收起'} placement="right">
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              background: 'rgba(255,255,255,0.07)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'rgba(255,255,255,0.55)',
+              fontSize: 14,
+              transition: 'background 0.2s',
+            }}
+          >
+            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+          </div>
+        </Tooltip>
+      </div>
     </Sider>
   )
 }

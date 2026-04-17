@@ -1,6 +1,6 @@
 import React from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
-import { App as AntApp, Layout } from 'antd'
+import { App as AntApp, ConfigProvider, Layout } from 'antd'
 import Sidebar from './components/layout/Sidebar'
 import Header from './components/layout/Header'
 import Dashboard from './pages/Dashboard'
@@ -20,15 +20,49 @@ import TSResults from './pages/TSResults'
 
 const { Content } = Layout
 
+const antTheme = {
+  token: {
+    colorPrimary: '#2563eb',
+    colorSuccess: '#10b981',
+    colorWarning: '#f59e0b',
+    colorError: '#ef4444',
+    colorInfo: '#3b82f6',
+    borderRadius: 8,
+    borderRadiusLG: 12,
+    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    fontSize: 13,
+    colorBgContainer: '#ffffff',
+    colorBgLayout: '#f0f5fb',
+    colorBorder: 'rgba(148, 163, 184, 0.3)',
+    colorTextHeading: '#0f172a',
+    colorTextSecondary: '#64748b',
+  },
+  components: {
+    Layout: { siderBg: 'transparent', headerBg: 'transparent' },
+    Menu: {
+      darkItemBg: 'transparent',
+      darkSubMenuItemBg: 'rgba(255,255,255,0.04)',
+      darkItemSelectedBg: 'rgba(59, 130, 246, 0.18)',
+      darkItemSelectedColor: '#60a5fa',
+      darkItemHoverBg: 'rgba(255,255,255,0.07)',
+      darkItemHoverColor: '#ffffff',
+      darkItemColor: 'rgba(255,255,255,0.72)',
+    },
+    Table: { headerBg: '#f8fafc', rowHoverBg: 'rgba(59, 130, 246, 0.04)' },
+    Card: { borderRadiusLG: 16 },
+  },
+}
+
 function App() {
   return (
+    <ConfigProvider theme={antTheme}>
     <AntApp>
     <Router>
-      <Layout style={{ minHeight: '100vh' }}>
+      <Layout style={{ minHeight: '100vh', background: '#f0f5fb' }}>
         <Sidebar />
-        <Layout>
+        <Layout style={{ background: 'transparent' }}>
           <Header />
-          <Content style={{ margin: '24px 16px', padding: 24, background: '#fff', minHeight: 280 }}>
+          <Content style={{ margin: '0 20px 20px', padding: 0, background: 'transparent' }}>
             <Routes>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
@@ -58,6 +92,7 @@ function App() {
       </Layout>
     </Router>
     </AntApp>
+    </ConfigProvider>
   )
 }
 
