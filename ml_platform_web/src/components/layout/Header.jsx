@@ -20,11 +20,14 @@ const PAGE_TITLES = {
   '/dl/results':       { title: '深度学习结果', sub: '分析训练曲线与模型表现' },
   '/ts/tasks/new':     { title: '新建时序任务', sub: '使用 Chronos 进行时间序列预测' },
   '/ts/tasks':         { title: '时序任务列表', sub: '管理所有时间序列预测任务' },
+  '/tasks':            { title: '任务中心', sub: '统一管理所有异步任务 — 训练、解释、评估' },
+  '/experiments':      { title: '实验管理', sub: '组织多次训练 Run，对比模型性能，自动筛选最优' },
 }
 
 function getPageMeta(pathname) {
   if (PAGE_TITLES[pathname]) return PAGE_TITLES[pathname]
   if (pathname.startsWith('/ts/tasks/')) return { title: '时序任务详情', sub: '查看预测结果与统计信息' }
+  if (pathname.startsWith('/experiments/')) return { title: '实验详情', sub: '排行榜 · 多模型指标对比' }
   return { title: 'ML Platform', sub: '' }
 }
 

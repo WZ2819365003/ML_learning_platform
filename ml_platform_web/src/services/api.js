@@ -229,4 +229,28 @@ export const tsApi = {
   predictDeployment: (deploymentId, data) => api.post(`/ts/deployments/${deploymentId}/predict`, data),
 };
 
+// ── V3 Platform APIs ────────────────────────────────────────────────────────
+
+export const platformTasksApi = {
+  list: (params = {}) => api.get('/platform/tasks/', { params }),
+  get: (id) => api.get(`/platform/tasks/${id}`),
+  retry: (id) => api.post(`/platform/tasks/${id}/retry`),
+  cancel: (id) => api.post(`/platform/tasks/${id}/cancel`),
+  delete: (id) => api.delete(`/platform/tasks/${id}`),
+};
+
+export const platformExperimentsApi = {
+  list: (params = {}) => api.get('/platform/experiments/', { params }),
+  create: (data) => api.post('/platform/experiments/', data),
+  get: (id) => api.get(`/platform/experiments/${id}`),
+  delete: (id) => api.delete(`/platform/experiments/${id}`),
+  listRuns: (experimentId, params = {}) => api.get(`/platform/experiments/${experimentId}/runs`, { params }),
+  createRun: (experimentId, data) => api.post(`/platform/experiments/${experimentId}/runs`, data),
+  getRun: (experimentId, runId) => api.get(`/platform/experiments/${experimentId}/runs/${runId}`),
+  getLeaderboard: (experimentId) => api.get(`/platform/experiments/${experimentId}/leaderboard`),
+  submitAutoml: (experimentId, candidates) => api.post(`/platform/experiments/${experimentId}/automl`, { candidates }),
+  triggerExplain: (experimentId, runId) => api.post(`/platform/experiments/${experimentId}/runs/${runId}/explain`),
+  getExplain: (experimentId, runId) => api.get(`/platform/experiments/${experimentId}/runs/${runId}/explain`),
+};
+
 export default api;

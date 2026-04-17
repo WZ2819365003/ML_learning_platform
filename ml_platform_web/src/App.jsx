@@ -17,6 +17,9 @@ import DLResults from './pages/DLResults'
 import TSConfig from './pages/TSConfig'
 import TSMonitor from './pages/TSMonitor'
 import TSResults from './pages/TSResults'
+import TaskCenter from './pages/TaskCenter'
+import Experiments from './pages/Experiments'
+import ExperimentDetail from './pages/ExperimentDetail'
 
 const { Content } = Layout
 
@@ -86,6 +89,11 @@ function App() {
               <Route path="/ts/config" element={<Navigate to="/ts/tasks/new" replace />} />
               <Route path="/ts/monitor" element={<TSMonitor />} />
               <Route path="/ts/results" element={<TSResults />} />
+
+              {/* V3 Platform routes */}
+              <Route path="/tasks" element={<TaskCenter />} />
+              <Route path="/experiments" element={<Experiments />} />
+              <Route path="/experiments/:experimentId" element={<ExperimentDetail />} />
             </Routes>
           </Content>
         </Layout>

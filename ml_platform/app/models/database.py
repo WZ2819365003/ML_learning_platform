@@ -432,6 +432,181 @@ class TimeSeriesForecastTask(Base):
 
 
 # ---------------------------------------------------------------------------
+# V3 Platform: DatasetVersion
+# ---------------------------------------------------------------------------
+
+class DatasetVersion(Base):
+    """Tracks versioned snapshots of a dataset (for incremental training)."""
+    __tablename__ = "dataset_versions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dataset_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    file_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
+    row_count: Mapped[int | None] = mapped_column(Integer, default=None)
+    schema_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    parent_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("dataset_versions.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    dataset: Mapped["Dataset"] = relationship("Dataset")
+
+    def __repr__(self) -> str:
+        return f"<DatasetVersion dataset_id={self.dataset_id!r} version={self.version!r}>"
+
+
+# ---------------------------------------------------------------------------
+# V3 Platform: PlatformTask (unified async work unit)
+# ---------------------------------------------------------------------------
+
+class PlatformTask(Base):
+    """Unified task record — all async work goes through here."""
+    __tablename__ = "platform_tasks"
+    __table_args__ = (
+        Index("ix_platform_tasks_status", "status"),
+        Index("ix_platform_tasks_created_at", "created_at"),
+        Index("ix_platform_tasks_kind", "kind"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    # train | eval | predict | explain | preprocess | automl
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    # PENDING | QUEUED | RUNNING | SUCCESS | FAILED | RETRY | CANCELLED
+    priority: Mapped[int] = mapped_column(Integer, default=5)
+
+    celery_task_id: Mapped[str | None] = mapped_column(String(255), default=None)
+    worker_id: Mapped[str | None] = mapped_column(String(255), default=None)
+
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+
+    # "kind:id" — e.g. "train:abc123" links to training_tasks.id
+    payload_ref: Mapped[str | None] = mapped_column(String(512), default=None)
+
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+
+    logs_uri: Mapped[str | None] = mapped_column(String(1024), default=None)
+    metrics_uri: Mapped[str | None] = mapped_column(String(1024), default=None)
+    artifacts_uri: Mapped[str | None] = mapped_column(String(1024), default=None)
+    metrics_snapshot: Mapped[dict | None] = mapped_column(JSON, default=None)
+
+    error_message: Mapped[str | None] = mapped_column(Text, default=None)
+
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    runs: Mapped[list["ExperimentRun"]] = relationship(
+        back_populates="task", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<PlatformTask id={self.id!r} kind={self.kind!r} status={self.status!r}>"
+
+
+# ---------------------------------------------------------------------------
+# V3 Platform: PlatformExperiment
+# ---------------------------------------------------------------------------
+
+class PlatformExperiment(Base):
+    """Groups one or more ExperimentRuns (single run or AutoML search)."""
+    __tablename__ = "platform_experiments"
+    __table_args__ = (
+        Index("ix_platform_experiments_status", "status"),
+        Index("ix_platform_experiments_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+
+    dataset_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    dataset_name: Mapped[str | None] = mapped_column(String(255), default=None)
+    dataset_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("dataset_versions.id", ondelete="SET NULL"), default=None
+    )
+
+    objective_metric: Mapped[str] = mapped_column(String(64), default="accuracy")
+    objective_direction: Mapped[str] = mapped_column(String(8), default="max")
+
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="CREATED")
+    # CREATED | RUNNING | COMPLETED | FAILED
+    kind: Mapped[str] = mapped_column(String(32), default="single")
+    # single | automl | grid_search
+
+    best_run_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    config: Mapped[dict | None] = mapped_column(JSON, default=None)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    runs: Mapped[list["ExperimentRun"]] = relationship(
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+        foreign_keys="ExperimentRun.experiment_id",
+    )
+
+    def __repr__(self) -> str:
+        return f"<PlatformExperiment id={self.id!r} name={self.name!r} status={self.status!r}>"
+
+
+# ---------------------------------------------------------------------------
+# V3 Platform: ExperimentRun
+# ---------------------------------------------------------------------------
+
+class ExperimentRun(Base):
+    """One training attempt within an experiment."""
+    __tablename__ = "experiment_runs"
+    __table_args__ = (
+        Index("ix_experiment_runs_experiment_id", "experiment_id"),
+        Index("ix_experiment_runs_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    experiment_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("platform_experiments.id", ondelete="CASCADE"), nullable=False
+    )
+    task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("platform_tasks.id", ondelete="SET NULL"), default=None
+    )
+    parent_run_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("experiment_runs.id", ondelete="SET NULL"), default=None
+    )
+
+    params: Mapped[dict | None] = mapped_column(JSON, default=None)
+    metrics: Mapped[dict | None] = mapped_column(JSON, default=None)
+
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    rank: Mapped[int | None] = mapped_column(Integer, default=None)
+    artifacts_uri: Mapped[str | None] = mapped_column(String(1024), default=None)
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    experiment: Mapped["PlatformExperiment"] = relationship(
+        back_populates="runs", foreign_keys=[experiment_id]
+    )
+    task: Mapped["PlatformTask | None"] = relationship(back_populates="runs")
+
+    def __repr__(self) -> str:
+        return f"<ExperimentRun id={self.id!r} experiment_id={self.experiment_id!r} status={self.status!r}>"
+
+
+# ---------------------------------------------------------------------------
 # Dependency injection helper
 # ---------------------------------------------------------------------------
 

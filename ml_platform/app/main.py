@@ -17,6 +17,8 @@ from app.api.routes import data, training, logs, experiment, visualization, mode
 from app.api.routes.deploy import deploy_router, inference_router
 from app.api.routes.dl import router as dl_router
 from app.api.routes.timesfm import router as timesfm_router, ts_router
+from app.api.routes.platform_tasks import router as platform_tasks_router
+from app.api.routes.platform_experiments import router as platform_experiments_router
 from app.api.websocket import router as ws_router
 from app.services.timeseries_service import resume_unfinished_ts_tasks
 from app.utils.file_utils import generate_unique_filename
@@ -150,7 +152,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="ML Training Platform",
-        version="2.3.0",
+        version="3.0.0",
         lifespan=lifespan,
     )
 
@@ -175,13 +177,15 @@ def create_app() -> FastAPI:
     app.include_router(dl_router, prefix="/api")        # → /api/dl/...
     app.include_router(timesfm_router, prefix="/api")  # → /api/timesfm/...
     app.include_router(ts_router, prefix="/api")
+    app.include_router(platform_tasks_router, prefix="/api")        # → /api/platform/tasks
+    app.include_router(platform_experiments_router, prefix="/api")  # → /api/platform/experiments
     app.include_router(ws_router)
 
     # ---- Root-level endpoints ----
 
     @app.get("/health", tags=["Health"])
     async def health_check():
-        return {"status": "ok", "version": "2.3.0"}
+        return {"status": "ok", "version": "3.0.0"}
 
     return app
 

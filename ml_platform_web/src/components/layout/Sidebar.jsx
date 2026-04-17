@@ -12,6 +12,8 @@ import {
   LineChartOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  ControlOutlined,
+  BranchesOutlined,
 } from '@ant-design/icons'
 
 const { Sider } = Layout
@@ -90,6 +92,18 @@ const Sidebar = () => {
       label: <Link to="/deploy">模型部署</Link>,
     },
     {
+      type: 'divider',
+    },
+    {
+      key: 'v3',
+      icon: <BranchesOutlined />,
+      label: 'V3 平台',
+      children: [
+        { key: 'tasks',       label: <Link to="/tasks">任务中心</Link> },
+        { key: 'experiments', label: <Link to="/experiments">实验管理</Link> },
+      ],
+    },
+    {
       key: 'settings',
       icon: <SettingOutlined />,
       label: <Link to="/settings">系统设置</Link>,
@@ -106,6 +120,8 @@ const Sidebar = () => {
     if (path === '/models') return 'models'
     if (path === '/deploy') return 'deploy'
     if (path === '/settings') return 'settings'
+    if (path === '/tasks') return 'tasks'
+    if (path === '/experiments' || path.startsWith('/experiments/')) return 'experiments'
     if (path === '/dl/config') return 'dl-config'
     if (path === '/dl/monitor') return 'dl-monitor'
     if (path === '/dl/results') return 'dl-results'
