@@ -304,6 +304,89 @@ def _run_dl_sync(
 
 
 # ---------------------------------------------------------------------------
+# Celery entry-point: _run_dl_training_by_id
+# ---------------------------------------------------------------------------
+
+async def _run_dl_training_by_id(
+    dl_task_id: str,
+    platform_task_id: str | None = None,
+) -> dict:
+    """
+    Celery entry-point: load a DLTrainingTask by ID and run the training pipeline.
+
+    Returns {"metrics": {...}, "model_path": "..."}.
+    Mirrors _run_training_sync_by_id in training_service.
+    """
+    settings = get_settings()
+
+    # Load domain task parameters
+    async with async_session_factory() as db:
+        result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == dl_task_id))
+        task = result.scalar_one_or_none()
+        if task is None:
+            raise ValueError(f"DLTrainingTask {dl_task_id!r} not found")
+        # Load related dataset
+        dataset_result = await db.execute(select(Dataset).where(Dataset.id == task.dataset_id))
+        dataset = dataset_result.scalar_one_or_none()
+        if dataset is None:
+            raise ValueError(f"Dataset {task.dataset_id!r} not found for DLTask {dl_task_id!r}")
+
+        file_path     = resolve_runtime_path(dataset.file_path)
+        target_column = task.target_column
+        model_type    = task.model_type
+        task_type_req = task.task_type or "auto"
+        arch_config   = task.arch_config or {}
+        opt_config    = task.opt_config or {}
+        train_config  = task.train_config or {}
+
+    # Mark domain task RUNNING
+    async with async_session_factory() as db:
+        result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == dl_task_id))
+        t = result.scalar_one_or_none()
+        if t:
+            t.status = "RUNNING"
+            t.started_at = datetime.now(timezone.utc)
+            t.total_epochs = int(train_config.get("epochs", 50))
+            await db.commit()
+
+    loop = asyncio.get_event_loop()
+    try:
+        training_result = await loop.run_in_executor(
+            _executor,
+            _run_dl_sync,
+            dl_task_id, file_path, target_column, model_type, task_type_req,
+            arch_config, opt_config, train_config, str(settings.storage_models), loop,
+        )
+        stored_metrics = training_result["result_metrics"]
+
+        async with async_session_factory() as db:
+            result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == dl_task_id))
+            t = result.scalar_one_or_none()
+            if t:
+                t.status = "SUCCESS"
+                t.progress = 100.0
+                t.current_epoch = int(stored_metrics.get("final_epoch") or t.total_epochs or 0)
+                t.task_type = training_result["task_type"]
+                t.result_metrics = stored_metrics
+                t.model_path = training_result["model_path"]
+                t.finished_at = datetime.now(timezone.utc)
+                await db.commit()
+
+        return {"metrics": stored_metrics, "model_path": training_result["model_path"]}
+
+    except Exception as exc:
+        async with async_session_factory() as db:
+            result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == dl_task_id))
+            t = result.scalar_one_or_none()
+            if t:
+                t.status = "FAILED"
+                t.error_message = str(exc)
+                t.finished_at = datetime.now(timezone.utc)
+                await db.commit()
+        raise
+
+
+# ---------------------------------------------------------------------------
 # Async orchestration
 # ---------------------------------------------------------------------------
 
@@ -317,8 +400,12 @@ async def _execute_dl_training(
     opt_config:   dict,
     train_config: dict,
     model_save_dir: str,
+    platform_task_id: str | None = None,
 ):
-    # Mark RUNNING
+    """Background coroutine that runs DL training and updates both domain + platform tables."""
+    from app.scheduler.task_runner import update_platform_task_status
+
+    # ── Mark RUNNING ──────────────────────────────────────────────────────────
     async with async_session_factory() as db:
         result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
         task = result.scalar_one_or_none()
@@ -327,6 +414,9 @@ async def _execute_dl_training(
             task.started_at = datetime.now(timezone.utc)
             task.total_epochs = int(train_config.get("epochs", 50))
             await db.commit()
+
+    if platform_task_id:
+        await update_platform_task_status(platform_task_id, "RUNNING")
 
     loop = asyncio.get_event_loop()
     try:
@@ -337,9 +427,9 @@ async def _execute_dl_training(
             arch_config, opt_config, train_config, model_save_dir, loop,
         )
 
-        # Store full metrics including training history (needed for result charts)
         stored_metrics = training_result["result_metrics"]
 
+        # ── Mark SUCCESS (domain) ─────────────────────────────────────────────
         async with async_session_factory() as db:
             result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
             task = result.scalar_one_or_none()
@@ -353,7 +443,13 @@ async def _execute_dl_training(
                 task.finished_at = datetime.now(timezone.utc)
                 await db.commit()
 
-        # Notify WebSocket clients that training is done
+        # ── Write-back: PlatformTask SUCCESS ─────────────────────────────────
+        if platform_task_id:
+            await update_platform_task_status(
+                platform_task_id, "SUCCESS",
+                metrics=stored_metrics,
+            )
+
         loop.call_soon_threadsafe(event_bus.publish, f"dl:{task_id}", {
             "type": "done", "status": "SUCCESS", "metrics": stored_metrics,
         })
@@ -366,6 +462,7 @@ async def _execute_dl_training(
             message=f"训练失败: {exc}",
             extra=None,
         )
+        # ── Mark FAILED (domain) ──────────────────────────────────────────────
         async with async_session_factory() as db:
             result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
             task = result.scalar_one_or_none()
@@ -374,6 +471,11 @@ async def _execute_dl_training(
                 task.error_message = str(exc)
                 task.finished_at = datetime.now(timezone.utc)
                 await db.commit()
+
+        # ── Write-back: PlatformTask FAILED ──────────────────────────────────
+        if platform_task_id:
+            await update_platform_task_status(platform_task_id, "FAILED", error=str(exc))
+
         event_bus.publish(f"dl:{task_id}", {"type": "done", "status": "FAILED", "error": str(exc)})
     finally:
         _running_tasks.pop(task_id, None)
@@ -419,6 +521,16 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
     await db.flush()
     await db.refresh(task)
 
+    # ── Write-back contract: register in unified platform task table ──────────
+    from app.scheduler.task_runner import register_domain_task
+    platform_task = await register_domain_task(
+        db=db,
+        kind="dl_train",
+        payload_ref=f"dl_train:{task.id}",
+    )
+    platform_task_id = platform_task.id
+    await db.commit()
+
     bg = asyncio.create_task(_execute_dl_training(
         task_id=task.id,
         file_path=dataset.file_path,
@@ -429,6 +541,7 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
         opt_config=request_data.get("opt_config", {}),
         train_config=request_data.get("train_config", {}),
         model_save_dir=str(settings.storage_models),
+        platform_task_id=platform_task_id,
     ))
     _running_tasks[task.id] = bg
     return task

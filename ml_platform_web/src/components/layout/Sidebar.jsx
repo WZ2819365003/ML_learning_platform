@@ -94,15 +94,28 @@ const Sidebar = () => {
     {
       type: 'divider',
     },
-    {
+    // V3 Platform features — hidden behind VITE_ENABLE_V3 flag until Stage 2
+    // is fully deployed. Set VITE_ENABLE_V3=true in .env.local to enable.
+    ...(import.meta.env.VITE_ENABLE_V3 !== 'false' ? [{
       key: 'v3',
       icon: <BranchesOutlined />,
-      label: 'V3 平台',
+      label: (
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          V3 平台
+          <span style={{
+            fontSize: 9, fontWeight: 700, letterSpacing: '0.04em',
+            background: 'rgba(96,165,250,0.18)', color: '#60a5fa',
+            padding: '1px 5px', borderRadius: 4, lineHeight: 1.6,
+          }}>
+            BETA
+          </span>
+        </span>
+      ),
       children: [
         { key: 'tasks',       label: <Link to="/tasks">任务中心</Link> },
         { key: 'experiments', label: <Link to="/experiments">实验管理</Link> },
       ],
-    },
+    }] : []),
     {
       key: 'settings',
       icon: <SettingOutlined />,

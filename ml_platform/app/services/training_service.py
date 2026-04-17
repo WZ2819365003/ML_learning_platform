@@ -218,8 +218,131 @@ def _run_training_sync(
     }
 
 
+async def create_training_task_record(db: AsyncSession, candidate: dict) -> TrainingTask:
+    """
+    Create a TrainingTask DB row from a candidate dict WITHOUT launching execution.
+
+    Used by experiment_service.submit_automl_experiment to pre-create domain tasks
+    before dispatching them to Celery via PlatformTask.
+
+    candidate keys (all optional except dataset_id, model_type, target_column):
+      dataset_id, model_type, target_column, hyperparameters, test_size,
+      eval_metrics, cross_validation, class_weight
+    """
+    import uuid as _uuid_mod
+
+    dataset_id = candidate["dataset_id"]
+    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    dataset = result.scalar_one_or_none()
+    if dataset is None:
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_id!r} not found")
+
+    available = list_available_models()
+    model_type = candidate["model_type"]
+    if model_type not in available:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model type {model_type!r}. Available: {available}",
+        )
+
+    cv_config = candidate.get("cross_validation") or {}
+    short_id = str(_uuid_mod.uuid4())[:8]
+    task = TrainingTask(
+        dataset_id=dataset_id,
+        model_type=model_type,
+        name=f"{model_type}_{short_id}",
+        hyperparameters=candidate.get("hyperparameters", {}),
+        target_column=candidate["target_column"],
+        test_size=candidate.get("test_size", 0.2),
+        eval_metrics=candidate.get("eval_metrics", ["accuracy"]),
+        status="PENDING",
+    )
+    db.add(task)
+    await db.flush()
+    await db.refresh(task)
+    return task
+
+
+async def _run_training_sync_by_id(
+    training_task_id: str,
+    platform_task_id: str | None = None,
+) -> dict:
+    """
+    Celery entry-point: load a TrainingTask by ID and run the training pipeline.
+
+    Returns a dict with {"metrics": {...}, "model_path": "..."}.
+    Updates both TrainingTask and (optionally) PlatformTask on completion.
+    """
+    from app.models.database import async_session_factory
+
+    settings = get_settings()
+
+    # Load domain task + associated dataset
+    async with async_session_factory() as db:
+        result = await db.execute(select(TrainingTask).where(TrainingTask.id == training_task_id))
+        task = result.scalar_one_or_none()
+        if task is None:
+            raise ValueError(f"TrainingTask {training_task_id!r} not found")
+        ds_result = await db.execute(select(Dataset).where(Dataset.id == task.dataset_id))
+        dataset = ds_result.scalar_one_or_none()
+        if dataset is None:
+            raise ValueError(f"Dataset {task.dataset_id!r} not found for TrainingTask {training_task_id!r}")
+        file_path     = dataset.file_path
+        target_column = task.target_column
+        model_type    = task.model_type
+        hyperparams   = task.hyperparameters or {}
+        test_size     = task.test_size or 0.2
+        eval_metrics  = task.eval_metrics or ["accuracy"]
+        # cv_folds isn't persisted on TrainingTask, default to 5
+        cv_folds      = 5
+
+    # Mark domain task RUNNING
+    async with async_session_factory() as db:
+        result = await db.execute(select(TrainingTask).where(TrainingTask.id == training_task_id))
+        task = result.scalar_one_or_none()
+        if task:
+            task.status = "RUNNING"
+            task.started_at = datetime.now(timezone.utc)
+            await db.commit()
+
+    try:
+        loop = asyncio.get_event_loop()
+        training_result = await loop.run_in_executor(
+            _executor,
+            _run_training_sync,
+            training_task_id, file_path, target_column, model_type,
+            hyperparams, test_size, eval_metrics, cv_folds,
+            str(settings.storage_models), None,
+        )
+        metrics = {k: v for k, v in training_result["result_metrics"].items() if k != "cv_folds"}
+
+        async with async_session_factory() as db:
+            result = await db.execute(select(TrainingTask).where(TrainingTask.id == training_task_id))
+            task = result.scalar_one_or_none()
+            if task:
+                task.status = "SUCCESS"
+                task.progress = 100.0
+                task.result_metrics = metrics
+                task.model_path = training_result["model_path"]
+                task.finished_at = datetime.now(timezone.utc)
+                await db.commit()
+
+        return {"metrics": metrics, "model_path": training_result["model_path"]}
+
+    except Exception as exc:
+        async with async_session_factory() as db:
+            result = await db.execute(select(TrainingTask).where(TrainingTask.id == training_task_id))
+            task = result.scalar_one_or_none()
+            if task:
+                task.status = "FAILED"
+                task.error_message = str(exc)
+                task.finished_at = datetime.now(timezone.utc)
+                await db.commit()
+        raise
+
+
 async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
-    """Create a training task and launch it in background."""
+    """Create a training task, register it in the unified platform, and launch it."""
     settings = get_settings()
 
     # Validate dataset exists
@@ -237,7 +360,7 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
             detail=f"Unknown model type '{request_data['model_type']}'. Available: {available}",
         )
 
-    # Create task record
+    # Create domain task record
     cv_config = request_data.get("cross_validation") or {}
     import uuid as _uuid_mod
     short_id = str(_uuid_mod.uuid4())[:8]
@@ -258,9 +381,21 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     task_id = task.id
     file_path = dataset.file_path
 
-    # Launch background training
+    # ── Write-back contract: register in unified platform task table ──────────
+    from app.scheduler.task_runner import register_domain_task
+    platform_task = await register_domain_task(
+        db=db,
+        kind="train",
+        payload_ref=f"train:{task_id}",
+    )
+    platform_task_id = platform_task.id
+    # commit both records together
+    await db.commit()
+
+    # Launch asyncio background training (dev mode — no Celery worker required)
     bg_task = asyncio.create_task(_execute_training(
         task_id=task_id,
+        platform_task_id=platform_task_id,
         file_path=file_path,
         target_column=request_data["target_column"],
         model_type=request_data["model_type"],
@@ -287,9 +422,16 @@ async def _execute_training(
     cv_folds: int,
     model_save_dir: str,
     class_weight: str | None = None,
+    platform_task_id: str | None = None,
 ):
-    """Background coroutine that runs training in a thread and updates DB."""
-    # Update status to RUNNING
+    """Background coroutine that runs training in a thread and updates DB.
+
+    Write-back contract: whenever domain task status changes, the corresponding
+    PlatformTask (if platform_task_id is provided) is updated in lock-step.
+    """
+    from app.scheduler.task_runner import update_platform_task_status
+
+    # ── Mark RUNNING ──────────────────────────────────────────────────────────
     async with async_session_factory() as db:
         result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
         task = result.scalar_one_or_none()
@@ -297,6 +439,9 @@ async def _execute_training(
             task.status = "RUNNING"
             task.started_at = datetime.now(timezone.utc)
             await db.commit()
+
+    if platform_task_id:
+        await update_platform_task_status(platform_task_id, "RUNNING")
 
     try:
         # Run training in thread pool
@@ -308,21 +453,29 @@ async def _execute_training(
             hyperparameters, test_size, eval_metrics, cv_folds, model_save_dir, class_weight,
         )
 
-        # Update with results
+        # Remove cv_folds detail from stored metrics to keep it clean
+        stored_metrics = {
+            k: v for k, v in training_result["result_metrics"].items() if k != "cv_folds"
+        }
+
+        # ── Mark SUCCESS (domain) ─────────────────────────────────────────────
         async with async_session_factory() as db:
             result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
             task = result.scalar_one_or_none()
             if task:
-                # Remove cv_folds detail from stored metrics to keep it clean
-                stored_metrics = {
-                    k: v for k, v in training_result["result_metrics"].items() if k != "cv_folds"
-                }
                 task.status = "SUCCESS"
                 task.progress = 100.0
                 task.result_metrics = stored_metrics
                 task.model_path = training_result["model_path"]
                 task.finished_at = datetime.now(timezone.utc)
                 await db.commit()
+
+        # ── Write-back: mark PlatformTask SUCCESS with metrics snapshot ───────
+        if platform_task_id:
+            await update_platform_task_status(
+                platform_task_id, "SUCCESS",
+                metrics=stored_metrics,
+            )
 
         logger.info("Training task %s completed successfully", task_id)
 
@@ -342,6 +495,8 @@ async def _execute_training(
             tl.log_status("FAILED", str(e))
         except Exception:
             pass
+
+        # ── Mark FAILED (domain) ──────────────────────────────────────────────
         async with async_session_factory() as db:
             result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
             task = result.scalar_one_or_none()
@@ -350,6 +505,10 @@ async def _execute_training(
                 task.error_message = str(e)
                 task.finished_at = datetime.now(timezone.utc)
                 await db.commit()
+
+        # ── Write-back: mark PlatformTask FAILED ─────────────────────────────
+        if platform_task_id:
+            await update_platform_task_status(platform_task_id, "FAILED", error=str(e))
 
     finally:
         _running_tasks.pop(task_id, None)

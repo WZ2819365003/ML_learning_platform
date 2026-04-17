@@ -237,7 +237,10 @@ async def _resolve_task_deployment(
     return result.scalar_one_or_none()
 
 
-async def _run_forecast_bg(task_id: str) -> None:
+async def _run_forecast_bg(task_id: str, platform_task_id: str | None = None) -> None:
+    """Run a time-series forecast in the background and write-back to PlatformTask."""
+    from app.scheduler.task_runner import update_platform_task_status
+
     async with async_session_factory() as db:
         result = await db.execute(
             select(TimeSeriesForecastTask).where(TimeSeriesForecastTask.id == task_id)
@@ -249,6 +252,17 @@ async def _run_forecast_bg(task_id: str) -> None:
         task.status = "RUNNING"
         task.started_at = _utcnow()
         await db.commit()
+
+    if platform_task_id:
+        await update_platform_task_status(platform_task_id, "RUNNING")
+
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(TimeSeriesForecastTask).where(TimeSeriesForecastTask.id == task_id)
+        )
+        task = result.scalar_one_or_none()
+        if task is None:
+            return
 
         try:
             dataset = await _get_dataset_or_404(db, task.dataset_id)
@@ -270,15 +284,25 @@ async def _run_forecast_bg(task_id: str) -> None:
             task.result = forecast_result
             task.status = "SUCCESS"
             task.finished_at = _utcnow()
+            await db.commit()
+
+            if platform_task_id:
+                await update_platform_task_status(
+                    platform_task_id, "SUCCESS",
+                    metrics={"horizon": task.horizon, "model": backend_label},
+                )
+
         except Exception as exc:  # noqa: BLE001
             task.status = "FAILED"
             task.error_message = str(exc)
             task.finished_at = _utcnow()
+            await db.commit()
 
-        await db.commit()
+            if platform_task_id:
+                await update_platform_task_status(platform_task_id, "FAILED", error=str(exc))
 
 
-def _schedule_forecast(task_id: str) -> None:
+def _schedule_forecast(task_id: str, platform_task_id: str | None = None) -> None:
     if task_id in _active_forecast_jobs:
         return
 
@@ -286,7 +310,7 @@ def _schedule_forecast(task_id: str) -> None:
 
     async def _runner() -> None:
         try:
-            await _run_forecast_bg(task_id)
+            await _run_forecast_bg(task_id, platform_task_id=platform_task_id)
         finally:
             _active_forecast_jobs.discard(task_id)
 
@@ -319,10 +343,18 @@ async def create_ts_task(
     )
     db.add(task)
     await db.flush()
-    await db.commit()
     await db.refresh(task)
 
-    _schedule_forecast(task.id)
+    # ── Write-back contract: register in unified platform task table ──────────
+    from app.scheduler.task_runner import register_domain_task
+    platform_task = await register_domain_task(
+        db=db,
+        kind="predict",
+        payload_ref=f"ts_forecast:{task.id}",
+    )
+    await db.commit()
+
+    _schedule_forecast(task.id, platform_task_id=platform_task.id)
     return _serialize_task(task, deployment=deployment)
 
 

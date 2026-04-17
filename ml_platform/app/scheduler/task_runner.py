@@ -37,6 +37,75 @@ _KIND_TO_CELERY: dict[str, str] = {
 }
 
 
+async def register_domain_task(
+    db: AsyncSession,
+    kind: str,
+    payload_ref: str,
+    priority: int = 5,
+) -> "PlatformTask":
+    """
+    Register an asyncio-executed domain task as a PlatformTask (no Celery dispatch).
+
+    Use this when the actual work is driven by asyncio.create_task() inside a
+    service (training_service, dl_service, timeseries_service).  The returned
+    PlatformTask is flushed but NOT committed — caller must commit.
+    """
+    task = PlatformTask(
+        kind=kind,
+        status="QUEUED",
+        priority=priority,
+        payload_ref=payload_ref,
+        queued_at=_utcnow(),
+    )
+    db.add(task)
+    await db.flush()
+    await db.refresh(task)
+    return task
+
+
+async def update_platform_task_status(
+    platform_task_id: str,
+    status: str,
+    metrics: dict | None = None,
+    error: str | None = None,
+    progress: float | None = None,
+) -> None:
+    """
+    Update a PlatformTask's status from an asyncio coroutine (write-back contract).
+
+    Opens its own session so it can be called from inside _execute_* coroutines
+    that own a separate session scope.
+    """
+    from sqlalchemy import select
+    from app.models.database import async_session_factory
+
+    try:
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(PlatformTask).where(PlatformTask.id == platform_task_id)
+            )
+            task = result.scalar_one_or_none()
+            if task is None:
+                logger.warning("update_platform_task_status: id=%r not found", platform_task_id)
+                return
+            task.status = status
+            if status == "RUNNING" and task.started_at is None:
+                task.started_at = _utcnow()
+            if status in ("SUCCESS", "FAILED", "CANCELLED"):
+                task.finished_at = _utcnow()
+            if status == "SUCCESS":
+                task.progress = 1.0
+            if progress is not None:
+                task.progress = progress
+            if metrics:
+                task.metrics_snapshot = metrics
+            if error:
+                task.error_message = str(error)[:2000]
+            await db.commit()
+    except Exception as exc:
+        logger.error("Failed to update PlatformTask %r → %s: %s", platform_task_id, status, exc)
+
+
 async def submit_task(
     db: AsyncSession,
     kind: str,
