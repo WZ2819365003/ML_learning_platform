@@ -140,17 +140,25 @@ async def dispatch_experiment_batch(
     # Expand trials → list of concrete hyperparameter dicts per model.
     eval_metrics = _default_eval_metrics(task_type, task.objective_metric)
     max_trials = budget_config.get("max_trials") if budget_config else None
+    test_size = float((budget_config or {}).get("test_size") or 0.2)
 
     if strategy_type == "baseline":
         trials = _expand_baseline(selected_models, tuning_defaults, search_space)
         total_trials = len(trials)
-        await _persist_trials(db, exp, task, trials, eval_metrics)
+        if total_trials == 0:
+            raise HTTPException(status_code=422, detail="Baseline produced no trials — check selected_models")
+        await _persist_trials(db, exp, task, trials, eval_metrics, test_size=test_size)
         await db.commit()
         _launch_concurrent(exp.id, modeling_task_id)
     elif strategy_type == "grid_search":
         trials = _expand_grid_search(selected_models, tuning_defaults, search_space, max_trials)
         total_trials = len(trials)
-        await _persist_trials(db, exp, task, trials, eval_metrics)
+        if total_trials == 0:
+            raise HTTPException(
+                status_code=422,
+                detail="Grid search produced no trials — provide search_space or pick models with grid_values defined",
+            )
+        await _persist_trials(db, exp, task, trials, eval_metrics, test_size=test_size)
         await db.commit()
         _launch_concurrent(exp.id, modeling_task_id)
     elif strategy_type == "bayesian_search":
@@ -164,6 +172,7 @@ async def dispatch_experiment_batch(
             tuning_defaults=tuning_defaults,
             budget_config=budget_config,
             eval_metrics=eval_metrics,
+            test_size=test_size,
         )
     else:
         raise HTTPException(status_code=422, detail=f"Unsupported strategy_type: {strategy_type!r}")
@@ -268,6 +277,8 @@ async def _persist_trials(
     task: ModelingTask,
     trials: list[dict[str, Any]],
     eval_metrics: list[str],
+    *,
+    test_size: float = 0.2,
 ) -> None:
     """Create TrainingTask + ExperimentRun + PlatformTask for each trial."""
     for trial in trials:
@@ -278,7 +289,7 @@ async def _persist_trials(
                 "model_type": trial["model_type"],
                 "target_column": task.target_column,
                 "hyperparameters": trial["hyperparameters"],
-                "test_size": 0.2,
+                "test_size": test_size,
                 "eval_metrics": eval_metrics,
             },
         )
@@ -458,6 +469,7 @@ def _launch_bayesian(
     tuning_defaults: dict[str, Any],
     budget_config: dict[str, Any] | None,
     eval_metrics: list[str],
+    test_size: float = 0.2,
 ) -> None:
     asyncio.create_task(
         _run_bayesian_search(
@@ -468,6 +480,7 @@ def _launch_bayesian(
             tuning_defaults=tuning_defaults,
             budget_config=budget_config or {},
             eval_metrics=eval_metrics,
+            test_size=test_size,
         )
     )
 
@@ -481,6 +494,7 @@ async def _run_bayesian_search(
     tuning_defaults: dict[str, Any],
     budget_config: dict[str, Any],
     eval_metrics: list[str],
+    test_size: float = 0.2,
 ) -> None:
     """
     Run one Optuna study *per model*, sequentially.
@@ -540,6 +554,7 @@ async def _run_bayesian_search(
                     target_column=target_column,
                     task_type=task_type,
                     eval_metrics=eval_metrics,
+                    test_size=test_size,
                 )
 
                 outcome = await _execute_single_trial(
@@ -611,6 +626,7 @@ async def _persist_single_bayesian_trial(
     target_column: str,
     task_type: str,
     eval_metrics: list[str],
+    test_size: float = 0.2,
 ) -> tuple[str, str, str]:
     """Persist one Optuna trial to DB → return (run_id, platform_task_id, domain_task_id)."""
     async with async_session_factory() as db:
@@ -621,7 +637,7 @@ async def _persist_single_bayesian_trial(
                 "model_type": model_type,
                 "target_column": target_column,
                 "hyperparameters": hyperparameters,
-                "test_size": 0.2,
+                "test_size": test_size,
                 "eval_metrics": eval_metrics,
             },
         )

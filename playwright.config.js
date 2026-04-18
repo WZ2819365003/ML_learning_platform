@@ -70,14 +70,14 @@ module.exports = defineConfig({
       url: 'http://127.0.0.1:8000/health',
       cwd: './ml_platform',
       timeout: 120000,
-      reuseExistingServer: false,
+      reuseExistingServer: !process.env.CI,
     },
     {
       command: 'npm run dev -- --host 127.0.0.1 --port 3000',
       url: 'http://127.0.0.1:3000',
       cwd: './ml_platform_web',
       timeout: 120000,
-      reuseExistingServer: false,
+      reuseExistingServer: !process.env.CI,
     },
   ],
 });
