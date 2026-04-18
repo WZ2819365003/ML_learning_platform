@@ -460,6 +460,73 @@ class DatasetVersion(Base):
 
 
 # ---------------------------------------------------------------------------
+# V3 Platform: ModelingTask (top-level modeling workbench entity)
+# ---------------------------------------------------------------------------
+
+class ModelingTask(Base):
+    """
+    A modeling task is the top-level narrative unit of the V3 workbench.
+
+    One ModelingTask = one "modeling goal" (e.g. 'predict churn on customer_v3')
+    and owns one or more PlatformExperiments — each being a distinct *strategy*
+    (baseline, grid search, Bayesian search).  Experiments in turn own runs.
+
+    Hierarchy:  ModelingTask → PlatformExperiment → ExperimentRun → PlatformTask
+    """
+    __tablename__ = "modeling_tasks"
+    __table_args__ = (
+        Index("ix_modeling_tasks_status", "status"),
+        Index("ix_modeling_tasks_created_at", "created_at"),
+        Index("ix_modeling_tasks_dataset_id", "dataset_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+
+    # Dataset binding (modeling task is dataset-scoped)
+    dataset_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    dataset_name: Mapped[str | None] = mapped_column(String(255), default=None)
+    dataset_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("dataset_versions.id", ondelete="SET NULL"), default=None
+    )
+
+    # Modeling contract
+    target_column: Mapped[str | None] = mapped_column(String(255), default=None)
+    task_type: Mapped[str] = mapped_column(String(32), default="classification")
+    # classification | regression
+    objective_metric: Mapped[str] = mapped_column(String(64), default="accuracy")
+    objective_direction: Mapped[str] = mapped_column(String(8), default="max")
+
+    # Lifecycle
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="CREATED")
+    # CREATED | RUNNING | COMPLETED | FAILED | ARCHIVED
+    best_experiment_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    best_run_id: Mapped[str | None] = mapped_column(String(36), default=None)
+
+    # Freeform config + precomputed summary (leaderboard snapshot, counts, etc.)
+    config: Mapped[dict | None] = mapped_column(JSON, default=None)
+    summary_snapshot: Mapped[dict | None] = mapped_column(JSON, default=None)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    experiments: Mapped[list["PlatformExperiment"]] = relationship(
+        back_populates="modeling_task",
+        cascade="all, delete-orphan",
+        foreign_keys="PlatformExperiment.modeling_task_id",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ModelingTask id={self.id!r} name={self.name!r} status={self.status!r}>"
+        )
+
+
+# ---------------------------------------------------------------------------
 # V3 Platform: PlatformTask (unified async work unit)
 # ---------------------------------------------------------------------------
 
@@ -529,6 +596,11 @@ class PlatformExperiment(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, default=None)
 
+    # Parent modeling task (nullable for backward compat; populated by migration)
+    modeling_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("modeling_tasks.id", ondelete="CASCADE"), default=None
+    )
+
     dataset_id: Mapped[str | None] = mapped_column(String(36), default=None)
     dataset_name: Mapped[str | None] = mapped_column(String(255), default=None)
     dataset_version_id: Mapped[str | None] = mapped_column(
@@ -541,7 +613,17 @@ class PlatformExperiment(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="CREATED")
     # CREATED | RUNNING | COMPLETED | FAILED
     kind: Mapped[str] = mapped_column(String(32), default="single")
-    # single | automl | grid_search
+    # single | automl | grid_search  (legacy; use strategy_type for V3 workflows)
+
+    # V3 strategy metadata ──────────────────────────────────────────────────
+    # strategy_type: baseline | grid_search | bayesian_search
+    strategy_type: Mapped[str] = mapped_column(String(32), default="baseline", nullable=False)
+    # Models the user selected for this batch: ["logreg", "random_forest", ...]
+    selected_models: Mapped[list | None] = mapped_column(JSON, default=None)
+    # Parameter search space (grid/bayesian only).  Shape depends on strategy.
+    search_space: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # Budget: {max_trials, timeout_minutes, concurrency, random_state, ...}
+    budget_config: Mapped[dict | None] = mapped_column(JSON, default=None)
 
     best_run_id: Mapped[str | None] = mapped_column(String(36), default=None)
     config: Mapped[dict | None] = mapped_column(JSON, default=None)
@@ -552,6 +634,10 @@ class PlatformExperiment(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
+    modeling_task: Mapped["ModelingTask | None"] = relationship(
+        back_populates="experiments",
+        foreign_keys=[modeling_task_id],
+    )
     runs: Mapped[list["ExperimentRun"]] = relationship(
         back_populates="experiment",
         cascade="all, delete-orphan",
@@ -592,6 +678,18 @@ class ExperimentRun(Base):
     rank: Mapped[int | None] = mapped_column(Integer, default=None)
     artifacts_uri: Mapped[str | None] = mapped_column(String(1024), default=None)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
+
+    # V3 tuning metadata ────────────────────────────────────────────────────
+    # trial_no: sequence within its experiment (1-based).  Useful for grid/optuna.
+    trial_no: Mapped[int | None] = mapped_column(Integer, default=None)
+    # search_meta: strategy-specific trial info
+    #   grid_search:     {"grid_index": 3, "combo": {...}}
+    #   bayesian_search: {"optuna_trial_id": 7, "state": "COMPLETE", "value": 0.87}
+    #   baseline:        None
+    search_meta: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # Denormalised strategy_type from parent experiment — lets us filter runs
+    # in the Run Inspector without a join.
+    source_experiment_type: Mapped[str | None] = mapped_column(String(32), default=None)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

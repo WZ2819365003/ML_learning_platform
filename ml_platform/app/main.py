@@ -136,6 +136,9 @@ async def lifespan(app: FastAPI):
     # Create all database tables
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # Apply V3 workbench schema migrations (idempotent, safe to rerun)
+    from app.core.migrations import run_startup_migrations
+    await run_startup_migrations(async_engine)
     await _seed_tag_library()
     await _seed_example_datasets()
     await resume_unfinished_ts_tasks()

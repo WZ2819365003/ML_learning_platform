@@ -1,4 +1,17 @@
-from .database import Base, Dataset, TrainingTask, TrainingLog, get_db, async_engine, async_session_factory
+from .database import (
+    Base,
+    Dataset,
+    TrainingTask,
+    TrainingLog,
+    ModelingTask,
+    PlatformTask,
+    PlatformExperiment,
+    ExperimentRun,
+    DatasetVersion,
+    get_db,
+    async_engine,
+    async_session_factory,
+)
 from .schemas import (
     DatasetResponse,
     DatasetPreview,
@@ -17,6 +30,11 @@ __all__ = [
     "Dataset",
     "TrainingTask",
     "TrainingLog",
+    "ModelingTask",
+    "PlatformTask",
+    "PlatformExperiment",
+    "ExperimentRun",
+    "DatasetVersion",
     "get_db",
     "async_engine",
     "async_session_factory",
