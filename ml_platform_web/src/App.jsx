@@ -20,6 +20,8 @@ import TSResults from './pages/TSResults'
 import TaskCenter from './pages/TaskCenter'
 import Experiments from './pages/Experiments'
 import ExperimentDetail from './pages/ExperimentDetail'
+import ModelingTasks from './pages/ModelingTasks'
+import ModelingTaskDetail from './pages/ModelingTaskDetail'
 
 const { Content } = Layout
 
@@ -94,6 +96,11 @@ function App() {
               <Route path="/tasks" element={<TaskCenter />} />
               <Route path="/experiments" element={<Experiments />} />
               <Route path="/experiments/:experimentId" element={<ExperimentDetail />} />
+
+              {/* V3 Modeling Workbench — new task-centric workflow */}
+              <Route path="/v3/tasks" element={<ModelingTasks />} />
+              <Route path="/v3/tasks/:taskId" element={<ModelingTaskDetail />} />
+              <Route path="/v3" element={<Navigate to="/v3/tasks" replace />} />
             </Routes>
           </Content>
         </Layout>

@@ -112,6 +112,7 @@ const Sidebar = () => {
         </span>
       ),
       children: [
+        { key: 'v3-tasks',    label: <Link to="/v3/tasks">建模工作台</Link> },
         { key: 'tasks',       label: <Link to="/tasks">任务中心</Link> },
         { key: 'experiments', label: <Link to="/experiments">实验管理</Link> },
       ],
@@ -134,6 +135,7 @@ const Sidebar = () => {
     if (path === '/deploy') return 'deploy'
     if (path === '/settings') return 'settings'
     if (path === '/tasks') return 'tasks'
+    if (path === '/v3/tasks' || path.startsWith('/v3/tasks/')) return 'v3-tasks'
     if (path === '/experiments' || path.startsWith('/experiments/')) return 'experiments'
     if (path === '/dl/config') return 'dl-config'
     if (path === '/dl/monitor') return 'dl-monitor'
@@ -190,7 +192,7 @@ const Sidebar = () => {
         theme="dark"
         mode="inline"
         selectedKeys={[getSelectedKey()]}
-        defaultOpenKeys={['training', 'dl', 'ts']}
+        defaultOpenKeys={['training', 'dl', 'ts', 'v3']}
         items={menuItems}
         style={{
           background: 'transparent',
