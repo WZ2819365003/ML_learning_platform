@@ -19,6 +19,7 @@ from app.api.routes.dl import router as dl_router
 from app.api.routes.timesfm import router as timesfm_router, ts_router
 from app.api.routes.platform_tasks import router as platform_tasks_router
 from app.api.routes.platform_experiments import router as platform_experiments_router
+from app.api.routes.modeling_tasks import router as modeling_tasks_router
 from app.api.websocket import router as ws_router
 from app.services.timeseries_service import resume_unfinished_ts_tasks
 from app.utils.file_utils import generate_unique_filename
@@ -182,6 +183,7 @@ def create_app() -> FastAPI:
     app.include_router(ts_router, prefix="/api")
     app.include_router(platform_tasks_router, prefix="/api")        # → /api/platform/tasks
     app.include_router(platform_experiments_router, prefix="/api")  # → /api/platform/experiments
+    app.include_router(modeling_tasks_router, prefix="/api")        # → /api/v3/tasks
     app.include_router(ws_router)
 
     # ---- Root-level endpoints ----

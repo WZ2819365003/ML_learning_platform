@@ -1,0 +1,243 @@
+# Tuning Space Registry
+#
+# Defines per-model parameter search templates used by V3 tuning strategies:
+#
+#   grid_search     → iterates the cartesian product of `grid_values`
+#   bayesian_search → samples from `distribution` using Optuna
+#
+# Keys mirror `automl_candidates.yaml` model_type tokens and must exist in
+# `get_trainer()` / `list_available_models()`.
+#
+# distribution schema (Optuna-style):
+#   {"type": "float", "low": 0.01, "high": 1.0, "log": true}
+#   {"type": "int",   "low": 50,  "high": 500, "step": 50}
+#   {"type": "categorical", "choices": ["l1", "l2"]}
+#
+# Design notes:
+#   - V1 locks the selectable model list.  Users can tweak bounds from UI but
+#     the YAML is the source of truth for defaults.
+#   - grid_values always enumerates discrete candidate lists; Optuna derives
+#     richer continuous spaces from `distribution`.
+#   - If a model only lists `grid_values`, bayesian_search will still work by
+#     treating each as a categorical choice.
+
+classification:
+  logistic_regression:
+    display_name: "Logistic Regression"
+    fixed:
+      max_iter: 500
+    grid_values:
+      C: [0.01, 0.1, 1.0, 10.0]
+      penalty: ["l2"]
+      solver: ["lbfgs"]
+    distribution:
+      C:
+        type: float
+        low: 0.001
+        high: 100.0
+        log: true
+      penalty:
+        type: categorical
+        choices: ["l1", "l2"]
+      solver:
+        type: categorical
+        choices: ["liblinear", "saga"]
+
+  random_forest:
+    display_name: "Random Forest"
+    fixed: {}
+    grid_values:
+      n_estimators: [100, 200, 400]
+      max_depth: [null, 6, 12]
+      min_samples_leaf: [1, 3]
+    distribution:
+      n_estimators:
+        type: int
+        low: 50
+        high: 600
+        step: 50
+      max_depth:
+        type: int
+        low: 3
+        high: 24
+      min_samples_leaf:
+        type: int
+        low: 1
+        high: 8
+
+  xgboost:
+    display_name: "XGBoost"
+    fixed: {}
+    grid_values:
+      n_estimators: [200, 400]
+      learning_rate: [0.03, 0.1]
+      max_depth: [4, 6, 8]
+    distribution:
+      n_estimators:
+        type: int
+        low: 100
+        high: 800
+        step: 50
+      learning_rate:
+        type: float
+        low: 0.01
+        high: 0.3
+        log: true
+      max_depth:
+        type: int
+        low: 3
+        high: 10
+      subsample:
+        type: float
+        low: 0.5
+        high: 1.0
+
+  lightgbm:
+    display_name: "LightGBM"
+    fixed: {}
+    grid_values:
+      n_estimators: [200, 400]
+      learning_rate: [0.03, 0.1]
+      num_leaves: [31, 63, 127]
+    distribution:
+      n_estimators:
+        type: int
+        low: 100
+        high: 800
+        step: 50
+      learning_rate:
+        type: float
+        low: 0.01
+        high: 0.3
+        log: true
+      num_leaves:
+        type: int
+        low: 16
+        high: 256
+      min_child_samples:
+        type: int
+        low: 5
+        high: 60
+
+  svm:
+    display_name: "Support Vector Machine"
+    fixed:
+      probability: true
+    grid_values:
+      C: [0.1, 1.0, 10.0]
+      kernel: ["rbf", "linear"]
+    distribution:
+      C:
+        type: float
+        low: 0.01
+        high: 100.0
+        log: true
+      kernel:
+        type: categorical
+        choices: ["rbf", "linear", "poly"]
+      gamma:
+        type: categorical
+        choices: ["scale", "auto"]
+
+  mlp:
+    display_name: "MLP Classifier"
+    fixed:
+      max_iter: 400
+    grid_values:
+      hidden_layer_sizes: [[64], [128], [128, 64]]
+      learning_rate_init: [0.001, 0.0005]
+    distribution:
+      hidden_layer_sizes:
+        type: categorical
+        choices: [[64], [128], [64, 32], [128, 64]]
+      learning_rate_init:
+        type: float
+        low: 0.0001
+        high: 0.01
+        log: true
+      alpha:
+        type: float
+        low: 0.00001
+        high: 0.01
+        log: true
+
+
+regression:
+  random_forest_regressor:
+    display_name: "Random Forest Regressor"
+    fixed: {}
+    grid_values:
+      n_estimators: [100, 200, 400]
+      max_depth: [null, 6, 12]
+    distribution:
+      n_estimators:
+        type: int
+        low: 50
+        high: 600
+        step: 50
+      max_depth:
+        type: int
+        low: 3
+        high: 24
+      min_samples_leaf:
+        type: int
+        low: 1
+        high: 8
+
+  xgboost_regressor:
+    display_name: "XGBoost Regressor"
+    fixed: {}
+    grid_values:
+      n_estimators: [200, 400]
+      learning_rate: [0.03, 0.1]
+      max_depth: [4, 6, 8]
+    distribution:
+      n_estimators:
+        type: int
+        low: 100
+        high: 800
+        step: 50
+      learning_rate:
+        type: float
+        low: 0.01
+        high: 0.3
+        log: true
+      max_depth:
+        type: int
+        low: 3
+        high: 10
+
+  lightgbm_regressor:
+    display_name: "LightGBM Regressor"
+    fixed: {}
+    grid_values:
+      n_estimators: [200, 400]
+      learning_rate: [0.03, 0.1]
+      num_leaves: [31, 63]
+    distribution:
+      n_estimators:
+        type: int
+        low: 100
+        high: 800
+        step: 50
+      learning_rate:
+        type: float
+        low: 0.01
+        high: 0.3
+        log: true
+      num_leaves:
+        type: int
+        low: 16
+        high: 256
+
+  ridge:
+    display_name: "Ridge Regression"
+    fixed: {}
+    grid_values:
+      alpha: [0.01, 0.1, 1.0, 10.0]
+    distribution:
+      alpha:
+        type: float
+        low: 0.001
+        high: 100.0
+        log: true

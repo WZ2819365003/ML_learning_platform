@@ -79,6 +79,9 @@ export const logsApi = {
   getLogs(taskId, params) {
     return api.get(`/logs/${taskId}`, { params });
   },
+  getMetrics(taskId) {
+    return api.get(`/logs/${taskId}/metrics`);
+  },
 };
 
 export const modelApi = {
@@ -257,6 +260,21 @@ export const platformExperimentsApi = {
   listAutomlCandidates: (taskType = 'classification') => api.get('/platform/experiments/automl/candidates', { params: { task_type: taskType } }),
   triggerExplain: (experimentId, runId) => api.post(`/platform/experiments/${experimentId}/runs/${runId}/explain`),
   getExplain: (experimentId, runId) => api.get(`/platform/experiments/${experimentId}/runs/${runId}/explain`),
+};
+
+// ── V3 Modeling Task Workbench ───────────────────────────────────────────────
+
+export const modelingTaskApi = {
+  list: (params = {}) => api.get('/v3/tasks/', { params }),
+  create: (data) => api.post('/v3/tasks/', data),
+  get: (taskId) => api.get(`/v3/tasks/${taskId}`),
+  update: (taskId, data) => api.patch(`/v3/tasks/${taskId}`, data),
+  delete: (taskId) => api.delete(`/v3/tasks/${taskId}`),
+  leaderboard: (taskId, topK = 20) =>
+    api.get(`/v3/tasks/${taskId}/leaderboard`, { params: { top_k: topK } }),
+  createExperimentBatch: (taskId, data) =>
+    api.post(`/v3/tasks/${taskId}/experiments`, data),
+  tuningSpaces: (taskType) => api.get(`/v3/tasks/tuning-spaces/${taskType}`),
 };
 
 // ── Dataset Versioning API ───────────────────────────────────────────────────
