@@ -1,0 +1,124 @@
+# AutoML Candidate Registry — MVP predefined search space
+#
+# Each entry defines one training candidate that will be submitted as an
+# ExperimentRun when "AutoML 一键启动" is triggered.  The concurrency is
+# limited by the asyncio executor pool (default: 4 workers).
+#
+# Capability matrix for warm_start:
+#   ✅ random_forest, extra_trees, gradient_boosting, sgd_classifier
+#   ❌ xgboost, lightgbm, logistic_regression, svm, knn, gaussian_nb
+#
+# Do NOT add models that don't appear in get_trainer() / list_available_models().
+
+classification:
+  - model_type: logistic_regression
+    description: "LogReg / L2 / C=1.0"
+    hyperparameters:
+      C: 1.0
+      max_iter: 500
+      solver: lbfgs
+
+  - model_type: logistic_regression
+    description: "LogReg / L1 / C=0.1"
+    hyperparameters:
+      C: 0.1
+      penalty: l1
+      max_iter: 500
+      solver: saga
+
+  - model_type: random_forest
+    description: "RF / 100 trees / depth=None"
+    hyperparameters:
+      n_estimators: 100
+      max_depth: null
+      min_samples_leaf: 1
+
+  - model_type: random_forest
+    description: "RF / 300 trees / depth=8"
+    hyperparameters:
+      n_estimators: 300
+      max_depth: 8
+      min_samples_leaf: 2
+
+  - model_type: extra_trees
+    description: "ExtraTrees / 200 trees"
+    hyperparameters:
+      n_estimators: 200
+      max_depth: null
+      min_samples_leaf: 1
+
+  - model_type: gradient_boosting
+    description: "GBM / lr=0.1 / 100 trees"
+    hyperparameters:
+      n_estimators: 100
+      learning_rate: 0.1
+      max_depth: 3
+
+  - model_type: gradient_boosting
+    description: "GBM / lr=0.05 / 200 trees"
+    hyperparameters:
+      n_estimators: 200
+      learning_rate: 0.05
+      max_depth: 4
+
+  - model_type: xgboost
+    description: "XGBoost / lr=0.1 / depth=6"
+    hyperparameters:
+      n_estimators: 200
+      learning_rate: 0.1
+      max_depth: 6
+
+  - model_type: xgboost
+    description: "XGBoost / lr=0.05 / depth=4"
+    hyperparameters:
+      n_estimators: 300
+      learning_rate: 0.05
+      max_depth: 4
+
+  - model_type: lightgbm
+    description: "LightGBM / lr=0.1"
+    hyperparameters:
+      n_estimators: 200
+      learning_rate: 0.1
+      num_leaves: 31
+
+  - model_type: lightgbm
+    description: "LightGBM / lr=0.05 / more leaves"
+    hyperparameters:
+      n_estimators: 300
+      learning_rate: 0.05
+      num_leaves: 63
+
+regression:
+  - model_type: random_forest
+    description: "RF Regressor / 100 trees"
+    hyperparameters:
+      n_estimators: 100
+      max_depth: null
+
+  - model_type: gradient_boosting
+    description: "GBM Regressor / lr=0.1"
+    hyperparameters:
+      n_estimators: 100
+      learning_rate: 0.1
+      max_depth: 3
+
+  - model_type: xgboost
+    description: "XGBoost Regressor / lr=0.1"
+    hyperparameters:
+      n_estimators: 200
+      learning_rate: 0.1
+      max_depth: 6
+
+  - model_type: lightgbm
+    description: "LightGBM Regressor / lr=0.1"
+    hyperparameters:
+      n_estimators: 200
+      learning_rate: 0.1
+      num_leaves: 31
+
+# Warm-start capable models (can use parent_run_id for incremental training)
+warm_start_capable:
+  - random_forest
+  - extra_trees
+  - gradient_boosting

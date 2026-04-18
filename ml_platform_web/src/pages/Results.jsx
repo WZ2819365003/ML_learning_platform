@@ -13,6 +13,7 @@ import {
   Space,
   Statistic,
   Table,
+  Tabs,
   Tag,
   Typography,
   message,
@@ -20,6 +21,7 @@ import {
 import {
   ArrowLeftOutlined,
   BarChartOutlined,
+  BulbOutlined,
   EyeOutlined,
   HeatMapOutlined,
   LineChartOutlined,
@@ -375,28 +377,80 @@ function ResultDetailView({ taskId, navigate }) {
             </Card>
           )}
 
-          <Row gutter={[16, 16]}>
-            <Col xs={24} xl={12}>
-              <Card title={<Space><HeatMapOutlined /> 混淆矩阵</Space>}>
-                <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
-              </Card>
-            </Col>
-            <Col xs={24} xl={12}>
-              <Card title={<Space><LineChartOutlined /> ROC 曲线</Space>}>
-                <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
-              </Card>
-            </Col>
-            <Col xs={24} xl={12}>
-              <Card title={<Space><BarChartOutlined /> 特征重要性</Space>}>
-                <div ref={featureImportanceRef} style={{ width: '100%', height: 360 }} />
-              </Card>
-            </Col>
-            <Col xs={24} xl={12}>
-              <Card title={<Space><RiseOutlined /> 训练过程曲线</Space>}>
-                <div ref={learningCurveRef} style={{ width: '100%', height: 360 }} />
-              </Card>
-            </Col>
-          </Row>
+          <Card bodyStyle={{ padding: '0 24px 24px' }}>
+            <Tabs
+              defaultActiveKey="performance"
+              items={[
+                {
+                  key: 'performance',
+                  label: <Space><HeatMapOutlined />性能图表</Space>,
+                  children: (
+                    <Row gutter={[16, 16]}>
+                      <Col xs={24} xl={12}>
+                        <Card
+                          title={<Space><HeatMapOutlined /> 混淆矩阵</Space>}
+                          bordered={false}
+                        >
+                          {vizState.confusionMatrix
+                            ? <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
+                            : <Empty description="暂无混淆矩阵数据" style={{ padding: '60px 0' }} />
+                          }
+                        </Card>
+                      </Col>
+                      <Col xs={24} xl={12}>
+                        <Card
+                          title={<Space><LineChartOutlined /> ROC 曲线</Space>}
+                          bordered={false}
+                        >
+                          {vizState.rocCurve
+                            ? <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
+                            : <Empty description="暂无 ROC 曲线数据（仅分类任务）" style={{ padding: '60px 0' }} />
+                          }
+                        </Card>
+                      </Col>
+                    </Row>
+                  ),
+                },
+                {
+                  key: 'explain',
+                  label: <Space><BulbOutlined />模型解释</Space>,
+                  children: (
+                    <div>
+                      {vizState.featureImportance ? (
+                        <>
+                          <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
+                            模型原生特征重要性（基于 sklearn
+                            <Tag style={{ marginLeft: 6, fontSize: 10 }}>feature_importances_</Tag>
+                            属性，前 10 个特征）
+                          </div>
+                          <div ref={featureImportanceRef} style={{ width: '100%', height: 420 }} />
+                        </>
+                      ) : (
+                        <Empty
+                          description="暂无特征重要性数据（树模型训练后自动生成）"
+                          style={{ padding: '60px 0' }}
+                        />
+                      )}
+                      <Alert
+                        type="info"
+                        showIcon
+                        icon={<BulbOutlined />}
+                        style={{ marginTop: 16 }}
+                        message={'如需 SHAP 级别解释，请在「实验管理」中使用 AutoML 训练，并在实验详情页触发 SHAP 分析。'}
+                      />
+                    </div>
+                  ),
+                },
+                {
+                  key: 'learning',
+                  label: <Space><RiseOutlined />训练过程</Space>,
+                  children: vizState.learningCurve
+                    ? <div ref={learningCurveRef} style={{ width: '100%', height: 360 }} />
+                    : <Empty description="暂无训练过程数据" style={{ padding: '60px 0' }} />,
+                },
+              ]}
+            />
+          </Card>
         </>
       )}
     </div>

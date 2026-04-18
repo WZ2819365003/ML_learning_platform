@@ -1,6 +1,9 @@
-"""Data management routes -- dataset upload, preview, list, and delete."""
+"""Data management routes -- dataset upload, preview, list, delete, and versioning."""
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from typing import Any
+
+from fastapi import APIRouter, Body, Depends, File, Query, UploadFile, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_db
@@ -13,6 +16,10 @@ from app.services.data_service import (
     list_datasets,
     upload_dataset,
 )
+
+
+class CreateVersionRequest(BaseModel):
+    description: str | None = None
 
 router = APIRouter(prefix="/data", tags=["Data Management"])
 
@@ -76,3 +83,41 @@ async def delete_dataset_route(
     """Delete a dataset by ID."""
     await delete_dataset(dataset_id=dataset_id, db=db)
     return {"message": "Dataset deleted", "id": dataset_id}
+
+
+# ---------------------------------------------------------------------------
+# V3 Dataset Versioning
+# ---------------------------------------------------------------------------
+
+@router.get("/{dataset_id}/versions", summary="List dataset versions")
+async def list_dataset_versions(
+    dataset_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Return all versioned snapshots for a dataset, newest first."""
+    from app.services.data_version_service import list_versions
+    return await list_versions(dataset_id, db)
+
+
+@router.post("/{dataset_id}/versions", summary="Create a dataset version snapshot", status_code=201)
+async def create_dataset_version(
+    dataset_id: str,
+    body: CreateVersionRequest = Body(default=CreateVersionRequest()),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """
+    Snapshot the current dataset file as a new version.
+    The snapshot is copied to MinIO at datasets/{dataset_id}/{version}/data.<ext>
+    """
+    from app.services.data_version_service import create_version
+    return await create_version(dataset_id, db, description=body.description)
+
+
+@router.get("/{dataset_id}/versions/{version_id}", summary="Get a specific version")
+async def get_dataset_version(
+    dataset_id: str,
+    version_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.data_version_service import get_version
+    return await get_version(dataset_id, version_id, db)

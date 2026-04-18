@@ -3,14 +3,15 @@
  * Loaded at /experiments/:experimentId
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  Button, Card, Col, Descriptions, Empty, message,
-  Row, Skeleton, Space, Table, Tag, Typography,
+  Alert, Button, Card, Col, Descriptions, Empty, message,
+  Row, Skeleton, Space, Spin, Table, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 import {
-  ArrowLeftOutlined, TrophyOutlined, ReloadOutlined, ThunderboltOutlined,
+  ArrowLeftOutlined, BulbOutlined, ReloadOutlined,
+  ThunderboltOutlined, TrophyOutlined,
 } from '@ant-design/icons'
 import * as echarts from 'echarts'
 import { platformExperimentsApi } from '../services/api'
@@ -40,6 +41,13 @@ const ExperimentDetail = () => {
   const [leaderboard, setLeaderboard] = useState([])
   const [loading, setLoading] = useState(true)
 
+  // SHAP explain state
+  const [shapRunId, setShapRunId]         = useState(null)   // which run is being explained
+  const [shapData, setShapData]           = useState(null)   // { feature_importances: {...} }
+  const [shapTriggering, setShapTriggering] = useState(false)
+  const [shapLoading, setShapLoading]     = useState(false)
+  const shapRef = useRef(null)
+
   const fetchAll = async () => {
     setLoading(true)
     try {
@@ -54,6 +62,70 @@ const ExperimentDetail = () => {
   }
 
   useEffect(() => { fetchAll() }, [experimentId])
+
+  // ── SHAP explain handlers ────────────────────────────────────────────────
+
+  /** Load an already-computed SHAP result for a run. */
+  const loadExplain = useCallback(async (runId) => {
+    setShapRunId(runId)
+    setShapLoading(true)
+    setShapData(null)
+    try {
+      const res = await platformExperimentsApi.getExplain(experimentId, runId)
+      setShapData(res)
+    } catch (err) {
+      if (err?.response?.status === 404) {
+        setShapData(null)  // not computed yet — user needs to trigger
+      } else {
+        message.error('加载 SHAP 结果失败')
+      }
+    } finally {
+      setShapLoading(false)
+    }
+  }, [experimentId])
+
+  /** Trigger SHAP computation for a run, then load the result. */
+  const handleTriggerExplain = useCallback(async (runId) => {
+    setShapRunId(runId)
+    setShapTriggering(true)
+    setShapData(null)
+    try {
+      const res = await platformExperimentsApi.triggerExplain(experimentId, runId)
+      if (res.already_computed) {
+        // Already done — just fetch
+        await loadExplain(runId)
+        return
+      }
+      message.info('SHAP 计算已启动，请稍候…')
+      // Poll every 2 s, up to 60 s
+      const deadline = Date.now() + 60_000
+      const poll = async () => {
+        try {
+          const result = await platformExperimentsApi.getExplain(experimentId, runId)
+          setShapData(result)
+        } catch (err) {
+          if (err?.response?.status === 404 && Date.now() < deadline) {
+            setTimeout(poll, 2000)
+          } else if (Date.now() >= deadline) {
+            message.warning('SHAP 计算超时，请稍后刷新重试')
+          }
+        }
+      }
+      setTimeout(poll, 2000)
+    } catch (err) {
+      const detail = err?.response?.data?.detail
+      message.error(detail ? `触发失败: ${detail}` : '触发 SHAP 解释失败')
+    } finally {
+      setShapTriggering(false)
+    }
+  }, [experimentId, loadExplain])
+
+  // Auto-load SHAP for best run when leaderboard is ready
+  useEffect(() => {
+    if (experiment?.best_run_id && leaderboard.length > 0) {
+      loadExplain(experiment.best_run_id)
+    }
+  }, [experiment?.best_run_id, leaderboard.length, loadExplain])
 
   // ── Bar chart: metric comparison across top runs ─────────────────────────
   const barOption = useMemo(() => {
@@ -154,8 +226,64 @@ const ExperimentDetail = () => {
     }
   }, [leaderboard])
 
+  // ── SHAP feature importance chart ───────────────────────────────────────
+  const shapOption = useMemo(() => {
+    if (!shapData?.feature_importances) return null
+    const entries = Object.entries(shapData.feature_importances)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 15)
+    const features = entries.map(([k]) => k).reverse()
+    const values   = entries.map(([, v]) => v).reverse()
+    return {
+      grid: { top: 12, right: 24, bottom: 24, left: 16, containLabel: true },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params) => {
+          const p = params[0]
+          return `${p.name}<br/><b>${p.value.toFixed(4)}</b>`
+        },
+      },
+      xAxis: {
+        type: 'value',
+        name: '平均 |SHAP| 值',
+        nameLocation: 'end',
+        nameTextStyle: { color: '#94a3b8', fontSize: 11 },
+        axisLabel: { color: '#94a3b8', fontSize: 11 },
+        splitLine: { lineStyle: { color: '#f1f5f9' } },
+      },
+      yAxis: {
+        type: 'category',
+        data: features,
+        axisLabel: { color: '#374151', fontSize: 12 },
+        axisTick: { show: false },
+        axisLine: { lineStyle: { color: '#e2e8f0' } },
+      },
+      series: [{
+        type: 'bar',
+        data: values,
+        barMaxWidth: 32,
+        itemStyle: {
+          borderRadius: [0, 4, 4, 0],
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 1, y2: 0,
+            colorStops: [
+              { offset: 0, color: '#6366f1' },
+              { offset: 1, color: '#a78bfa' },
+            ],
+          },
+        },
+        label: {
+          show: true, position: 'right', fontSize: 11, color: '#64748b',
+          formatter: p => p.value.toFixed(3),
+        },
+      }],
+    }
+  }, [shapData])
+
   useChart(barRef, barOption)
   useChart(radarRef, radarOption)
+  useChart(shapRef, shapOption)
 
   const leaderboardColumns = [
     { title: '排名', dataIndex: 'rank', width: 60, render: v => v ? <Text strong>#{v}</Text> : '—' },
@@ -212,6 +340,23 @@ const ExperimentDetail = () => {
         ? <Text style={{ fontSize: 11, color: '#94a3b8' }}>{new Date(v).toLocaleString('zh-CN', { hour12: false })}</Text>
         : '—',
     },
+    {
+      title: 'SHAP',
+      width: 80,
+      render: (_, r) => r.status !== 'SUCCESS' ? null : (
+        <Tooltip title="触发/查看 SHAP 解释">
+          <Button
+            size="small"
+            type={shapRunId === r.id && shapData ? 'primary' : 'default'}
+            ghost={shapRunId === r.id && !!shapData}
+            icon={<BulbOutlined />}
+            loading={shapTriggering && shapRunId === r.id}
+            onClick={() => handleTriggerExplain(r.id)}
+            style={{ fontSize: 11 }}
+          />
+        </Tooltip>
+      ),
+    },
   ]
 
   if (loading) return <Card style={{ margin: '20px 0' }}><Skeleton active /></Card>
@@ -254,38 +399,136 @@ const ExperimentDetail = () => {
           </Descriptions>
         </Card>
 
-        {/* Charts */}
-        <Row gutter={[16, 16]}>
-          <Col xs={24} lg={barOption && radarOption ? 14 : 24}>
-            <Card title={`${experiment.objective_metric} 排行`} bodyStyle={{ padding: '8px 20px 16px' }}>
-              {leaderboard.length === 0
-                ? <Empty description="暂无完成的 Run" />
-                : <div ref={barRef} style={{ height: 260 }} />
-              }
-            </Card>
-          </Col>
-          {radarOption && (
-            <Col xs={24} lg={10}>
-              <Card title="多指标雷达图（前3名）" bodyStyle={{ padding: '8px 20px 16px' }}>
-                <div ref={radarRef} style={{ height: 260 }} />
-              </Card>
-            </Col>
-          )}
-        </Row>
+        {/* Tabbed content: leaderboard / charts / SHAP */}
+        <Card bodyStyle={{ padding: '0 24px 24px' }}>
+          <Tabs
+            defaultActiveKey="leaderboard"
+            items={[
+              {
+                key: 'leaderboard',
+                label: `排行榜 · ${leaderboard.length} 个完成 Run`,
+                children: leaderboard.length === 0
+                  ? <Empty description="还没有完成的 Run — 请先提交训练任务" style={{ padding: '32px 0' }} />
+                  : <Table
+                      rowKey="id"
+                      dataSource={leaderboard.map(r => ({ ...r, key: r.id }))}
+                      columns={leaderboardColumns}
+                      pagination={false}
+                      size="small"
+                      rowClassName={r => r.rank === 1 ? 'ant-table-row-selected' : ''}
+                    />,
+              },
+              {
+                key: 'charts',
+                label: '指标对比图',
+                children: leaderboard.length === 0
+                  ? <Empty description="暂无完成的 Run" style={{ padding: '32px 0' }} />
+                  : (
+                    <Row gutter={[16, 16]}>
+                      <Col xs={24} lg={barOption && radarOption ? 14 : 24}>
+                        <Card
+                          title={`${experiment.objective_metric} 对比`}
+                          bordered={false}
+                          bodyStyle={{ padding: '8px 0 0' }}
+                        >
+                          <div ref={barRef} style={{ height: 260 }} />
+                        </Card>
+                      </Col>
+                      {radarOption && (
+                        <Col xs={24} lg={10}>
+                          <Card
+                            title="多指标雷达（前3名）"
+                            bordered={false}
+                            bodyStyle={{ padding: '8px 0 0' }}
+                          >
+                            <div ref={radarRef} style={{ height: 260 }} />
+                          </Card>
+                        </Col>
+                      )}
+                    </Row>
+                  ),
+              },
+              {
+                key: 'shap',
+                label: (
+                  <Space size={4}>
+                    <BulbOutlined />
+                    <span>SHAP 模型解释</span>
+                    {shapData && <Tag color="green" style={{ fontSize: 10, marginLeft: 2 }}>已完成</Tag>}
+                  </Space>
+                ),
+                children: (
+                  <div>
+                    {/* Run selector info */}
+                    {shapRunId && (
+                      <Alert
+                        type="info"
+                        showIcon
+                        style={{ marginBottom: 16 }}
+                        message={
+                          <Space>
+                            <span>
+                              当前解释 Run：<Text code style={{ fontSize: 11 }}>{shapRunId.slice(0, 12)}…</Text>
+                            </span>
+                            <Button
+                              size="small"
+                              icon={<ThunderboltOutlined />}
+                              loading={shapTriggering}
+                              onClick={() => handleTriggerExplain(shapRunId)}
+                            >
+                              重新计算
+                            </Button>
+                          </Space>
+                        }
+                      />
+                    )}
 
-        {/* Leaderboard */}
-        <Card title={`排行榜 · ${leaderboard.length} 个完成 Run`}>
-          {leaderboard.length === 0
-            ? <Empty description="还没有完成的 Run — 请先提交训练任务" />
-            : <Table
-                rowKey="id"
-                dataSource={leaderboard.map(r => ({ ...r, key: r.id }))}
-                columns={leaderboardColumns}
-                pagination={false}
-                size="small"
-                rowClassName={(r) => r.rank === 1 ? 'ant-table-row-selected' : ''}
-              />
-          }
+                    {!shapRunId && (
+                      <Alert
+                        type="info"
+                        showIcon
+                        style={{ marginBottom: 16 }}
+                        message='在"排行榜"tab 的 SHAP 列点击灯泡图标，为指定 Run 触发 SHAP 解释。'
+                      />
+                    )}
+
+                    <Spin spinning={shapLoading || shapTriggering}>
+                      {shapData?.feature_importances ? (
+                        <>
+                          <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
+                            特征重要性（平均 |SHAP| 值，前 15 个特征）
+                            {shapData.sample_size && (
+                              <Tag style={{ marginLeft: 8, fontSize: 10 }}>
+                                采样 {shapData.sample_size} 行
+                              </Tag>
+                            )}
+                          </div>
+                          <div ref={shapRef} style={{ height: 420, width: '100%' }} />
+                        </>
+                      ) : (
+                        !shapLoading && !shapTriggering && shapRunId && (
+                          <Empty
+                            description={
+                              <span>
+                                该 Run 尚未计算 SHAP —{' '}
+                                <Button
+                                  type="link" style={{ padding: 0 }}
+                                  onClick={() => handleTriggerExplain(shapRunId)}
+                                >
+                                  立即触发
+                                </Button>
+                              </span>
+                            }
+                            style={{ padding: '48px 0' }}
+                          />
+                        )
+                      )}
+                    </Spin>
+                  </div>
+                ),
+              },
+            ]}
+          />
         </Card>
 
       </Space>

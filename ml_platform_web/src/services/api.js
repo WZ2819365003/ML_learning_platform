@@ -232,11 +232,12 @@ export const tsApi = {
 // ── V3 Platform APIs ────────────────────────────────────────────────────────
 
 export const platformTasksApi = {
-  list: (params = {}) => api.get('/platform/tasks/', { params }),
-  get: (id) => api.get(`/platform/tasks/${id}`),
-  retry: (id) => api.post(`/platform/tasks/${id}/retry`),
-  cancel: (id) => api.post(`/platform/tasks/${id}/cancel`),
-  delete: (id) => api.delete(`/platform/tasks/${id}`),
+  list:   (params = {}) => api.get('/platform/tasks/', { params }),
+  stats:  ()            => api.get('/platform/tasks/stats'),
+  get:    (id)          => api.get(`/platform/tasks/${id}`),
+  retry:  (id)          => api.post(`/platform/tasks/${id}/retry`),
+  cancel: (id)          => api.post(`/platform/tasks/${id}/cancel`),
+  delete: (id)          => api.delete(`/platform/tasks/${id}`),
 };
 
 export const platformExperimentsApi = {
@@ -248,9 +249,22 @@ export const platformExperimentsApi = {
   createRun: (experimentId, data) => api.post(`/platform/experiments/${experimentId}/runs`, data),
   getRun: (experimentId, runId) => api.get(`/platform/experiments/${experimentId}/runs/${runId}`),
   getLeaderboard: (experimentId) => api.get(`/platform/experiments/${experimentId}/leaderboard`),
+  // Custom candidates (explicit list)
   submitAutoml: (experimentId, candidates) => api.post(`/platform/experiments/${experimentId}/automl`, { candidates }),
+  // Registry-based one-click AutoML
+  submitAutomlRegistry: (experimentId, config) => api.post(`/platform/experiments/${experimentId}/automl/registry`, config),
+  // AutoML candidate list
+  listAutomlCandidates: (taskType = 'classification') => api.get('/platform/experiments/automl/candidates', { params: { task_type: taskType } }),
   triggerExplain: (experimentId, runId) => api.post(`/platform/experiments/${experimentId}/runs/${runId}/explain`),
   getExplain: (experimentId, runId) => api.get(`/platform/experiments/${experimentId}/runs/${runId}/explain`),
+};
+
+// ── Dataset Versioning API ───────────────────────────────────────────────────
+
+export const dataVersionsApi = {
+  list: (datasetId) => api.get(`/data/${datasetId}/versions`),
+  create: (datasetId, description = null) => api.post(`/data/${datasetId}/versions`, { description }),
+  get: (datasetId, versionId) => api.get(`/data/${datasetId}/versions/${versionId}`),
 };
 
 export default api;

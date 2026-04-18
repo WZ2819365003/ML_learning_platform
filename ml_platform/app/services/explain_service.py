@@ -123,30 +123,44 @@ async def run_shap_explanation(run_id: str, platform_task_id: str) -> dict[str, 
         sorted(feature_importances.items(), key=lambda x: x[1], reverse=True)
     )
 
-    # ── Upload to MinIO ────────────────────────────────────────────────────
-    payload = {
+    # ── Try to upload to MinIO (optional) ─────────────────────────────────
+    object_key = f"explanations/{run_id}/shap_summary.json"
+    payload_json = {
         "run_id": run_id,
         "feature_importances": feature_importances,
         "sample_size": len(X),
         "feature_count": len(X.columns),
     }
-    object_key = f"explanations/{run_id}/shap_summary.json"
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        json.dump(payload, f)
-        tmp_path = f.name
-
     try:
-        upload_file(tmp_path, object_key)
-    finally:
-        os.unlink(tmp_path)
+        from app.config import get_settings
+        settings = get_settings()
+        if settings.s3_enabled:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+                json.dump(payload_json, f)
+                tmp_path = f.name
+            try:
+                upload_file(tmp_path, object_key)
+                logger.info("SHAP results uploaded to %s", object_key)
+            finally:
+                os.unlink(tmp_path)
+        else:
+            object_key = None  # MinIO not configured
+    except Exception as e:
+        logger.warning("MinIO upload for SHAP failed (%s); storing inline only", e)
+        object_key = None
 
-    # ── Update ExperimentRun ───────────────────────────────────────────────
+    # ── Update ExperimentRun — store importances inline + optional MinIO key ──
     async with async_session_factory() as db:
         run_result = await db.execute(select(ExperimentRun).where(ExperimentRun.id == run_id))
         run = run_result.scalar_one_or_none()
         if run:
-            run.artifacts_uri = object_key
+            # Merge into existing metrics so training scores are preserved
+            merged = dict(run.metrics or {})
+            merged["shap_importances"] = feature_importances
+            merged["shap_sample_size"] = len(X)
+            run.metrics = merged
+            if object_key:
+                run.artifacts_uri = object_key
             await db.commit()
 
     return {
@@ -158,17 +172,50 @@ async def run_shap_explanation(run_id: str, platform_task_id: str) -> dict[str, 
 
 
 async def get_shap_result(run_id: str) -> dict[str, Any] | None:
-    """Fetch the stored SHAP result from MinIO, or None if not yet available."""
-    from app.services.object_storage import get_presigned_url
+    """
+    Fetch the stored SHAP result for a run.
+
+    Priority:
+      1. Inline: `run.metrics["shap_importances"]` — always available after computation.
+      2. MinIO presigned URL — only if S3 is configured and artifacts_uri is set.
+
+    Returns None if no explanation has been computed yet.
+    """
     from app.models.database import ExperimentRun, async_session_factory
 
     async with async_session_factory() as db:
         run_result = await db.execute(select(ExperimentRun).where(ExperimentRun.id == run_id))
         run = run_result.scalar_one_or_none()
-        if run is None or not run.artifacts_uri:
+        if run is None:
             return None
 
-    url = get_presigned_url(run.artifacts_uri)
-    if not url:
+        # Primary path: importances stored inline in run.metrics
+        shap_importances = (run.metrics or {}).get("shap_importances")
+        if shap_importances:
+            return {
+                "run_id": run_id,
+                "feature_importances": shap_importances,
+                "sample_size": (run.metrics or {}).get("shap_sample_size"),
+                "artifacts_uri": run.artifacts_uri,
+                "source": "inline",
+            }
+
+        # Fallback: MinIO presigned URL
+        if not run.artifacts_uri:
+            return None
+        artifacts_uri = run.artifacts_uri
+
+    try:
+        from app.services.object_storage import get_presigned_url
+        url = get_presigned_url(artifacts_uri)
+        if not url:
+            return None
+        return {
+            "run_id": run_id,
+            "download_url": url,
+            "artifacts_uri": artifacts_uri,
+            "source": "minio",
+        }
+    except Exception as exc:
+        logger.warning("Could not get presigned URL for SHAP artifact: %s", exc)
         return None
-    return {"run_id": run_id, "download_url": url, "artifacts_uri": run.artifacts_uri}

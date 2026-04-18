@@ -10,6 +10,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -367,6 +368,8 @@ async def submit_automl_experiment(
     await db.flush()
 
     submitted_runs = []
+    asyncio_tasks = []
+
     for candidate in candidates:
         # 1. Create domain training task record
         domain_task = await create_training_task_record(db, candidate)
@@ -381,13 +384,12 @@ async def submit_automl_experiment(
         await db.flush()
         await db.refresh(run)
 
-        # 3. Create PlatformTask + dispatch to Celery
-        ptask = await submit_task(
+        # 3. Register PlatformTask (asyncio mode — no Celery dispatch)
+        from app.scheduler.task_runner import register_domain_task
+        ptask = await register_domain_task(
             db=db,
             kind="train",
             payload_ref=f"train:{domain_task.id}",
-            priority=candidate.get("priority", 5),
-            extra={"experiment_id": experiment_id, "run_id": run.id},
         )
 
         # Link run → task
@@ -395,5 +397,20 @@ async def submit_automl_experiment(
         await db.flush()
 
         submitted_runs.append(_serialize_run(run))
+        asyncio_tasks.append((domain_task.id, ptask.id, run.id))
+
+    await db.commit()
+
+    # 4. Fire asyncio training coroutines concurrently (Celery substitute for dev mode)
+    from app.services.automl_service import _run_automl_candidate
+    for domain_task_id, platform_task_id, run_id in asyncio_tasks:
+        asyncio.create_task(
+            _run_automl_candidate(
+                domain_task_id=domain_task_id,
+                platform_task_id=platform_task_id,
+                run_id=run_id,
+                experiment_id=experiment_id,
+            )
+        )
 
     return submitted_runs

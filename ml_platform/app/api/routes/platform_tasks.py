@@ -9,8 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import PlatformTask, get_db
@@ -45,6 +44,31 @@ def _serialize(task: PlatformTask) -> dict[str, Any]:
         "finished_at": task.finished_at.isoformat() if task.finished_at else None,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Stats  (must be registered before /{task_id} to avoid path-parameter capture)
+# ---------------------------------------------------------------------------
+
+@router.get("/stats", summary="Global task counts grouped by status")
+async def platform_task_stats(
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Return total task counts for every status in a single query."""
+    rows = await db.execute(
+        select(PlatformTask.status, func.count(PlatformTask.id))
+        .group_by(PlatformTask.status)
+    )
+    counts: dict[str, int] = {status: cnt for status, cnt in rows.all()}
+    return {
+        "total": sum(counts.values()),
+        "by_status": counts,
+        # Convenience roll-ups used by the frontend summary cards
+        "running":   counts.get("RUNNING", 0),
+        "queued":    counts.get("QUEUED", 0) + counts.get("PENDING", 0),
+        "succeeded": counts.get("SUCCESS", 0),
+        "failed":    counts.get("FAILED", 0) + counts.get("RETRY", 0),
     }
 
 

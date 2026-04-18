@@ -6,12 +6,13 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Button, Card, Col, Empty, Form, Input, message,
-  Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tag, Typography,
+  Alert, Button, Card, Col, Divider, Empty, Form, Input, InputNumber,
+  message, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tag, Typography,
 } from 'antd'
 import {
   PlusOutlined, TrophyOutlined, ExperimentOutlined,
   ArrowRightOutlined, DeleteOutlined, ReloadOutlined,
+  ThunderboltOutlined, RocketOutlined,
 } from '@ant-design/icons'
 import { platformExperimentsApi, dataApi } from '../services/api'
 
@@ -39,6 +40,12 @@ const Experiments = () => {
   const [createOpen, setCreateOpen] = useState(false)
   const [datasets, setDatasets] = useState([])
   const [form] = Form.useForm()
+
+  /* ── AutoML launch state ── */
+  const [automlOpen, setAutomlOpen]       = useState(false)
+  const [automlTarget, setAutomlTarget]   = useState(null)  // experiment to launch against
+  const [automlLoading, setAutomlLoading] = useState(false)
+  const [automlForm] = Form.useForm()
 
   const PAGE_SIZE = 20
 
@@ -76,6 +83,44 @@ const Experiments = () => {
     } catch (err) {
       if (err?.errorFields) return  // validation error
       message.error('创建失败')
+    }
+  }
+
+  const openAutoml = (experiment) => {
+    setAutomlTarget(experiment)
+    const isRegression = ['rmse', 'mae', 'r2'].includes(experiment.objective_metric)
+    automlForm.resetFields()
+    automlForm.setFieldsValue({
+      dataset_id: experiment.dataset_id || undefined,
+      task_type: isRegression ? 'regression' : 'classification',
+      max_candidates: 8,
+    })
+    setAutomlOpen(true)
+  }
+
+  const handleAutomlLaunch = async () => {
+    try {
+      const values = await automlForm.validateFields()
+      setAutomlLoading(true)
+      const payload = {
+        dataset_id: values.dataset_id,
+        target_column: values.target_column.trim(),
+        task_type: values.task_type,
+        max_candidates: values.max_candidates ?? 8,
+        eval_metrics: values.task_type === 'regression'
+          ? ['rmse', 'mae', 'r2']
+          : ['accuracy', 'f1', 'roc_auc'],
+      }
+      await platformExperimentsApi.submitAutomlRegistry(automlTarget.id, payload)
+      message.success(`AutoML 已启动，最多 ${payload.max_candidates} 个候选模型并发训练`)
+      setAutomlOpen(false)
+      fetchExperiments(page)
+    } catch (err) {
+      if (err?.errorFields) return  // validation
+      const detail = err?.response?.data?.detail
+      message.error(detail ? `启动失败: ${detail}` : '启动 AutoML 失败')
+    } finally {
+      setAutomlLoading(false)
     }
   }
 
@@ -153,13 +198,24 @@ const Experiments = () => {
     },
     {
       title: '操作',
-      width: 120,
+      width: 200,
       render: (_, r) => (
-        <Space>
+        <Space wrap>
           <Button
             size="small" type="text" icon={<ArrowRightOutlined />}
             onClick={() => navigate(`/experiments/${r.id}`)}
           >详情</Button>
+          {(r.kind === 'automl' || r.kind === 'grid_search') && r.status !== 'RUNNING' && (
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              icon={<ThunderboltOutlined />}
+              onClick={() => openAutoml(r)}
+            >
+              AutoML
+            </Button>
+          )}
           <Popconfirm
             title="确认删除该实验及所有 Run？"
             onConfirm={() => handleDelete(r.id)}
@@ -247,6 +303,79 @@ const Experiments = () => {
         </Card>
 
       </Space>
+
+      {/* AutoML launch modal */}
+      <Modal
+        title={
+          <Space>
+            <RocketOutlined style={{ color: '#6366f1' }} />
+            <span>一键 AutoML — {automlTarget?.name}</span>
+          </Space>
+        }
+        open={automlOpen}
+        onOk={handleAutomlLaunch}
+        onCancel={() => setAutomlOpen(false)}
+        okText={<span><ThunderboltOutlined /> 启动训练</span>}
+        okButtonProps={{ loading: automlLoading, style: { background: '#6366f1', borderColor: '#6366f1' } }}
+        cancelText="取消"
+        width={560}
+        destroyOnClose
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="平台将从内置候选库中选取算法，并发训练多个模型，自动排名选出最优。"
+        />
+        <Form form={automlForm} layout="vertical">
+          <Form.Item
+            label="数据集"
+            name="dataset_id"
+            rules={[{ required: true, message: '请选择数据集' }]}
+          >
+            <Select
+              showSearch
+              placeholder="选择训练数据集"
+              options={datasets}
+              filterOption={(input, opt) => opt.label.toLowerCase().includes(input.toLowerCase())}
+            />
+          </Form.Item>
+          <Form.Item
+            label="目标列（标签列）"
+            name="target_column"
+            rules={[{ required: true, message: '请输入目标列名' }]}
+          >
+            <Input placeholder="如：label、target、survived" />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="任务类型" name="task_type" initialValue="classification">
+                <Select
+                  options={[
+                    { value: 'classification', label: '分类 (Classification)' },
+                    { value: 'regression',     label: '回归 (Regression)' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                label="最大候选数"
+                name="max_candidates"
+                initialValue={8}
+                extra="越多越准，但耗时更长"
+              >
+                <InputNumber min={1} max={20} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Divider style={{ margin: '8px 0 16px' }} />
+          <div style={{ color: '#64748b', fontSize: 12 }}>
+            <b>候选模型池包括：</b>逻辑回归、随机森林、ExtraTrees、梯度提升树 (GBDT)、XGBoost、LightGBM
+            — 每种算法搭配 2~3 组超参，共约 12 个候选（可通过最大候选数截断）。
+          </div>
+        </Form>
+      </Modal>
 
       {/* Create experiment modal */}
       <Modal

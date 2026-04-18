@@ -1,29 +1,38 @@
 import React, { useState, useEffect } from 'react'
 import {
-  Card,
+  Badge,
   Button,
+  Card,
+  Col,
+  Descriptions,
+  Empty,
+  Form,
+  Input,
+  message,
+  Modal,
+  Popconfirm,
+  Progress,
+  Row,
+  Space,
+  Statistic,
   Table,
   Tag,
-  Modal,
-  message,
+  Timeline,
+  Tooltip,
   Typography,
-  Space,
-  Progress,
-  Descriptions,
-  Statistic,
-  Row,
-  Col,
   Upload,
-  Popconfirm,
 } from 'antd'
 import {
-  UploadOutlined,
+  BranchesOutlined,
+  CheckCircleOutlined,
   DeleteOutlined,
   EyeOutlined,
   FileTextOutlined,
   InboxOutlined,
+  PlusOutlined,
+  TagOutlined,
 } from '@ant-design/icons'
-import { dataApi } from '../services/api'
+import { dataApi, dataVersionsApi } from '../services/api'
 
 const { Title, Text } = Typography
 const { Dragger } = Upload
@@ -51,6 +60,14 @@ const DataManagement = () => {
   const [selectedDataset, setSelectedDataset] = useState(null)
   const [previewData, setPreviewData]     = useState({ rows: [], statistics: {} })
   const [previewLoading, setPreviewLoading] = useState(false)
+
+  /* ── Version panel state ── */
+  const [versionsModal, setVersionsModal]   = useState(false)
+  const [selectedVersionDs, setSelectedVersionDs] = useState(null)
+  const [versions, setVersions]             = useState([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [createVersionLoading, setCreateVersionLoading] = useState(false)
+  const [versionDescInput, setVersionDescInput] = useState('')
 
   useEffect(() => { fetchDatasets() }, [])
 
@@ -103,6 +120,50 @@ const DataManagement = () => {
       message.error('获取数据预览失败')
     } finally {
       setPreviewLoading(false)
+    }
+  }
+
+  /* ── Version handlers ── */
+  const handleVersions = async (dataset) => {
+    setSelectedVersionDs(dataset)
+    setVersions([])
+    setVersionDescInput('')
+    setVersionsModal(true)
+    setVersionsLoading(true)
+    try {
+      const res = await dataVersionsApi.list(dataset.id)
+      setVersions(res.items || [])
+    } catch (err) {
+      console.error('获取版本列表失败:', err)
+      message.error('获取版本列表失败')
+    } finally {
+      setVersionsLoading(false)
+    }
+  }
+
+  const handleCreateVersion = async () => {
+    if (!selectedVersionDs) return
+    setCreateVersionLoading(true)
+    try {
+      const res = await dataVersionsApi.create(
+        selectedVersionDs.id,
+        versionDescInput.trim() || null,
+      )
+      message.success(`版本 v${res.version} 创建成功`)
+      setVersionDescInput('')
+      // Refresh list
+      const updated = await dataVersionsApi.list(selectedVersionDs.id)
+      setVersions(updated.items || [])
+    } catch (err) {
+      const detail = err?.response?.data?.detail
+      if (detail?.includes('No changes detected') || detail?.includes('already has the same content')) {
+        message.warning('文件内容未变化，无需创建新版本')
+      } else {
+        console.error('创建版本失败:', err)
+        message.error('创建版本失败')
+      }
+    } finally {
+      setCreateVersionLoading(false)
     }
   }
 
@@ -165,6 +226,15 @@ const DataManagement = () => {
           >
             预览
           </Button>
+          <Tooltip title="数据版本快照">
+            <Button
+              type="text"
+              icon={<BranchesOutlined />}
+              onClick={() => handleVersions(record)}
+            >
+              版本
+            </Button>
+          </Tooltip>
           <Popconfirm
             title="确认删除该数据集？"
             onConfirm={() => handleDelete(record.id)}
@@ -295,6 +365,93 @@ const DataManagement = () => {
               </>
             )}
           </div>
+        )}
+      </Modal>
+      {/* 版本管理弹窗 */}
+      <Modal
+        title={
+          <Space>
+            <BranchesOutlined style={{ color: '#1890ff' }} />
+            <span>数据版本 — {selectedVersionDs?.name}</span>
+            <Tag color="blue">{versions.length} 个快照</Tag>
+          </Space>
+        }
+        open={versionsModal}
+        onCancel={() => { setVersionsModal(false); setVersions([]) }}
+        width={620}
+        footer={null}
+      >
+        {/* Create new snapshot */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+          <Input
+            placeholder="版本说明（可选）"
+            value={versionDescInput}
+            onChange={e => setVersionDescInput(e.target.value)}
+            onPressEnter={handleCreateVersion}
+            prefix={<TagOutlined style={{ color: '#94a3b8' }} />}
+            allowClear
+          />
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            loading={createVersionLoading}
+            onClick={handleCreateVersion}
+            style={{ whiteSpace: 'nowrap' }}
+          >
+            创建快照
+          </Button>
+        </div>
+
+        {versionsLoading ? (
+          <div style={{ textAlign: 'center', padding: '32px 0', color: '#94a3b8' }}>加载中…</div>
+        ) : versions.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={
+              <span>
+                还没有版本快照 —{' '}
+                <Button type="link" style={{ padding: 0 }} onClick={handleCreateVersion}>
+                  立即创建
+                </Button>
+              </span>
+            }
+          />
+        ) : (
+          <Timeline
+            mode="left"
+            items={versions.map((v, idx) => ({
+              dot: idx === 0
+                ? <CheckCircleOutlined style={{ fontSize: 16, color: '#10b981' }} />
+                : <BranchesOutlined style={{ fontSize: 14, color: '#6b7280' }} />,
+              color: idx === 0 ? 'green' : 'gray',
+              label: <span style={{ fontSize: 11, color: '#94a3b8' }}>{formatDate(v.created_at)}</span>,
+              children: (
+                <div style={{ marginBottom: 4 }}>
+                  <Space wrap>
+                    <Tag color={idx === 0 ? 'green' : 'default'} style={{ fontWeight: 700 }}>
+                      v{v.version}
+                    </Tag>
+                    {v.row_count != null && (
+                      <Tag icon={<FileTextOutlined />} color="geekblue">
+                        {v.row_count.toLocaleString()} 行
+                      </Tag>
+                    )}
+                    {idx === 0 && <Badge status="success" text="最新" />}
+                  </Space>
+                  {v.description && (
+                    <div style={{ marginTop: 4, color: '#374151', fontSize: 13 }}>{v.description}</div>
+                  )}
+                  {v.schema_hash && (
+                    <Tooltip title={`SHA-256: ${v.schema_hash}`}>
+                      <span style={{ fontSize: 11, color: '#94a3b8', cursor: 'help' }}>
+                        #{v.schema_hash.slice(0, 8)}
+                      </span>
+                    </Tooltip>
+                  )}
+                </div>
+              ),
+            }))}
+          />
         )}
       </Modal>
     </div>
