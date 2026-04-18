@@ -277,6 +277,10 @@ export const modelingTaskApi = {
   tuningSpaces: (taskType) => api.get(`/v3/tasks/tuning-spaces/${taskType}`),
 };
 
+export const platformRunsApi = {
+  inspect: (runId, params = {}) => api.get(`/platform/runs/${runId}/inspector`, { params }),
+};
+
 // ── Dataset Versioning API ───────────────────────────────────────────────────
 
 export const dataVersionsApi = {
