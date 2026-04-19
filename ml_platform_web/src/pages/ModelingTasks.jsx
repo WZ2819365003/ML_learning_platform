@@ -68,6 +68,9 @@ export default function ModelingTasks() {
   const [pagination, setPagination] = useState({ page: 1, pageSize: 10 })
   const [createOpen, setCreateOpen] = useState(false)
   const [createLoading, setCreateLoading] = useState(false)
+  // columnInfo: { columnName: { dtype, missing_rate, missing_count } }
+  const [columnInfo, setColumnInfo] = useState(null)
+  const [columnsLoading, setColumnsLoading] = useState(false)
   const [form] = Form.useForm()
 
   const load = useCallback(async () => {
@@ -96,6 +99,58 @@ export default function ModelingTasks() {
   useEffect(() => { loadDatasets() }, [loadDatasets])
 
   const taskTypeWatch = Form.useWatch('task_type', form) || 'classification'
+  const datasetIdWatch = Form.useWatch('dataset_id', form)
+
+  // When the user picks a dataset in the create modal, fetch its column headers
+  // so the 目标列 field becomes a dropdown.  We use the preview endpoint (which
+  // already returns columns_info: { col: {dtype, missing_rate, ...} }) rather
+  // than adding a new route — the payload is tiny when rows=1.
+  useEffect(() => {
+    if (!createOpen || !datasetIdWatch) { setColumnInfo(null); return }
+    let cancelled = false
+    setColumnsLoading(true)
+    dataApi.previewDataset(datasetIdWatch)
+      .then((resp) => { if (!cancelled) setColumnInfo(resp?.columns_info || null) })
+      .catch(() => { if (!cancelled) setColumnInfo(null) })
+      .finally(() => { if (!cancelled) setColumnsLoading(false) })
+    // Clear any previously selected target_column when the dataset changes
+    form.setFieldValue('target_column', undefined)
+    return () => { cancelled = true }
+  }, [datasetIdWatch, createOpen, form])
+
+  // Build target-column select options, filtered by task type.  For regression
+  // we only surface numeric columns (float/int); for classification we allow
+  // everything but sort numeric first (common convention — label is an int
+  // class id or a string).  Also surface missing_rate as a subtle warning.
+  const targetColumnOptions = React.useMemo(() => {
+    if (!columnInfo) return []
+    const entries = Object.entries(columnInfo)
+    const isNumeric = (dt) => /int|float|double|number/i.test(String(dt))
+    const filtered = taskTypeWatch === 'regression'
+      ? entries.filter(([, m]) => isNumeric(m.dtype))
+      : entries
+    filtered.sort((a, b) => {
+      const an = isNumeric(a[1].dtype) ? 0 : 1
+      const bn = isNumeric(b[1].dtype) ? 0 : 1
+      return an - bn || a[0].localeCompare(b[0])
+    })
+    return filtered.map(([col, meta]) => ({
+      value: col,
+      label: (
+        <Space size={6}>
+          <span style={{ fontWeight: 500 }}>{col}</span>
+          <Tag style={{ fontSize: 10, margin: 0 }} color={isNumeric(meta.dtype) ? 'blue' : 'default'}>
+            {meta.dtype}
+          </Tag>
+          {meta.missing_rate > 0 && (
+            <Tag style={{ fontSize: 10, margin: 0 }} color="warning">
+              缺失 {(meta.missing_rate * 100).toFixed(0)}%
+            </Tag>
+          )}
+        </Space>
+      ),
+    }))
+  }, [columnInfo, taskTypeWatch])
 
   const handleCreate = async () => {
     const values = await form.validateFields()
@@ -341,8 +396,37 @@ export default function ModelingTasks() {
               </Form.Item>
             </Col>
             <Col span={10}>
-              <Form.Item name="target_column" label="目标列">
-                <Input placeholder="例: y / target / label" />
+              <Form.Item
+                name="target_column"
+                label={
+                  <Space size={4}>
+                    <span>目标列</span>
+                    {columnInfo && (
+                      <span style={{ fontSize: 11, color: '#64748b' }}>
+                        (共 {Object.keys(columnInfo).length} 列)
+                      </span>
+                    )}
+                  </Space>
+                }
+                tooltip={!datasetIdWatch ? '请先选择数据集' : undefined}
+              >
+                <Select
+                  placeholder={
+                    !datasetIdWatch ? '请先选择数据集'
+                    : columnsLoading ? '正在读取列头…'
+                    : columnInfo ? '从列表中选择目标列'
+                    : '无法加载列信息'
+                  }
+                  disabled={!datasetIdWatch}
+                  loading={columnsLoading}
+                  options={targetColumnOptions}
+                  showSearch optionFilterProp="value"
+                  filterOption={(input, opt) =>
+                    String(opt.value).toLowerCase().includes(input.toLowerCase())
+                  }
+                  notFoundContent={columnsLoading ? '加载中...' : '无可用列（请检查任务类型是否匹配数据集）'}
+                  allowClear
+                />
               </Form.Item>
             </Col>
           </Row>
