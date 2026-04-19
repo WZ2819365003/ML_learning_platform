@@ -12,8 +12,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import PlatformTask, get_db
-from app.scheduler.task_runner import cancel_task, retry_task
+from app.models.database import (
+    ExperimentRun,
+    ModelingTask,
+    PlatformExperiment,
+    PlatformTask,
+    get_db,
+)
+from app.scheduler.task_runner import cancel_task, dispatch_platform_task, retry_task
 
 router = APIRouter(prefix="/platform/tasks", tags=["Platform Tasks V3"])
 
@@ -69,6 +75,208 @@ async def platform_task_stats(
         "queued":    counts.get("QUEUED", 0) + counts.get("PENDING", 0),
         "succeeded": counts.get("SUCCESS", 0),
         "failed":    counts.get("FAILED", 0) + counts.get("RETRY", 0),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tree  (hierarchical view: ModelingTask → Experiment → Run/Task)
+# ---------------------------------------------------------------------------
+
+def _iso(dt) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+@router.get(
+    "/tree",
+    summary="Hierarchical task view — ModelingTask ▸ Experiment ▸ Run(+PlatformTask)",
+)
+async def platform_task_tree(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=50),
+    status: str | None = Query(None, description="Filter modeling tasks by status"),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """
+    Return a paginated list of modeling tasks with nested experiments and runs.
+
+    Structure:
+        {
+          items: [{
+            id, name, status, dataset_name, created_at, objective_metric,
+            stats: { total_runs, success, failed, running, queued },
+            experiments: [{
+              id, name, strategy_type, status, created_at,
+              run_count, success_count, failed_count,
+              runs: [{
+                id, trial_no, rank, status, metrics, params,
+                task: { id, kind, status, progress, retry_count, error_message }
+              }]
+            }]
+          }],
+          total, page, page_size
+        }
+
+    This powers the hierarchical Task Center: top-level rows are modeling tasks
+    (the user's mental "job"), expand to see parallel experiment batches, and
+    expand further to see individual runs + their scheduler state.  Bare
+    PlatformTasks not associated with an ExperimentRun (e.g. standalone
+    forecast/predict tasks) are surfaced separately by the flat /list endpoint.
+    """
+    # --- 1. Paginate modeling tasks
+    stmt = select(ModelingTask)
+    count_stmt = select(func.count(ModelingTask.id))
+    if status:
+        stmt = stmt.where(ModelingTask.status == status.upper())
+        count_stmt = count_stmt.where(ModelingTask.status == status.upper())
+
+    total = (await db.execute(count_stmt)).scalar_one()
+    rows = await db.execute(
+        stmt.order_by(ModelingTask.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    modeling_tasks = rows.scalars().all()
+    if not modeling_tasks:
+        return {"items": [], "total": total, "page": page, "page_size": page_size}
+
+    mt_ids = [mt.id for mt in modeling_tasks]
+
+    # --- 2. Load all experiments for these modeling tasks in one query
+    exp_rows = await db.execute(
+        select(PlatformExperiment)
+        .where(PlatformExperiment.modeling_task_id.in_(mt_ids))
+        .order_by(PlatformExperiment.created_at.desc())
+    )
+    experiments = exp_rows.scalars().all()
+    exp_ids = [e.id for e in experiments]
+
+    # --- 3. Load all runs in one query
+    run_rows: list[ExperimentRun] = []
+    if exp_ids:
+        run_rows = list((
+            await db.execute(
+                select(ExperimentRun)
+                .where(ExperimentRun.experiment_id.in_(exp_ids))
+                .order_by(
+                    ExperimentRun.rank.is_(None),
+                    ExperimentRun.rank.asc(),
+                    ExperimentRun.created_at.asc(),
+                )
+            )
+        ).scalars().all())
+
+    # --- 4. Load platform tasks referenced by runs
+    task_ids = [r.task_id for r in run_rows if r.task_id]
+    platform_tasks_by_id: dict[str, PlatformTask] = {}
+    if task_ids:
+        ptasks = (
+            await db.execute(
+                select(PlatformTask).where(PlatformTask.id.in_(task_ids))
+            )
+        ).scalars().all()
+        platform_tasks_by_id = {p.id: p for p in ptasks}
+
+    # --- 5. Index runs by experiment
+    runs_by_exp: dict[str, list[ExperimentRun]] = {}
+    for r in run_rows:
+        runs_by_exp.setdefault(r.experiment_id, []).append(r)
+
+    # --- 6. Assemble the tree
+    def _serialize_run(run: ExperimentRun) -> dict[str, Any]:
+        task = platform_tasks_by_id.get(run.task_id) if run.task_id else None
+        return {
+            "id": run.id,
+            "trial_no": run.trial_no,
+            "rank": run.rank,
+            "status": run.status,
+            "metrics": run.metrics or {},
+            "params": run.params or {},
+            "source_experiment_type": run.source_experiment_type,
+            "created_at": _iso(run.created_at),
+            "started_at": _iso(run.started_at),
+            "finished_at": _iso(run.finished_at),
+            "task": {
+                "id": task.id,
+                "kind": task.kind,
+                "status": task.status,
+                "progress": task.progress,
+                "retry_count": task.retry_count,
+                "max_retries": task.max_retries,
+                "worker_id": task.worker_id,
+                "error_message": task.error_message,
+                "queued_at": _iso(task.queued_at),
+                "started_at": _iso(task.started_at),
+                "finished_at": _iso(task.finished_at),
+            } if task else None,
+        }
+
+    def _experiment_stats(runs: list[ExperimentRun]) -> dict[str, int]:
+        acc = {"total": 0, "success": 0, "failed": 0, "running": 0, "queued": 0}
+        for r in runs:
+            acc["total"] += 1
+            st = (r.status or "").upper()
+            if st == "SUCCESS":
+                acc["success"] += 1
+            elif st == "FAILED":
+                acc["failed"] += 1
+            elif st == "RUNNING":
+                acc["running"] += 1
+            elif st in ("PENDING", "QUEUED"):
+                acc["queued"] += 1
+        return acc
+
+    items: list[dict[str, Any]] = []
+    for mt in modeling_tasks:
+        mt_exps = [e for e in experiments if e.modeling_task_id == mt.id]
+        mt_total = {"total_runs": 0, "success": 0, "failed": 0, "running": 0, "queued": 0}
+
+        exp_payloads: list[dict[str, Any]] = []
+        for exp in mt_exps:
+            exp_runs = runs_by_exp.get(exp.id, [])
+            exp_stats = _experiment_stats(exp_runs)
+            mt_total["total_runs"] += exp_stats["total"]
+            mt_total["success"] += exp_stats["success"]
+            mt_total["failed"] += exp_stats["failed"]
+            mt_total["running"] += exp_stats["running"]
+            mt_total["queued"] += exp_stats["queued"]
+
+            exp_payloads.append({
+                "id": exp.id,
+                "name": exp.name,
+                "strategy_type": getattr(exp, "strategy_type", None),
+                "kind": exp.kind,
+                "status": exp.status,
+                "objective_metric": exp.objective_metric,
+                "objective_direction": exp.objective_direction,
+                "selected_models": getattr(exp, "selected_models", None) or [],
+                "created_at": _iso(exp.created_at),
+                "finished_at": _iso(exp.finished_at),
+                "stats": exp_stats,
+                "runs": [_serialize_run(r) for r in exp_runs],
+            })
+
+        items.append({
+            "id": mt.id,
+            "name": mt.name,
+            "description": mt.description,
+            "status": mt.status,
+            "dataset_id": mt.dataset_id,
+            "dataset_name": mt.dataset_name,
+            "task_type": mt.task_type,
+            "objective_metric": mt.objective_metric,
+            "objective_direction": mt.objective_direction,
+            "best_run_id": mt.best_run_id,
+            "created_at": _iso(mt.created_at),
+            "finished_at": _iso(mt.finished_at),
+            "stats": mt_total,
+            "experiments": exp_payloads,
+        })
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
     }
 
 
@@ -134,7 +342,14 @@ async def retry_platform_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    task = await retry_task(db, task_id)
+    try:
+        task = await retry_task(db, task_id)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    await db.commit()
+    await dispatch_platform_task(task.id, task.kind, task.payload_ref, task.priority)
     return _serialize(task)
 
 
@@ -147,7 +362,12 @@ async def cancel_platform_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    task = await cancel_task(db, task_id)
+    try:
+        task = await cancel_task(db, task_id)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     return _serialize(task)
 
 

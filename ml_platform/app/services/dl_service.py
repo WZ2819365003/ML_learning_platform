@@ -548,6 +548,8 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
 
 
 async def stop_dl_training(task_id: str, db: AsyncSession) -> DLTrainingTask:
+    from app.models.database import PlatformTask
+
     res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
     task = res.scalar_one_or_none()
     if task is None:
@@ -560,6 +562,16 @@ async def stop_dl_training(task_id: str, db: AsyncSession) -> DLTrainingTask:
     task.status = "FAILED"
     task.error_message = "Manually stopped"
     task.finished_at = datetime.now(timezone.utc)
+
+    ptask_res = await db.execute(
+        select(PlatformTask).where(PlatformTask.payload_ref == f"dl_train:{task_id}")
+    )
+    platform_task = ptask_res.scalar_one_or_none()
+    if platform_task is not None:
+        platform_task.status = "CANCELLED"
+        platform_task.error_message = "Manually stopped"
+        platform_task.finished_at = datetime.now(timezone.utc)
+
     await db.flush()
     return task
 

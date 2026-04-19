@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,14 +40,30 @@ _REGRESSION_METRICS = {"rmse", "mae", "mse", "mape", "r2"}
 
 def load_candidates(task_type: str = "classification") -> list[dict]:
     """Load and return AutoML candidates for the given task type."""
+    from app.core.trainer import detect_task_type, list_available_models
+
     if not _REGISTRY_PATH.exists():
         raise FileNotFoundError(f"AutoML registry not found: {_REGISTRY_PATH}")
     with open(_REGISTRY_PATH) as f:
         data = yaml.safe_load(f)
     candidates = data.get(task_type, [])
-    if not candidates:
+    valid_models = set(list_available_models())
+    filtered_candidates: list[dict[str, Any]] = []
+    for candidate in candidates:
+        model_type = candidate.get("model_type")
+        if model_type not in valid_models:
+            logger.warning("Skipping AutoML candidate %r: model is not registered", model_type)
+            continue
+        if detect_task_type(model_type) != task_type:
+            logger.warning(
+                "Skipping AutoML candidate %r: expected %s model, got %s",
+                model_type, task_type, detect_task_type(model_type),
+            )
+            continue
+        filtered_candidates.append(candidate)
+    if not filtered_candidates:
         raise ValueError(f"No candidates defined for task_type={task_type!r}")
-    return candidates
+    return filtered_candidates
 
 
 def warm_start_capable() -> list[str]:
@@ -134,6 +151,11 @@ async def submit_automl_from_registry(
                 "model_type": model_type,
                 "hyperparameters": hyperparameters,
                 "description": candidate.get("description", model_type),
+                "dataset_id": dataset_id,
+                "target_column": target_column,
+                "task_type": task_type,
+                "eval_metrics": eval_metrics,
+                "test_size": test_size,
             },
             status="PENDING",
         )
@@ -195,6 +217,19 @@ async def _run_automl_candidate(
     from sqlalchemy import select
 
     await update_platform_task_status(platform_task_id, "RUNNING")
+
+    try:
+        async with async_session_factory() as db:
+            run_result = await db.execute(
+                select(ExperimentRun).where(ExperimentRun.id == run_id)
+            )
+            run = run_result.scalar_one_or_none()
+            if run and run.started_at is None:
+                run.started_at = datetime.now(timezone.utc)
+                run.status = "RUNNING"
+                await db.commit()
+    except Exception as exc:
+        logger.warning("Could not mark AutoML run %s as RUNNING: %s", run_id, exc)
 
     try:
         result = await _run_training_sync_by_id(domain_task_id, platform_task_id)

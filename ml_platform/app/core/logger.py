@@ -58,7 +58,16 @@ event_bus = EventBus()
 
 
 class TrainingLogger:
-    """Per-task logger that writes to files and publishes to event bus."""
+    """Per-task logger that writes to files, publishes to event bus, and
+    buffers entries for eventual persistence to the `training_logs` table.
+
+    Persistence is deliberately deferred: sklearn trials emit ~10-50 log
+    lines, so we accumulate in memory and flush once via `flush_to_db()`
+    at the end of the Run (called from `_run_training_sync`). That avoids
+    one DB round-trip per log line without sacrificing durability for
+    anything short of a worker crash mid-training — in which case the
+    .log file on disk still has the entries.
+    """
 
     def __init__(self, task_id: str, model_type: str = ""):
         self.task_id = task_id
@@ -70,6 +79,10 @@ class TrainingLogger:
         self.log_file = self.log_dir / f"{task_id}.log"
         self.metrics_file = self.log_dir / f"{task_id}_metrics.json"
 
+        # In-memory buffer of (level, message, extra, created_at) tuples
+        # awaiting a DB flush.
+        self._db_buffer: list[dict[str, Any]] = []
+
         # Initialize metrics JSON
         self._metrics_data: dict[str, Any] = {
             "task_id": task_id,
@@ -79,8 +92,9 @@ class TrainingLogger:
         self._save_metrics()
 
     def log(self, level: str, message: str, **extra):
-        """Write a log entry to file and publish to event bus."""
-        timestamp = datetime.now(timezone.utc).isoformat()
+        """Write a log entry to file, buffer for DB, and publish to bus."""
+        timestamp_dt = datetime.now(timezone.utc)
+        timestamp = timestamp_dt.isoformat()
 
         # Format log line
         extra_str = (
@@ -94,6 +108,16 @@ class TrainingLogger:
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(line + "\n")
 
+        # Buffer for eventual DB flush
+        self._db_buffer.append(
+            {
+                "level": level,
+                "message": message,
+                "extra": dict(extra) if extra else None,
+                "created_at": timestamp_dt,
+            }
+        )
+
         # Publish to event bus
         event_bus.publish(
             f"logs:{self.task_id}",
@@ -106,6 +130,47 @@ class TrainingLogger:
                 "timestamp": timestamp,
             },
         )
+
+    def flush_to_db(self) -> int:
+        """Persist all buffered log entries to `training_logs`.
+
+        Idempotent (drains the buffer), safe to call multiple times. Returns
+        the number of rows inserted. Designed to be called from sync code
+        (e.g. a ThreadPoolExecutor worker) — uses the sync SQLAlchemy engine.
+        Any exception is logged but NOT re-raised: losing observability
+        data must never break a successful Run.
+        """
+        if not self._db_buffer:
+            return 0
+        buffered, self._db_buffer = self._db_buffer, []
+        try:
+            from app.models.database import TrainingLog, sync_session_factory
+
+            with sync_session_factory() as session:
+                session.bulk_insert_mappings(
+                    TrainingLog,
+                    [
+                        {
+                            "task_id": self.task_id,
+                            "level": entry["level"],
+                            "message": entry["message"],
+                            "extra": entry["extra"],
+                            "created_at": entry["created_at"],
+                        }
+                        for entry in buffered
+                    ],
+                )
+                session.commit()
+            return len(buffered)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "TrainingLogger.flush_to_db failed for task %s: %s",
+                self.task_id,
+                exc,
+            )
+            # Push entries back so a later flush can retry.
+            self._db_buffer = buffered + self._db_buffer
+            return 0
 
     def log_metrics(self, step: int, total_steps: int, metrics: dict):
         """Record metrics for a training step/fold and publish to event bus."""

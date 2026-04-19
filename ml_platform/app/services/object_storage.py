@@ -146,3 +146,17 @@ def list_objects(prefix: str = "") -> list[dict]:
     except Exception as exc:
         logger.warning("list_objects(%s) failed: %s", prefix, exc)
         return []
+
+
+def download_object_bytes(object_key: str) -> bytes | None:
+    """Fetch an object's body as bytes. Returns None if S3 is disabled or the key is missing."""
+    settings = get_settings()
+    if not settings.s3_enabled:
+        return None
+    try:
+        client = _get_client()
+        obj = client.get_object(Bucket=settings.s3_bucket, Key=object_key)
+        return obj["Body"].read()
+    except Exception as exc:
+        logger.warning("download_object_bytes(%s) failed: %s", object_key, exc)
+        return None

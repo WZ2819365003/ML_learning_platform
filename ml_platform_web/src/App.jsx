@@ -19,7 +19,7 @@ import TSMonitor from './pages/TSMonitor'
 import TSResults from './pages/TSResults'
 import TaskCenter from './pages/TaskCenter'
 import Experiments from './pages/Experiments'
-import ExperimentDetail from './pages/ExperimentDetail'
+import ExperimentRedirect from './pages/ExperimentRedirect'
 import ModelingTasks from './pages/ModelingTasks'
 import ModelingTaskDetail from './pages/ModelingTaskDetail'
 
@@ -95,7 +95,7 @@ function App() {
               {/* V3 Platform routes */}
               <Route path="/tasks" element={<TaskCenter />} />
               <Route path="/experiments" element={<Experiments />} />
-              <Route path="/experiments/:experimentId" element={<ExperimentDetail />} />
+              <Route path="/experiments/:experimentId" element={<ExperimentRedirect />} />
 
               {/* V3 Modeling Workbench — new task-centric workflow */}
               <Route path="/v3/tasks" element={<ModelingTasks />} />

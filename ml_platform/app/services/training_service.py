@@ -116,6 +116,44 @@ def _run_training_sync(
     tl = TrainingLogger(task_id=task_id, model_type=model_type)
     tl.log("INFO", "Training task started", model=model_type, dataset=file_path)
 
+    try:
+        return _run_training_sync_inner(
+            tl, task_id, file_path, target_column, model_type,
+            hyperparameters, test_size, eval_metrics, cv_folds,
+            model_save_dir, class_weight,
+        )
+    except Exception as exc:
+        # Record the failure explicitly so the Inspector can show WHY it
+        # failed. The exception is re-raised for the caller to handle.
+        try:
+            tl.log("ERROR", f"Training failed: {exc}", exc_type=type(exc).__name__)
+            tl.log_status("FAILED", str(exc))
+        except Exception:
+            pass
+        raise
+    finally:
+        # Flush buffered log lines regardless of outcome so the
+        # `training_logs` table always has a record for successful AND
+        # failed runs.
+        try:
+            tl.flush_to_db()
+        except Exception:
+            pass
+
+
+def _run_training_sync_inner(
+    tl: TrainingLogger,
+    task_id: str,
+    file_path: str,
+    target_column: str,
+    model_type: str,
+    hyperparameters: dict,
+    test_size: float,
+    eval_metrics: list[str],
+    cv_folds: int,
+    model_save_dir: str,
+    class_weight: str | None,
+) -> dict:
     # Try MLflow integration (optional)
     mlflow = _try_init_mlflow()
     mlflow_run = None
@@ -525,6 +563,8 @@ async def get_training_status(task_id: str, db: AsyncSession) -> TrainingTask:
 
 async def stop_training(task_id: str, db: AsyncSession) -> TrainingTask:
     """Cancel a pending or running training task."""
+    from app.models.database import PlatformTask
+
     result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
     task = result.scalar_one_or_none()
     if task is None:
@@ -541,6 +581,16 @@ async def stop_training(task_id: str, db: AsyncSession) -> TrainingTask:
     task.status = "FAILED"
     task.error_message = "Manually stopped by user"
     task.finished_at = datetime.now(timezone.utc)
+
+    platform_result = await db.execute(
+        select(PlatformTask).where(PlatformTask.payload_ref == f"train:{task_id}")
+    )
+    platform_task = platform_result.scalar_one_or_none()
+    if platform_task is not None:
+        platform_task.status = "CANCELLED"
+        platform_task.error_message = "Manually stopped by user"
+        platform_task.finished_at = datetime.now(timezone.utc)
+
     await db.flush()
     return task
 

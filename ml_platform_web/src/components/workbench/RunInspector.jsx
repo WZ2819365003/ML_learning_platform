@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from 'react'
 import {
   Drawer, Descriptions, Tag, Space, Table, Tabs, Empty, Spin,
-  Typography, Divider, Alert, Timeline, Tooltip,
+  Typography, Divider, Alert, Tooltip,
 } from 'antd'
 import {
   CheckCircleFilled, CloseCircleFilled, ClockCircleFilled,
   DatabaseOutlined, ExperimentOutlined, LineChartOutlined,
 } from '@ant-design/icons'
 import { platformRunsApi } from '../../services/api'
+import LogViewer from './LogViewer'
+import ShapView from './ShapView'
+import TrainingViz from './TrainingViz'
 
 const { Text, Paragraph } = Typography
 
@@ -158,6 +161,23 @@ export default function RunInspector({ open, runId, onClose }) {
                 ),
               },
 
+              // ── Training visualisation ──
+              // Renders confusion matrix / residual plot / ROC / learning
+              // curve / feature importance in a tight 2×2 grid.  Driven off
+              // the domain TrainingTask id (not the Run id) — the backend
+              // viz helpers re-load the model + dataset on demand.
+              {
+                key: 'training_viz',
+                label: <span>训练可视化</span>,
+                children: (
+                  <TrainingViz
+                    trainingTaskId={ttask?.id}
+                    modelType={ttask?.model_type}
+                    taskStatus={run?.status}
+                  />
+                ),
+              },
+
               // ── Params ──
               {
                 key: 'params',
@@ -206,34 +226,18 @@ export default function RunInspector({ open, runId, onClose }) {
               },
 
               // ── Logs ──
+              // Professional log panel: REST-seeded historical entries + live
+              // WS tail; level filter, search, pause, download. The WS channel
+              // is keyed by the domain TrainingTask id (not the Run id).
               {
                 key: 'logs',
                 label: <span>日志 <Tag style={{ marginLeft: 4 }}>{logs.length}</Tag></span>,
-                children: logs.length === 0 ? (
-                  <Empty description="无日志" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                ) : (
-                  <div style={{ maxHeight: 440, overflow: 'auto', padding: '4px 0' }}>
-                    <Timeline
-                      items={logs.map((log) => ({
-                        color: LEVEL_COLOR[log.level] || '#94a3b8',
-                        children: (
-                          <div style={{ fontSize: 12 }}>
-                            <Space size={6} wrap>
-                              <Tag color={LEVEL_COLOR[log.level] ? undefined : 'default'} style={{ margin: 0 }}>
-                                {log.level}
-                              </Tag>
-                              <Text type="secondary" style={{ fontSize: 11 }}>
-                                {log.created_at ? new Date(log.created_at).toLocaleTimeString('zh-CN', { hour12: false }) : ''}
-                              </Text>
-                            </Space>
-                            <div style={{ fontFamily: 'monospace', fontSize: 11, marginTop: 2, color: '#334155', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                              {log.message}
-                            </div>
-                          </div>
-                        ),
-                      }))}
-                    />
-                  </div>
+                children: (
+                  <LogViewer
+                    historical={logs}
+                    domainTaskId={ttask?.id}
+                    isLive={run?.status === 'RUNNING' || run?.status === 'PENDING'}
+                  />
                 ),
               },
 
@@ -269,48 +273,23 @@ export default function RunInspector({ open, runId, onClose }) {
               // ── SHAP ──
               {
                 key: 'shap',
-                label: 'SHAP',
-                children: shap?.has_explanation ? (
-                  <>
-                    <Alert type="success" showIcon
-                      message={`共 ${shap.feature_count} 个特征，显示 Top ${shap.top_features.length}`}
-                      style={{ marginBottom: 12 }} />
-                    <Table
-                      size="small"
-                      pagination={false}
-                      rowKey="feature"
-                      dataSource={shap.top_features}
-                      columns={[
-                        { title: '#', width: 50, render: (_, __, i) => i + 1 },
-                        { title: '特征', dataIndex: 'feature',
-                          render: (v) => <code style={{ fontSize: 12 }}>{v}</code> },
-                        { title: '重要度', dataIndex: 'importance',
-                          render: (v) => {
-                            const max = shap.top_features[0]?.importance || 1
-                            const pct = Math.min(100, (Math.abs(v) / max) * 100)
-                            return (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <div style={{ flex: 1, height: 6, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
-                                  <div style={{ height: '100%', width: `${pct}%`, background: '#2563eb' }} />
-                                </div>
-                                <code style={{ fontSize: 11, color: '#2563eb', minWidth: 60, textAlign: 'right' }}>
-                                  {v.toFixed(4)}
-                                </code>
-                              </div>
-                            )
-                          } },
-                      ]}
-                    />
-                  </>
+                label: (
+                  <span>
+                    SHAP
+                    {shap?.has_explanation && (
+                      <Tag color="success" style={{ marginLeft: 4 }}>就绪</Tag>
+                    )}
+                  </span>
+                ),
+                children: run ? (
+                  <ShapView
+                    runId={run.id}
+                    initialSummary={shap}
+                    experimentId={run.experiment_id || exp?.id}
+                    runStatus={run.status}
+                  />
                 ) : (
-                  <Empty description={
-                    <div>
-                      <div>该 Run 暂无 SHAP 解释</div>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        等待 explain 任务完成后会自动生成 shap_importances
-                      </Text>
-                    </div>
-                  } />
+                  <Empty description="无 Run 数据" />
                 ),
               },
             ]}

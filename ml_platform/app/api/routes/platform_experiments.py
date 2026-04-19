@@ -280,8 +280,12 @@ async def trigger_explain(
 async def get_explain_result(
     experiment_id: str,
     run_id: str,
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any] | None:
     from app.services.explain_service import get_shap_result
+    run = await experiment_service.get_run(db, run_id)
+    if run["experiment_id"] != experiment_id:
+        raise HTTPException(status_code=404, detail="Run not found in this experiment")
     result = await get_shap_result(run_id)
     if result is None:
         raise HTTPException(status_code=404, detail="SHAP explanation not yet available")

@@ -83,6 +83,9 @@ export default function ModelingTaskDetail() {
   }, [taskId])
 
   useEffect(() => { loadTask() }, [loadTask])
+  // Always load the leaderboard once on mount so Overview's "最佳 Run" card
+  // has data; Runs/Explain tabs trigger a refresh on their own.
+  useEffect(() => { loadLeaderboard() }, [loadLeaderboard])
   useEffect(() => {
     if (activeTab === 'runs' || activeTab === 'explain') loadLeaderboard()
   }, [activeTab, loadLeaderboard])
@@ -90,9 +93,9 @@ export default function ModelingTaskDetail() {
   // Auto-refresh when task is running
   useEffect(() => {
     if (task?.status !== 'RUNNING') return
-    const id = setInterval(() => { loadTask(); if (activeTab === 'runs') loadLeaderboard() }, 5000)
+    const id = setInterval(() => { loadTask(); loadLeaderboard() }, 5000)
     return () => clearInterval(id)
-  }, [task?.status, activeTab, loadTask, loadLeaderboard])
+  }, [task?.status, loadTask, loadLeaderboard])
 
   const refreshAll = async () => {
     await loadTask()

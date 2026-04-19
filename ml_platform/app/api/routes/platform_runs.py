@@ -233,3 +233,92 @@ async def inspect_run(
         "siblings": siblings,
         "shap": shap_summary,
     }
+
+
+# ---------------------------------------------------------------------------
+# Full SHAP payload — fetches the MinIO artifact for beeswarm / dependence plots
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{run_id}/shap",
+    summary="Full SHAP payload for a run (inline importances + per-sample values)",
+)
+async def get_shap_payload(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Return the full SHAP payload for ``run_id``.
+
+    Shape:
+    {
+        "run_id": "...",
+        "status": "ready" | "pending",
+        "feature_importances": {feature: importance},
+        "feature_names": [...],
+        "sample_size": int,
+        "feature_count": int,
+        "explanation_method": "shap" | "model_feature_importances" | ...,
+        "samples": { "feature_values": [[...]], "shap_values": [[...]] } | None,
+        "source": "inline" | "minio"
+    }
+
+    Priority:
+      1. Download the full payload from MinIO (contains per-sample values).
+      2. Fall back to inline aggregated importances stored on ``run.metrics``.
+      3. Return ``{"status": "pending"}`` if no explanation has been computed yet.
+    """
+    import json
+
+    run = (
+        await db.execute(select(ExperimentRun).where(ExperimentRun.id == run_id))
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id!r} not found")
+
+    inline_importances = (run.metrics or {}).get("shap_importances")
+    inline_method = (run.metrics or {}).get("shap_method", "shap")
+    inline_sample_size = (run.metrics or {}).get("shap_sample_size")
+
+    # MinIO path — when available, it's richer than the inline summary.
+    if run.artifacts_uri:
+        try:
+            from app.services.object_storage import download_object_bytes
+
+            raw = download_object_bytes(run.artifacts_uri)
+            if raw:
+                try:
+                    payload = json.loads(raw)
+                    payload.setdefault("run_id", run_id)
+                    payload["status"] = "ready"
+                    payload["source"] = "minio"
+                    payload["artifacts_uri"] = run.artifacts_uri
+                    return payload
+                except Exception as exc:
+                    logger.warning(
+                        "SHAP artifact at %s is not valid JSON: %s",
+                        run.artifacts_uri,
+                        exc,
+                    )
+        except Exception as exc:
+            logger.warning("Could not fetch SHAP artifact for run %s: %s", run_id, exc)
+
+    # Inline fallback — aggregated importances only, no per-sample data.
+    if inline_importances:
+        return {
+            "run_id": run_id,
+            "status": "ready",
+            "feature_importances": inline_importances,
+            "feature_names": list(inline_importances.keys()),
+            "sample_size": inline_sample_size,
+            "feature_count": len(inline_importances),
+            "explanation_method": inline_method,
+            "samples": None,
+            "source": "inline",
+        }
+
+    # No explanation computed yet.
+    return {
+        "run_id": run_id,
+        "status": "pending",
+        "source": None,
+    }

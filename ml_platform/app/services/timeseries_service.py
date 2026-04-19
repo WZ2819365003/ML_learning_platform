@@ -493,6 +493,8 @@ async def update_ts_task_meta(
 
 
 async def resume_unfinished_ts_tasks() -> list[str]:
+    from app.models.database import PlatformTask
+
     async with async_session_factory() as db:
         result = await db.execute(
             select(TimeSeriesForecastTask.id).where(
@@ -502,7 +504,15 @@ async def resume_unfinished_ts_tasks() -> list[str]:
         )
         task_ids = result.scalars().all()
 
-    for task_id in task_ids:
-        _schedule_forecast(task_id)
+    async with async_session_factory() as db:
+        for task_id in task_ids:
+            platform_result = await db.execute(
+                select(PlatformTask.id).where(
+                    PlatformTask.kind == "predict",
+                    PlatformTask.payload_ref == f"ts_forecast:{task_id}",
+                )
+            )
+            platform_task_id = platform_result.scalar_one_or_none()
+            _schedule_forecast(task_id, platform_task_id=platform_task_id)
 
     return task_ids

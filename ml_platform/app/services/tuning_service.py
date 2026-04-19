@@ -53,7 +53,11 @@ from app.models.database import (
     PlatformExperiment,
     async_session_factory,
 )
-from app.scheduler.task_runner import register_domain_task, update_platform_task_status
+from app.scheduler.task_runner import (
+    dispatch_platform_task,
+    register_domain_task,
+    update_platform_task_status,
+)
 from app.services.modeling_task_service import (
     _get_task_or_404,
     load_tuning_spaces,
@@ -132,9 +136,13 @@ async def dispatch_experiment_batch(
     await db.flush()
     await db.refresh(exp)
 
-    # Bump the modeling task to RUNNING as well.
-    if task.status == "CREATED":
+    # Bump the modeling task to RUNNING on every new batch — not just the first
+    # one — so a COMPLETED/FAILED task immediately reflects that new work is in
+    # flight.  ``refresh_task_summary`` at the end of the batch will settle the
+    # final status based on aggregate experiment state.
+    if task.status != "RUNNING":
         task.status = "RUNNING"
+        task.finished_at = None  # clear previous completion timestamp
         await db.flush()
 
     # Expand trials → list of concrete hyperparameter dicts per model.
@@ -438,6 +446,7 @@ async def _finalise_batch(experiment_id: str, modeling_task_id: str) -> None:
         total = sum(status_map.values())
         done = status_map.get("SUCCESS", 0) + status_map.get("FAILED", 0)
 
+        triggered_explain = False
         if total > 0 and done >= total:
             exp = (
                 await db.execute(
@@ -449,11 +458,102 @@ async def _finalise_batch(experiment_id: str, modeling_task_id: str) -> None:
                     exp.status = "FAILED"
                 else:
                     exp.status = "COMPLETED"
+                    triggered_explain = True
                 exp.finished_at = datetime.now(timezone.utc)
                 await db.commit()
 
         await refresh_task_summary(db, modeling_task_id)
         await db.commit()
+
+    # ── Auto-trigger SHAP for the top-3 runs ──────────────────────────────
+    # Runs happen outside this finalisation path, but after the experiment
+    # has settled we kick off explain tasks asynchronously so the UI sees
+    # SHAP results pop in shortly after the leaderboard stabilises. Failures
+    # here are logged but never propagate — SHAP is a nice-to-have.
+    if triggered_explain:
+        try:
+            await _schedule_shap_for_top_runs(experiment_id, top_k=3)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "SHAP auto-trigger failed for experiment %s: %s", experiment_id, exc
+            )
+
+
+async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> None:
+    """Enqueue ``explain`` platform tasks for the top-K SUCCESS runs of an experiment.
+
+    Ranking respects the experiment's objective_metric + objective_direction.
+    Skips runs that already have a SHAP result (``metrics["shap_importances"]``).
+    """
+    async with async_session_factory() as db:
+        exp = (
+            await db.execute(
+                select(PlatformExperiment).where(PlatformExperiment.id == experiment_id)
+            )
+        ).scalar_one_or_none()
+        if exp is None:
+            return
+
+        objective_metric = (exp.objective_metric or "").strip() or None
+        direction = (exp.objective_direction or "max").lower()
+        reverse = direction != "min"  # "max" → sort descending
+
+        runs = (
+            await db.execute(
+                select(ExperimentRun)
+                .where(ExperimentRun.experiment_id == experiment_id)
+                .where(ExperimentRun.status == "SUCCESS")
+            )
+        ).scalars().all()
+
+        def _score(run: ExperimentRun) -> float:
+            metrics = run.metrics or {}
+            if objective_metric and objective_metric in metrics:
+                try:
+                    return float(metrics[objective_metric])
+                except (TypeError, ValueError):
+                    pass
+            # Fallback: lowest trial_no first so order is deterministic.
+            return float(run.trial_no or 0)
+
+        # Filter out runs already explained so re-runs of the finaliser are idempotent.
+        candidates = [
+            r for r in runs if not (r.metrics or {}).get("shap_importances")
+        ]
+        candidates.sort(key=_score, reverse=reverse)
+        top_runs = candidates[: max(0, int(top_k))]
+        if not top_runs:
+            return
+
+        dispatches: list[tuple[str, str, int]] = []
+        for run in top_runs:
+            platform_task = await register_domain_task(
+                db=db,
+                kind="explain",
+                payload_ref=f"explain:{run.id}",
+                priority=3,
+            )
+            dispatches.append((platform_task.id, "explain", f"explain:{run.id}"))
+        await db.commit()
+
+    # Dispatch outside the DB transaction so asyncio.create_task() fires cleanly.
+    for platform_task_id, kind, payload_ref in dispatches:
+        try:
+            await dispatch_platform_task(platform_task_id, kind, payload_ref, 3)
+            logger.info(
+                "SHAP explain dispatched: experiment=%s platform_task=%s payload=%s",
+                experiment_id,
+                platform_task_id,
+                payload_ref,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to dispatch explain task %s: %s", platform_task_id, exc)
+            try:
+                await update_platform_task_status(
+                    platform_task_id, "FAILED", error=str(exc)
+                )
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------

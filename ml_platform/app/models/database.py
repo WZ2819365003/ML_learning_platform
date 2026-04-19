@@ -19,12 +19,13 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy import JSON
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
 def _uuid() -> str:
@@ -49,6 +50,27 @@ async_engine = create_async_engine(
 async_session_factory = async_sessionmaker(
     bind=async_engine,
     class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+# Sync engine — only for code paths that run inside a ThreadPoolExecutor
+# (e.g. classical-ML training in `_run_training_sync`) where awaiting the
+# async engine would require bouncing back to the event loop per row. The
+# URL swaps the aiomysql driver for pymysql.
+SYNC_DATABASE_URL: str = DATABASE_URL.replace(
+    "mysql+aiomysql://", "mysql+pymysql://"
+).replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+
+sync_engine = create_engine(
+    SYNC_DATABASE_URL,
+    echo=False,
+    future=True,
+    pool_pre_ping=True,
+    pool_recycle=3600,
+)
+
+sync_session_factory = sessionmaker(
+    bind=sync_engine,
     expire_on_commit=False,
 )
 

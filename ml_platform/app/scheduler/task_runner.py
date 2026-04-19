@@ -14,6 +14,7 @@ Usage from any service:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -27,6 +28,13 @@ logger = logging.getLogger(__name__)
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _split_payload_ref(payload_ref: str | None) -> tuple[str | None, str | None]:
+    if not payload_ref:
+        return None, None
+    payload_kind, _, domain_id = payload_ref.partition(":")
+    return payload_kind or None, domain_id or None
 
 
 # Map task kind → Celery task name
@@ -146,15 +154,121 @@ def _dispatch_to_celery(task_name: str, platform_task_id: str, priority: int) ->
     """Fire-and-forget Celery dispatch. Errors are logged but not re-raised."""
     try:
         from app.scheduler.celery_app import celery_app
-        celery_app.send_task(
+        async_result = celery_app.send_task(
             task_name,
             args=[platform_task_id],
             priority=max(0, min(9, 10 - priority)),  # Celery: 9=highest, 0=lowest
         )
         logger.info("Dispatched %s → Celery task %s (priority=%d)", platform_task_id, task_name, priority)
+        return async_result.id
     except Exception as exc:
         logger.error("Failed to dispatch task %s to Celery: %s", platform_task_id, exc)
         # Task stays QUEUED — will be picked up on next worker reconnect
+        return None
+
+
+async def _run_train_task_inprocess(domain_task_id: str, platform_task_id: str) -> None:
+    from app.services.training_service import _run_training_sync_by_id
+
+    try:
+        await update_platform_task_status(platform_task_id, "RUNNING", progress=0.0)
+        result = await _run_training_sync_by_id(domain_task_id, platform_task_id)
+        await update_platform_task_status(
+            platform_task_id,
+            "SUCCESS",
+            metrics=result.get("metrics", {}),
+        )
+    except Exception as exc:  # noqa: BLE001
+        await update_platform_task_status(platform_task_id, "FAILED", error=str(exc))
+
+
+async def _run_dl_task_inprocess(domain_task_id: str, platform_task_id: str) -> None:
+    from app.services.dl_service import _run_dl_training_by_id
+
+    try:
+        await update_platform_task_status(platform_task_id, "RUNNING", progress=0.0)
+        result = await _run_dl_training_by_id(domain_task_id, platform_task_id)
+        await update_platform_task_status(
+            platform_task_id,
+            "SUCCESS",
+            metrics=result.get("metrics", {}),
+        )
+    except Exception as exc:  # noqa: BLE001
+        await update_platform_task_status(platform_task_id, "FAILED", error=str(exc))
+
+
+async def _run_explain_task_inprocess(run_id: str, platform_task_id: str) -> None:
+    from app.services.explain_service import run_shap_explanation
+
+    try:
+        await update_platform_task_status(platform_task_id, "RUNNING", progress=0.0)
+        result = await run_shap_explanation(run_id, platform_task_id)
+        await update_platform_task_status(
+            platform_task_id,
+            "SUCCESS",
+            metrics={"feature_count": len(result.get("feature_importances", {}))},
+        )
+    except Exception as exc:  # noqa: BLE001
+        await update_platform_task_status(platform_task_id, "FAILED", error=str(exc))
+
+
+async def dispatch_platform_task(
+    platform_task_id: str,
+    kind: str,
+    payload_ref: str | None,
+    priority: int,
+) -> None:
+    """Launch a queued PlatformTask using the current in-process execution model."""
+    payload_kind, domain_id = _split_payload_ref(payload_ref)
+    if not payload_kind or not domain_id:
+        raise ValueError(f"Task {platform_task_id!r} has invalid payload_ref {payload_ref!r}")
+
+    if kind == "train" and payload_kind == "train":
+        from sqlalchemy import select
+        from app.models.database import ExperimentRun, async_session_factory
+
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(ExperimentRun).where(ExperimentRun.task_id == platform_task_id)
+            )
+            run = result.scalar_one_or_none()
+
+        if run is not None:
+            from app.services.automl_service import _run_automl_candidate
+
+            asyncio.create_task(
+                _run_automl_candidate(
+                    domain_task_id=domain_id,
+                    platform_task_id=platform_task_id,
+                    run_id=run.id,
+                    experiment_id=run.experiment_id,
+                )
+            )
+            return
+
+        asyncio.create_task(_run_train_task_inprocess(domain_id, platform_task_id))
+        return
+
+    if kind == "dl_train" and payload_kind == "dl_train":
+        asyncio.create_task(_run_dl_task_inprocess(domain_id, platform_task_id))
+        return
+
+    if kind == "predict" and payload_kind == "ts_forecast":
+        from app.services.timeseries_service import _run_forecast_bg
+
+        asyncio.create_task(_run_forecast_bg(domain_id, platform_task_id=platform_task_id))
+        return
+
+    if kind == "explain" and payload_kind == "explain":
+        asyncio.create_task(_run_explain_task_inprocess(domain_id, platform_task_id))
+        return
+
+    celery_task_name = _KIND_TO_CELERY.get(kind)
+    if celery_task_name:
+        _dispatch_to_celery(celery_task_name, platform_task_id, priority)
+        return
+
+    raise ValueError(f"No dispatcher available for task kind={kind!r}, payload_ref={payload_ref!r}")
 
 
 async def retry_task(db: AsyncSession, platform_task_id: str) -> PlatformTask:
@@ -173,12 +287,14 @@ async def retry_task(db: AsyncSession, platform_task_id: str) -> PlatformTask:
 
     task.status = "QUEUED"
     task.queued_at = _utcnow()
+    task.started_at = None
+    task.finished_at = None
+    task.progress = 0.0
+    task.metrics_snapshot = None
     task.error_message = None
+    task.celery_task_id = None
+    task.retry_count = (task.retry_count or 0) + 1
     await db.flush()
-
-    celery_task_name = _KIND_TO_CELERY.get(task.kind)
-    if celery_task_name:
-        _dispatch_to_celery(celery_task_name, task.id, task.priority)
     return task
 
 

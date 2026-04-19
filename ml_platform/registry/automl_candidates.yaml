@@ -5,8 +5,9 @@
 # limited by the asyncio executor pool (default: 4 workers).
 #
 # Capability matrix for warm_start:
-#   ✅ random_forest, extra_trees, gradient_boosting, sgd_classifier
-#   ❌ xgboost, lightgbm, logistic_regression, svm, knn, gaussian_nb
+#   ✅ random_forest, random_forest_regressor
+#   ❌ xgboost, xgboost_regressor, lightgbm, lightgbm_regressor,
+#      logistic_regression, svm, ridge, mlp, mlp_regressor
 #
 # Do NOT add models that don't appear in get_trainer() / list_available_models().
 
@@ -40,26 +41,26 @@ classification:
       max_depth: 8
       min_samples_leaf: 2
 
-  - model_type: extra_trees
-    description: "ExtraTrees / 200 trees"
+  - model_type: svm
+    description: "SVM / RBF / C=1.0"
     hyperparameters:
-      n_estimators: 200
-      max_depth: null
-      min_samples_leaf: 1
+      C: 1.0
+      kernel: rbf
+      probability: true
 
-  - model_type: gradient_boosting
-    description: "GBM / lr=0.1 / 100 trees"
+  - model_type: mlp
+    description: "MLP / hidden=100 / adam"
     hyperparameters:
-      n_estimators: 100
-      learning_rate: 0.1
-      max_depth: 3
+      hidden_layer_sizes: [100]
+      learning_rate_init: 0.001
+      max_iter: 300
 
-  - model_type: gradient_boosting
-    description: "GBM / lr=0.05 / 200 trees"
+  - model_type: mlp
+    description: "MLP / hidden=128-64 / adam"
     hyperparameters:
-      n_estimators: 200
-      learning_rate: 0.05
-      max_depth: 4
+      hidden_layer_sizes: [128, 64]
+      learning_rate_init: 0.0005
+      max_iter: 400
 
   - model_type: xgboost
     description: "XGBoost / lr=0.1 / depth=6"
@@ -90,35 +91,32 @@ classification:
       num_leaves: 63
 
 regression:
-  - model_type: random_forest
+  - model_type: random_forest_regressor
     description: "RF Regressor / 100 trees"
     hyperparameters:
       n_estimators: 100
       max_depth: null
 
-  - model_type: gradient_boosting
-    description: "GBM Regressor / lr=0.1"
-    hyperparameters:
-      n_estimators: 100
-      learning_rate: 0.1
-      max_depth: 3
-
-  - model_type: xgboost
+  - model_type: xgboost_regressor
     description: "XGBoost Regressor / lr=0.1"
     hyperparameters:
       n_estimators: 200
       learning_rate: 0.1
       max_depth: 6
 
-  - model_type: lightgbm
+  - model_type: lightgbm_regressor
     description: "LightGBM Regressor / lr=0.1"
     hyperparameters:
       n_estimators: 200
       learning_rate: 0.1
       num_leaves: 31
 
+  - model_type: ridge
+    description: "Ridge Regressor / alpha=1.0"
+    hyperparameters:
+      alpha: 1.0
+
 # Warm-start capable models (can use parent_run_id for incremental training)
 warm_start_capable:
   - random_forest
-  - extra_trees
-  - gradient_boosting
+  - random_forest_regressor

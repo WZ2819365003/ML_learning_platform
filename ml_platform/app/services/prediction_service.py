@@ -21,6 +21,19 @@ DERIVED_TARGET_COLUMNS: dict[str, set[str]] = {
 }
 
 
+def _resolve_column_name(df: pd.DataFrame, requested_name: str) -> str:
+    """Resolve a user-provided column name against the dataframe case-insensitively."""
+    if requested_name in df.columns:
+        return requested_name
+
+    normalized_map = {str(column).casefold(): str(column) for column in df.columns}
+    resolved = normalized_map.get(str(requested_name).casefold())
+    if resolved:
+        return resolved
+
+    raise ValueError(f"Target column '{requested_name}' not found. Available: {list(df.columns)}")
+
+
 def load_dataframe(file_path: str | Path) -> pd.DataFrame:
     """Load a dataframe from a supported file path."""
     path = resolve_runtime_path(file_path)
@@ -40,8 +53,7 @@ def prepare_training_frame(
     target_column: str,
 ) -> tuple[pd.DataFrame, pd.Series, dict[str, LabelEncoder], LabelEncoder | None]:
     """Mirror training-time preprocessing for reusable inference and viz flows."""
-    if target_column not in df.columns:
-        raise ValueError(f"Target column '{target_column}' not found. Available: {list(df.columns)}")
+    target_column = _resolve_column_name(df, target_column)
 
     X = df.drop(columns=[target_column]).copy()
     y = df[target_column].copy()
@@ -76,13 +88,14 @@ def prepare_prediction_frame(
     if not rows:
         raise ValueError("Prediction payload must include at least one row")
 
-    reference_X, _, feature_encoders, _ = prepare_training_frame(training_df, target_column)
+    canonical_target_column = _resolve_column_name(training_df, target_column)
+    reference_X, _, feature_encoders, _ = prepare_training_frame(training_df, canonical_target_column)
     input_df = pd.DataFrame(rows)
 
     if input_df.empty:
         raise ValueError("Prediction payload must include at least one row")
 
-    dropped_columns = {target_column, *DERIVED_TARGET_COLUMNS.get(target_column, set())}
+    dropped_columns = {canonical_target_column, *DERIVED_TARGET_COLUMNS.get(canonical_target_column, set())}
     input_df = input_df.drop(columns=[column for column in dropped_columns if column in input_df.columns], errors="ignore")
 
     required_columns = list(reference_X.columns)

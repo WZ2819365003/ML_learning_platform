@@ -236,6 +236,7 @@ export const tsApi = {
 
 export const platformTasksApi = {
   list:   (params = {}) => api.get('/platform/tasks/', { params }),
+  tree:   (params = {}) => api.get('/platform/tasks/tree', { params }),
   stats:  ()            => api.get('/platform/tasks/stats'),
   get:    (id)          => api.get(`/platform/tasks/${id}`),
   retry:  (id)          => api.post(`/platform/tasks/${id}/retry`),
@@ -279,6 +280,7 @@ export const modelingTaskApi = {
 
 export const platformRunsApi = {
   inspect: (runId, params = {}) => api.get(`/platform/runs/${runId}/inspector`, { params }),
+  shap: (runId) => api.get(`/platform/runs/${runId}/shap`),
 };
 
 // ── Dataset Versioning API ───────────────────────────────────────────────────
