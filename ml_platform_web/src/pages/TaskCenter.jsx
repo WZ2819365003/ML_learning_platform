@@ -18,7 +18,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Card, Col, Empty, message, Popconfirm, Progress,
+  Alert, Button, Card, Col, Empty, message, Popconfirm, Progress,
   Row, Select, Space, Statistic, Table, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 import {
@@ -352,6 +352,8 @@ function FlatView() {
   const [loading, setLoading] = useState(false)
   const [filterKind, setFilterKind] = useState(undefined)
   const [filterStatus, setFilterStatus] = useState(undefined)
+  const [selectedRowKeys, setSelectedRowKeys] = useState([])
+  const [batchRetrying, setBatchRetrying] = useState(false)
   const PAGE_SIZE = 20
 
   const fetchTasks = useCallback(async (p = 1) => {
@@ -403,6 +405,31 @@ function FlatView() {
       message.error(err?.response?.data?.detail || '删除失败')
     }
   }
+
+  // Batch retry — re-submit every selected FAILED / RETRY task in parallel.
+  // Rows in other statuses are disabled via getCheckboxProps so selection is safe.
+  const handleBatchRetry = async () => {
+    if (!selectedRowKeys.length) return
+    setBatchRetrying(true)
+    const results = await Promise.allSettled(
+      selectedRowKeys.map(id => platformTasksApi.retry(id)),
+    )
+    const ok   = results.filter(r => r.status === 'fulfilled').length
+    const fail = results.length - ok
+    if (ok)   message.success(`已重新提交 ${ok} 个任务`)
+    if (fail) message.error(`${fail} 个任务重试失败`)
+    setSelectedRowKeys([])
+    setBatchRetrying(false)
+    fetchTasks(page)
+  }
+
+  const retriableSelectedCount = useMemo(
+    () => tasks.filter(t =>
+      selectedRowKeys.includes(t.id) &&
+      ['FAILED', 'RETRY'].includes(t.status?.toUpperCase()),
+    ).length,
+    [tasks, selectedRowKeys],
+  )
 
   const columns = [
     { title: '任务 ID', dataIndex: 'id', width: 120,
@@ -457,13 +484,44 @@ function FlatView() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 12 }}>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="孤立任务视图"
+        description={
+          <span>
+            这里只显示<strong>未关联到建模任务</strong>的平台调度任务（例如独立的预测、SHAP 解释、数据预处理）。
+            训练类任务请到<strong>「建模任务视图」</strong>查看完整的 ModelingTask → 实验批次 → Run 层级。
+          </span>
+        }
+      />
+      <Space style={{ marginBottom: 12 }} wrap>
         <Select allowClear placeholder="任务类型" style={{ width: 120 }}
           value={filterKind} onChange={setFilterKind}
           options={Object.entries(KIND_LABELS).map(([k, v]) => ({ value: k, label: v }))} />
         <Select allowClear placeholder="状态筛选" style={{ width: 120 }}
           value={filterStatus} onChange={setFilterStatus}
           options={Object.entries(STATUS_CONFIG).map(([k, v]) => ({ value: k, label: v.label }))} />
+        <Popconfirm
+          title={`确认重试选中的 ${retriableSelectedCount} 个任务？`}
+          onConfirm={handleBatchRetry}
+          disabled={retriableSelectedCount === 0}
+        >
+          <Button
+            icon={<RedoOutlined />}
+            type="primary"
+            disabled={retriableSelectedCount === 0}
+            loading={batchRetrying}
+          >
+            批量重试 {retriableSelectedCount > 0 ? `(${retriableSelectedCount})` : ''}
+          </Button>
+        </Popconfirm>
+        {selectedRowKeys.length > 0 && (
+          <Button type="text" onClick={() => setSelectedRowKeys([])}>
+            清空选择
+          </Button>
+        )}
       </Space>
       <Table
         rowKey="id"
@@ -471,6 +529,13 @@ function FlatView() {
         columns={columns}
         loading={loading}
         size="small"
+        rowSelection={{
+          selectedRowKeys,
+          onChange: setSelectedRowKeys,
+          getCheckboxProps: (r) => ({
+            disabled: !['FAILED', 'RETRY'].includes(r.status?.toUpperCase()),
+          }),
+        }}
         pagination={{
           total, current: page, pageSize: PAGE_SIZE,
           onChange: fetchTasks,
