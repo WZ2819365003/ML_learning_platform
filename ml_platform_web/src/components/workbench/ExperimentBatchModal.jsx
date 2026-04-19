@@ -3,8 +3,8 @@ import {
   Modal, Form, Input, Select, Radio, InputNumber, Row, Col, Tabs, Tag,
   Space, Divider, Typography, Alert, Checkbox, message, Tooltip,
 } from 'antd'
-import { ThunderboltOutlined, NodeIndexOutlined, FunctionOutlined, InfoCircleOutlined } from '@ant-design/icons'
-import { modelingTaskApi } from '../../services/api'
+import { ThunderboltOutlined, NodeIndexOutlined, FunctionOutlined, InfoCircleOutlined, BookOutlined } from '@ant-design/icons'
+import { modelingTaskApi, trainingPlansApi } from '../../services/api'
 
 const { Text } = Typography
 
@@ -180,6 +180,8 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
   const strategy = Form.useWatch('strategy_type', form) || 'baseline'
   const selectedModels = Form.useWatch('selected_models', form) || []
   const [modelParams, setModelParams] = useState({})  // nested per-strategy params
+  const [plans, setPlans] = useState([])
+  const [appliedPlanId, setAppliedPlanId] = useState(null)
 
   // Reset state when modal opens / task changes
   useEffect(() => {
@@ -207,6 +209,37 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
       .catch(err => message.error('加载调参空间失败：' + (err?.response?.data?.detail || err.message)))
       .finally(() => setLoading(false))
   }, [open, task?.task_type])
+
+  // Load applicable training plans (filtered by task_type so regression plans
+  // don't pollute a classification task's picker).
+  useEffect(() => {
+    if (!open || !task?.task_type) { setPlans([]); return }
+    trainingPlansApi.list({ task_type: task.task_type, page_size: 50 })
+      .then(resp => setPlans(resp?.items || []))
+      .catch(() => setPlans([]))
+  }, [open, task?.task_type])
+
+  // Apply a plan by prefilling the form from its config.  This is best-effort:
+  // search_space overrides aren't re-hydrated into the per-model tuning UI
+  // (that would require replaying every Tab's state), but strategy + models +
+  // budget copy cleanly, which is the 80% benefit.
+  const applyPlan = (planId) => {
+    const plan = plans.find(p => p.id === planId)
+    setAppliedPlanId(planId || null)
+    if (!plan) return
+    form.setFieldsValue({
+      strategy_type: plan.strategy_type,
+      selected_models: plan.selected_models || [],
+      max_trials: plan.budget_config?.max_trials ?? 20,
+      cv_folds: plan.budget_config?.cv_folds ?? 5,
+      test_size: plan.budget_config?.test_size ?? 0.2,
+      n_trials_per_model: plan.budget_config?.n_trials_per_model ?? 10,
+    })
+    setModelParams({})
+    message.success(`已套用方案：${plan.name}`)
+    // Fire-and-forget usage bump
+    trainingPlansApi.markUsed(planId).catch(() => {})
+  }
 
   const modelOptions = useMemo(
     () => Object.keys(tuningSpaces).map(k => ({ value: k, label: k })),
@@ -303,6 +336,37 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
         style={{ marginBottom: 12 }}
         message={<Space><strong>{strategyMeta?.label}</strong><Text type="secondary" style={{ fontSize: 12 }}>{strategyMeta?.description}</Text></Space>}
       />
+
+      {plans.length > 0 && (
+        <div style={{
+          marginBottom: 12, padding: '10px 12px', borderRadius: 6,
+          background: 'rgba(37,99,235,0.04)', border: '1px dashed rgba(37,99,235,0.25)',
+        }}>
+          <Space align="center" size={10} style={{ width: '100%' }}>
+            <BookOutlined style={{ color: '#2563eb' }} />
+            <Text style={{ fontSize: 12, color: '#475569' }}>从已保存方案快速套用：</Text>
+            <Select
+              placeholder="选择方案（覆盖策略 · 模型 · 预算）"
+              style={{ flex: 1, minWidth: 260 }}
+              allowClear
+              value={appliedPlanId}
+              onChange={applyPlan}
+              options={plans.map(p => ({
+                value: p.id,
+                label: (
+                  <Space>
+                    <span style={{ fontWeight: 500 }}>{p.name}</span>
+                    <Tag color="blue" style={{ fontSize: 10 }}>{p.strategy_type}</Tag>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      {(p.selected_models || []).length} 个模型
+                    </Text>
+                  </Space>
+                ),
+              }))}
+            />
+          </Space>
+        </div>
+      )}
 
       <Form form={form} layout="vertical" size="middle">
         <Row gutter={12}>

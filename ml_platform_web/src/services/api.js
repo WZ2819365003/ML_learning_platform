@@ -283,6 +283,17 @@ export const platformRunsApi = {
   shap: (runId) => api.get(`/platform/runs/${runId}/shap`),
 };
 
+// ── Training Plans (reusable templates) ──────────────────────────────────────
+
+export const trainingPlansApi = {
+  list: (params = {}) => api.get('/platform/training-plans', { params }),
+  get: (id) => api.get(`/platform/training-plans/${id}`),
+  create: (data) => api.post('/platform/training-plans', data),
+  update: (id, data) => api.patch(`/platform/training-plans/${id}`, data),
+  remove: (id) => api.delete(`/platform/training-plans/${id}`),
+  markUsed: (id) => api.post(`/platform/training-plans/${id}/mark-used`),
+};
+
 // ── Dataset Versioning API ───────────────────────────────────────────────────
 
 export const dataVersionsApi = {

@@ -727,6 +727,71 @@ class ExperimentRun(Base):
 
 
 # ---------------------------------------------------------------------------
+# Training Plan — reusable template of (strategy, models, space, budget)
+# ---------------------------------------------------------------------------
+
+class TrainingPlan(Base):
+    """
+    A named, reusable training configuration that can be applied to any
+    ModelingTask.  Think of it as a "recipe":
+
+      name          = "Baseline XGB + LogReg 快速筛选"
+      task_type     = "classification"
+      strategy_type = "baseline"
+      selected_models = ["xgboost", "logistic_regression"]
+      search_space  = { model_type: { param: override } }
+      budget_config = { max_trials: 20, test_size: 0.2 }
+      eval_metrics  = ["accuracy", "f1", "roc_auc"]
+
+    When the user creates a new experiment batch on a ModelingTask they can
+    pick a plan and have the batch-config form pre-filled.  The plan itself
+    has no binding to a dataset — it's the strategic shape of the training,
+    reusable across datasets.
+    """
+    __tablename__ = "training_plans"
+    __table_args__ = (
+        Index("ix_training_plans_task_type", "task_type"),
+        Index("ix_training_plans_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False, default="classification")
+    strategy_type: Mapped[str] = mapped_column(String(32), nullable=False, default="baseline")
+    # 'baseline' | 'grid_search' | 'bayesian_search'
+
+    selected_models: Mapped[list | None] = mapped_column(JSON, default=None)
+    # list of model_type tokens that must exist in the tuning_spaces registry
+
+    search_space: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # per-model overrides: { "xgboost": { "max_depth": {...override...} } }
+
+    budget_config: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # { "max_trials": 20, "test_size": 0.2, "cv_folds": 5, "timeout_minutes": 60 }
+
+    eval_metrics: Mapped[list | None] = mapped_column(JSON, default=None)
+    default_objective_metric: Mapped[str | None] = mapped_column(String(64), default=None)
+    default_objective_direction: Mapped[str | None] = mapped_column(String(8), default=None)
+
+    # Usage bookkeeping (helpful for sorting most-used in the picker)
+    use_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<TrainingPlan id={self.id!r} name={self.name!r} "
+            f"task_type={self.task_type!r} strategy_type={self.strategy_type!r}>"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Dependency injection helper
 # ---------------------------------------------------------------------------
 

@@ -22,6 +22,7 @@ import Experiments from './pages/Experiments'
 import ExperimentRedirect from './pages/ExperimentRedirect'
 import ModelingTasks from './pages/ModelingTasks'
 import ModelingTaskDetail from './pages/ModelingTaskDetail'
+import TrainingPlans from './pages/TrainingPlans'
 
 const { Content } = Layout
 
@@ -100,6 +101,7 @@ function App() {
               {/* V3 Modeling Workbench — new task-centric workflow */}
               <Route path="/v3/tasks" element={<ModelingTasks />} />
               <Route path="/v3/tasks/:taskId" element={<ModelingTaskDetail />} />
+              <Route path="/v3/training-plans" element={<TrainingPlans />} />
               <Route path="/v3" element={<Navigate to="/v3/tasks" replace />} />
             </Routes>
           </Content>
