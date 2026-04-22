@@ -6,6 +6,7 @@ import {
 import {
   CheckCircleFilled, CloseCircleFilled, ClockCircleFilled,
   DatabaseOutlined, ExperimentOutlined, LineChartOutlined,
+  InfoCircleOutlined,
 } from '@ant-design/icons'
 import { platformRunsApi } from '../../services/api'
 import LogViewer from './LogViewer'
@@ -67,10 +68,17 @@ function ParamsTable({ params }) {
   )
 }
 
-export default function RunInspector({ open, runId, onClose }) {
+export default function RunInspector({ open, runId, onClose, defaultTab = 'overview' }) {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
+  const [activeTab, setActiveTab] = useState(defaultTab)
+
+  // Reset activeTab whenever caller opens the drawer with a different
+  // preferred landing tab (e.g. 表格"查看"按钮直达 SHAP 解释).
+  useEffect(() => {
+    if (open) setActiveTab(defaultTab)
+  }, [open, defaultTab, runId])
 
   useEffect(() => {
     if (!open || !runId) return
@@ -112,7 +120,8 @@ export default function RunInspector({ open, runId, onClose }) {
 
         {!loading && !error && data && (
           <Tabs
-            defaultActiveKey="overview"
+            activeKey={activeTab}
+            onChange={setActiveTab}
             items={[
               // ── Overview ──
               {
@@ -120,6 +129,64 @@ export default function RunInspector({ open, runId, onClose }) {
                 label: '概览',
                 children: (
                   <Space direction="vertical" size={14} style={{ width: '100%' }}>
+                    {/* Plain-language "Run story" — stitches together who, what,
+                        when, how well, so the user doesn't have to eyeball the
+                        Descriptions grid to understand what just happened. */}
+                    {run && (() => {
+                      const objective = exp?.objective_metric
+                      const objVal = objective && run.metrics ? run.metrics[objective] : undefined
+                      const strategy = exp?.strategy_type || exp?.source_experiment_type || '未知策略'
+                      const statusCN = {
+                        SUCCESS: '成功完成',
+                        FAILED: '失败',
+                        RUNNING: '正在运行',
+                        PENDING: '等待调度',
+                        QUEUED: '已入队',
+                        CANCELED: '已取消',
+                      }[run.status] || run.status
+                      let duration = null
+                      if (ptask?.started_at && ptask?.finished_at) {
+                        const dur = (new Date(ptask.finished_at) - new Date(ptask.started_at)) / 1000
+                        if (dur >= 0) duration = dur < 60 ? `${dur.toFixed(1)} 秒` : `${(dur / 60).toFixed(1)} 分`
+                      }
+                      return (
+                        <Alert
+                          type={run.status === 'SUCCESS' ? 'success' : run.status === 'FAILED' ? 'error' : 'info'}
+                          showIcon
+                          message={
+                            <span>
+                              Trial #{run.trial_no ?? '?'} · {ttask?.model_type || '模型'}
+                              {run.rank === 1 && <Tag color="gold" style={{ marginLeft: 8 }}>🏆 Top-1</Tag>}
+                            </span>
+                          }
+                          description={
+                            <div style={{ fontSize: 13 }}>
+                              本次 Run 在实验
+                              <code style={{ margin: '0 4px', color: '#2563eb' }}>{exp?.name || '未命名'}</code>
+                              下以
+                              <Tag color="blue" style={{ margin: '0 4px' }}>{strategy}</Tag>
+                              策略
+                              <Text strong style={{ color: run.status === 'SUCCESS' ? '#16a34a' : run.status === 'FAILED' ? '#dc2626' : '#2563eb' }}>
+                                {statusCN}
+                              </Text>
+                              {objVal != null && (
+                                <span>
+                                  ，<code>{objective}</code> = <code style={{ color: '#2563eb' }}>
+                                    {typeof objVal === 'number' ? objVal.toFixed(4) : String(objVal)}
+                                  </code>
+                                  （{exp?.objective_direction === 'min' ? '越低越好' : '越高越好'}）
+                                </span>
+                              )}
+                              {duration && <span>；耗时 <code>{duration}</code></span>}
+                              {ttask?.target_column && <span>；目标列 <code>{ttask.target_column}</code></span>}
+                              {ds?.name && <span>；数据集 <code>{ds.name}</code>（{ds.row_count ?? '?'} 行 × {ds.column_count ?? '?'} 列）</span>}
+                              。
+                            </div>
+                          }
+                        />
+                      )
+                    })()}
+
                     <Descriptions size="small" column={2} bordered
                       labelStyle={{ background: '#f8fafc', width: 110 }}>
                       <Descriptions.Item label="Trial 号">{run?.trial_no ?? '-'}</Descriptions.Item>
@@ -128,8 +195,16 @@ export default function RunInspector({ open, runId, onClose }) {
                       <Descriptions.Item label="策略">
                         <Tag color="blue">{exp?.strategy_type || exp?.source_experiment_type || '-'}</Tag>
                       </Descriptions.Item>
-                      <Descriptions.Item label="优化指标">{exp?.objective_metric}</Descriptions.Item>
-                      <Descriptions.Item label="方向">{exp?.objective_direction}</Descriptions.Item>
+                      <Descriptions.Item label={
+                        <Tooltip title="本次实验用于挑选最优 Run 的指标；Run 的 metrics 里对应的值就是它的 'score'。">
+                          <span>优化指标 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+                        </Tooltip>
+                      }>{exp?.objective_metric}</Descriptions.Item>
+                      <Descriptions.Item label={
+                        <Tooltip title="max = 越大越好（accuracy/f1/r2 等）；min = 越小越好（rmse/mae 等）。">
+                          <span>方向 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+                        </Tooltip>
+                      }>{exp?.objective_direction}</Descriptions.Item>
                       <Descriptions.Item label="开始时间">
                         {ptask?.started_at ? new Date(ptask.started_at).toLocaleString('zh-CN', { hour12: false }) : '-'}
                       </Descriptions.Item>

@@ -300,6 +300,14 @@ function HierarchicalView({ onInspect, filterStatus, setFilterStatus }) {
             {new Date(v).toLocaleString('zh-CN', { hour12: false })}
           </Text>
         : '—' },
+    {
+      title: '操作', key: 'actions', width: 110, fixed: 'right',
+      render: (_, r) => (
+        <Link to={`/v3/tasks/${r.id}`}>
+          <Button size="small" type="link" icon={<EyeOutlined />}>查看详情</Button>
+        </Link>
+      ),
+    },
   ]
 
   const expandedRowRender = (record) => {

@@ -360,6 +360,38 @@ export default function ShapView({ runId, initialSummary, experimentId, runStatu
   const sampleSize = payload.sample_size
   const featureCount = payload.feature_count ?? featureNames.length
 
+  // Narrative summary: synthesises a short Chinese paragraph interpreting the
+  // top-3 features. We can only determine direction (推高/拉低) from per-sample
+  // SHAP values (where `hasSamples`); otherwise we fall back to magnitude-only
+  // language. This addresses the v3.1.2 UX complaint that SHAP only showed a
+  // chart without any explanatory text.
+  const narrative = useMemo(() => {
+    const top3 = toTopN(importances, 3)
+    if (top3.length === 0) return null
+    const parts = top3.map(([feature, absImp], rank) => {
+      let direction = null
+      if (hasSamples) {
+        const fi = featureNames.indexOf(feature)
+        if (fi >= 0 && samples?.shap_values) {
+          // Average signed SHAP for this feature across samples.
+          let sum = 0, n = 0
+          for (const row of samples.shap_values) {
+            const v = row[fi]
+            if (typeof v === 'number' && !Number.isNaN(v)) { sum += v; n += 1 }
+          }
+          if (n > 0) {
+            const mean = sum / n
+            if (Math.abs(mean) > 1e-6) direction = mean > 0 ? '推高' : '拉低'
+          }
+        }
+      }
+      return {
+        feature, absImp, direction, rank: rank + 1,
+      }
+    })
+    return parts
+  }, [importances, hasSamples, samples, featureNames])
+
   return (
     <div>
       <Space wrap style={{ marginBottom: 12 }}>
@@ -375,6 +407,45 @@ export default function ShapView({ runId, initialSummary, experimentId, runStatu
           <Tag color="warning">仅聚合重要度（无 per-sample，Beeswarm/依赖不可用）</Tag>
         )}
       </Space>
+
+      {narrative && narrative.length > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="模型解释速览"
+          description={
+            <div>
+              <div style={{ marginBottom: 6, fontSize: 13, color: '#0f172a' }}>
+                对该模型预测结果影响最大的 Top-{narrative.length} 特征：
+              </div>
+              <ol style={{ margin: '0 0 6px 18px', padding: 0, fontSize: 13, lineHeight: 1.9 }}>
+                {narrative.map(({ feature, absImp, direction, rank }) => (
+                  <li key={feature}>
+                    <code style={{ color: '#2563eb' }}>{feature}</code>
+                    <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
+                      mean(|SHAP|)={absImp.toFixed(4)}
+                    </Text>
+                    {direction && (
+                      <Tag
+                        color={direction === '推高' ? 'red' : 'blue'}
+                        style={{ marginLeft: 6, fontSize: 11 }}
+                      >
+                        平均{direction}预测值
+                      </Tag>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {hasSamples
+                  ? '方向来自对每个样本 SHAP 值的平均：正 = 该特征平均推高模型输出；负 = 平均拉低。'
+                  : '当前仅聚合重要度可用，无法推断方向；下方条形图按 mean(|SHAP|) 排序。'}
+              </Text>
+            </div>
+          }
+        />
+      )}
 
       <Segmented
         size="small"

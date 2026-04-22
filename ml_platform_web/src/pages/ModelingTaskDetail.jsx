@@ -59,6 +59,14 @@ export default function ModelingTaskDetail() {
   // Modals
   const [batchOpen, setBatchOpen] = useState(false)
   const [inspectorRunId, setInspectorRunId] = useState(null)
+  const [inspectorTab, setInspectorTab] = useState('overview')
+
+  // Open the run inspector on a specific tab (overview for baseline click,
+  // 'shap' when the user asks for explanation from the Runs 表格).
+  const openInspector = useCallback((runId, tab = 'overview') => {
+    setInspectorRunId(runId)
+    setInspectorTab(tab)
+  }, [])
 
   const loadTask = useCallback(async () => {
     setLoading(true)
@@ -104,7 +112,7 @@ export default function ModelingTaskDetail() {
   useEffect(() => { loadLeaderboard() }, [loadLeaderboard])
   useEffect(() => { loadRuns() }, [loadRuns])
   useEffect(() => {
-    if (activeTab === 'runs' || activeTab === 'explain') {
+    if (activeTab === 'runs') {
       loadLeaderboard()
       loadRuns()
     }
@@ -120,7 +128,7 @@ export default function ModelingTaskDetail() {
   const refreshAll = async () => {
     await loadTask()
     await loadRuns()
-    if (activeTab === 'runs' || activeTab === 'explain') await loadLeaderboard()
+    if (activeTab === 'runs') await loadLeaderboard()
   }
 
   if (loading && !task) {
@@ -186,7 +194,7 @@ export default function ModelingTaskDetail() {
                   实验：{bestRun?.experiment_name || task.best_experiment_id?.slice(0, 8)}
                 </Text>
                 <Button size="small" type="primary" ghost block
-                  onClick={() => setInspectorRunId(task.best_run_id)}>
+                  onClick={() => openInspector(task.best_run_id, 'overview')}>
                   查看最佳 Run 详情
                 </Button>
               </Space>
@@ -401,9 +409,19 @@ export default function ModelingTaskDetail() {
       render: (v) => v ? new Date(v).toLocaleString('zh-CN', { hour12: false }) : '-',
     },
     {
-      title: '操作', key: 'actions', width: 80,
+      title: '操作', key: 'actions', width: 150,
       render: (_, row) => (
-        <Button size="small" type="link" onClick={() => setInspectorRunId(row.run_id)}>详情</Button>
+        <Space size={2}>
+          <Button size="small" type="link" onClick={(e) => { e.stopPropagation(); openInspector(row.run_id, 'overview') }}>
+            详情
+          </Button>
+          <Tooltip title="直接打开该 Run 的 SHAP 解释">
+            <Button size="small" type="link" icon={<BulbOutlined />}
+              onClick={(e) => { e.stopPropagation(); openInspector(row.run_id, 'shap') }}>
+              解释
+            </Button>
+          </Tooltip>
+        </Space>
       ),
     },
   ]
@@ -434,48 +452,13 @@ export default function ModelingTaskDetail() {
           style: { padding: '10px 14px', margin: 0 },
         } : false}
         onRow={(row) => ({
-          onClick: () => setInspectorRunId(row.run_id),
+          onClick: () => openInspector(row.run_id, 'overview'),
           style: { cursor: 'pointer' },
         })}
         locale={{ emptyText: <div style={{ padding: 24 }}>
           <Empty description="还没有 Run" />
         </div> }}
       />
-    </Card>
-  )
-
-  // ── Tab: Explain (top-3 runs SHAP) ───────────────────────────────────────
-  const topRuns = leaderboard.slice(0, 3)
-  const explainTab = (
-    <Card size="small" bodyStyle={{ padding: 14 }}>
-      {topRuns.length === 0 ? (
-        <Empty description="暂无可解释的 Run" />
-      ) : (
-        <Row gutter={[12, 12]}>
-          {topRuns.map((r) => (
-            <Col key={r.run_id} span={8}>
-              <Card size="small" hoverable
-                onClick={() => setInspectorRunId(r.run_id)}
-                title={<Space>
-                  {r.rank === 1 ? <TrophyOutlined style={{ color: '#f59e0b' }} /> : null}
-                  <span>Rank #{r.rank}</span>
-                </Space>}
-                extra={<Text code style={{ color: '#2563eb' }}>{fmt(r.objective_value)}</Text>}
-              >
-                <Text type="secondary" style={{ fontSize: 12 }}>{r.experiment_name}</Text>
-                <div style={{ marginTop: 6 }}>
-                  <Tag color={STRATEGY_COLOR[r.strategy_type]}>{r.strategy_type}</Tag>
-                  <Tag>trial #{r.trial_no}</Tag>
-                </div>
-                <Button size="small" type="primary" ghost block style={{ marginTop: 12 }}
-                  icon={<BulbOutlined />}>
-                  查看 SHAP 解释 →
-                </Button>
-              </Card>
-            </Col>
-          ))}
-        </Row>
-      )}
     </Card>
   )
 
@@ -525,7 +508,6 @@ export default function ModelingTaskDetail() {
             { key: 'overview',    label: <span><ExperimentOutlined /> 任务概览</span>, children: overviewTab },
             { key: 'experiments', label: <span><NodeIndexOutlined /> 实验编排 ({experiments.length})</span>, children: experimentsTab },
             { key: 'runs',        label: <span><LineChartOutlined /> Run 对比 ({runStats.total || 0})</span>, children: runsTab },
-            { key: 'explain',     label: <span><BulbOutlined /> 模型解释</span>, children: explainTab },
           ]}
         />
       </Card>
@@ -544,6 +526,7 @@ export default function ModelingTaskDetail() {
       <RunInspector
         open={!!inspectorRunId}
         runId={inspectorRunId}
+        defaultTab={inspectorTab}
         onClose={() => setInspectorRunId(null)}
       />
     </div>
