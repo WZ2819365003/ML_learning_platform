@@ -173,7 +173,7 @@ export default function ModelDeploy() {
   const [tester, setTester] = useState({
     ml: { input: '[\n  {}\n]',  result: null, loading: false, prepared: false },
     dl: { input: '[\n  {}\n]',  result: null, loading: false, prepared: false },
-    ts: { input: '{\n  "dataset_id": "",\n  "value_column": "",\n  "time_column": null,\n  "horizon": 24,\n  "frequency": "high"\n}',
+    ts: { input: '{\n  "dataset_id": "",\n  "value_column": "",\n  "time_column": null,\n  "horizon": 24,\n  "frequency": "D"\n}',
           result: null, loading: false, prepared: false },
   })
 
@@ -258,19 +258,47 @@ export default function ModelDeploy() {
       }
       if (kind === 'ts') {
         // 动态从第一个数据集组装 payload
+        // 时序预测需要：
+        //   time_column  — datetime dtype 或名字含 time/date/timestamp/ds
+        //   value_column — 数值型（int/float）且 unique_rate < 0.9（过滤 UDI 这种 ID）
+        //   frequency    — 默认 'D'，让用户自己按需改成 H/T/M/Q/Y
         const dsRes = await dataApi.listDatasets({ page: 1, page_size: 20 })
         const datasets = dsRes.items ?? dsRes.datasets ?? []
         if (datasets.length === 0) return
         const ds = datasets[0]
-        let valueCol = 'value'
+        let valueCol = null
         let timeCol  = null
         try {
           const preview = await dataApi.previewDataset(ds.id)
-          const cols = preview?.rows?.[0] ? Object.keys(preview.rows[0]) : []
-          timeCol  = cols.find(c => ['date','time','datetime','timestamp'].includes(c.toLowerCase())) ?? null
-          valueCol = cols.find(c => c !== timeCol) ?? cols[0] ?? valueCol
-        } catch { /* 列推断失败，用默认值 */ }
-        const payload = { dataset_id: ds.id, value_column: valueCol, time_column: timeCol, horizon: 24, frequency: 'high' }
+          const colsInfo = preview?.columns_info ?? {}
+          const stats    = preview?.statistics ?? {}
+          const rowCount = preview?.row_count || ds.row_count || 0
+          const cols     = Object.keys(colsInfo)
+
+          const isDatetime = (name) => {
+            const dt = String(colsInfo[name]?.dtype ?? '').toLowerCase()
+            if (dt.startsWith('datetime') || dt.includes('date')) return true
+            return ['time','date','datetime','timestamp','ds'].includes(name.toLowerCase())
+          }
+          const isNumericNonId = (name) => {
+            const dt = String(colsInfo[name]?.dtype ?? '').toLowerCase()
+            const numeric = dt.startsWith('int') || dt.startsWith('float') || dt.startsWith('uint')
+            if (!numeric) return false
+            const unique = Number(stats[name]?.unique_count ?? 0)
+            const rate   = rowCount > 0 ? unique / rowCount : 0
+            return rate < 0.9  // ID-like columns (UDI etc.) are filtered out
+          }
+
+          timeCol  = cols.find(isDatetime) ?? null
+          valueCol = cols.find(c => c !== timeCol && isNumericNonId(c)) ?? null
+        } catch { /* 列推断失败，留给用户手工编辑 JSON */ }
+        const payload = {
+          dataset_id: ds.id,
+          value_column: valueCol ?? '',
+          time_column: timeCol,
+          horizon: 24,
+          frequency: 'D',
+        }
         setTester(s => ({ ...s, ts: { ...s.ts, input: JSON.stringify(payload, null, 2), prepared: true } }))
       }
     } catch { /* silent */ }
@@ -641,7 +669,7 @@ export default function ModelDeploy() {
                       type="info" showIcon message="在线测试说明"
                       description={
                         drawer.kind === 'ts'
-                          ? 'TimesFM 请求需要 dataset_id（已从你的数据集中自动填入第一条）、value_column、time_column、horizon、frequency。'
+                          ? 'TimesFM 请求需要 dataset_id（已自动填入第一条）、value_column（已按数值型 + 唯一率<90% 过滤，跳过 UDI 等 ID 列）、time_column（已按 datetime dtype 或 time/date/timestamp/ds 命名推断）、horizon、frequency（pandas 偏移码：D/H/T/S/M/Q/Y/W）。'
                           : 'ML / DL 请求已根据训练数据集自动预填第一行样本（已删除目标列），可直接点发送。'
                       }
                     />

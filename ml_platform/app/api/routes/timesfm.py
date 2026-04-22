@@ -34,7 +34,10 @@ class ForecastStartRequest(BaseModel):
     value_column: str
     time_column: str | None = None
     horizon: int = Field(default=24, ge=1, le=512)
-    frequency: str = Field(default="high", pattern="^(high|medium|low)$")
+    # Accepts canonical pandas offset codes (D / H / T / S / M / Q / Y / W) and
+    # retains the legacy sampling-strategy tokens (high|medium|low) for
+    # backwards compatibility with pre-3.1.2 deployments.
+    frequency: str = Field(default="D", pattern="^(D|H|T|S|M|Q|Y|W|high|medium|low)$")
     model_name: str = Field(default="amazon/chronos-t5-small")
 
 
@@ -44,7 +47,10 @@ class TimeSeriesTaskCreateRequest(BaseModel):
     value_column: str
     time_column: str | None = None
     horizon: int = Field(default=24, ge=1, le=512)
-    frequency: str = Field(default="high", pattern="^(high|medium|low)$")
+    # Accepts canonical pandas offset codes (D / H / T / S / M / Q / Y / W) and
+    # retains the legacy sampling-strategy tokens (high|medium|low) for
+    # backwards compatibility with pre-3.1.2 deployments.
+    frequency: str = Field(default="D", pattern="^(D|H|T|S|M|Q|Y|W|high|medium|low)$")
 
 
 class TimeSeriesDeploymentCreateRequest(BaseModel):
@@ -59,7 +65,10 @@ class TimeSeriesDeploymentPredictRequest(BaseModel):
     value_column: str
     time_column: str | None = None
     horizon: int = Field(default=24, ge=1, le=512)
-    frequency: str = Field(default="high", pattern="^(high|medium|low)$")
+    # Accepts canonical pandas offset codes (D / H / T / S / M / Q / Y / W) and
+    # retains the legacy sampling-strategy tokens (high|medium|low) for
+    # backwards compatibility with pre-3.1.2 deployments.
+    frequency: str = Field(default="D", pattern="^(D|H|T|S|M|Q|Y|W|high|medium|low)$")
 
 
 @router.get("/model/status")
