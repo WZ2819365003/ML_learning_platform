@@ -40,11 +40,17 @@ function formatMetricValue(key, value) {
   return String(value);
 }
 
-// Scalar-only metric keys to display as Statistic cards
+// Scalar-only metric keys to display as Statistic cards.
+// Order matters — the most task-relevant metrics go first (train/val loss
+// are universal, then regression error metrics before classification
+// accuracy/F1, because the next filter step drops non-matching keys anyway).
 const SCALAR_METRIC_DISPLAY_ORDER = [
-  'best_val_loss', 'val_acc', 'val_f1_macro', 'val_f1_weighted',
-  'val_precision', 'val_recall', 'val_auc_roc',
+  'best_val_loss',
+  // Regression core (RMSE / MAE / R² / MAPE)
   'val_rmse', 'val_mae', 'val_r2', 'val_mape',
+  // Classification headline metrics
+  'val_acc', 'val_f1_macro', 'val_f1_weighted',
+  'val_precision', 'val_recall', 'val_auc_roc',
   'final_epoch',
 ];
 
@@ -65,30 +71,44 @@ function buildHistoryOption(history) {
 
 function buildMetricHistoryOption(history, taskType) {
   const epochs = history.map(d => d.epoch ?? d.step ?? '');
-  const isClassification = taskType === 'classification'
-    || history.some(d => d.val_acc != null);
-
-  if (isClassification) {
-    return {
-      tooltip: { trigger: 'axis' },
-      legend: { data: ['val_acc', 'val_f1_macro'] },
-      xAxis: { type: 'category', data: epochs, name: 'Epoch' },
-      yAxis: { type: 'value', name: '指标', min: 0, max: 1 },
-      series: [
-        { name: 'val_acc',      type: 'line', smooth: true, data: history.map(d => d.val_acc      ?? null) },
-        { name: 'val_f1_macro', type: 'line', smooth: true, data: history.map(d => d.val_f1_macro ?? null) },
-      ],
-    };
+  // Resolve effective type: trust backend first, else sniff from data (acc
+  // implies classification, rmse/mae implies regression). This keeps the
+  // legend honest and stops us from drawing a flat "val_f1_macro" line on
+  // regression runs (the old bug).
+  let kind = taskType;
+  if (!kind || kind === 'auto') {
+    kind = history.some(d => d.val_rmse != null || d.val_mae != null) ? 'regression' : 'classification';
   }
+
+  // Pick only the series whose key is actually populated — avoids phantom
+  // zero/null lines cluttering the chart.
+  const candidates = kind === 'regression'
+    ? [
+        { key: 'val_rmse', name: 'val_rmse' },
+        { key: 'val_mae',  name: 'val_mae'  },
+        { key: 'val_r2',   name: 'val_r2'   },
+      ]
+    : [
+        { key: 'val_acc',      name: 'val_acc' },
+        { key: 'val_f1_macro', name: 'val_f1' },  // omitted if all-null below
+      ];
+  const series = candidates
+    .filter(c => history.some(d => d[c.key] != null))
+    .map(c => ({
+      name: c.name, type: 'line', smooth: true,
+      data: history.map(d => d[c.key] ?? null),
+    }));
+
   return {
     tooltip: { trigger: 'axis' },
-    legend: { data: ['val_rmse', 'val_mae'] },
+    legend: { data: series.map(s => s.name) },
     xAxis: { type: 'category', data: epochs, name: 'Epoch' },
-    yAxis: { type: 'value', name: '误差' },
-    series: [
-      { name: 'val_rmse', type: 'line', smooth: true, data: history.map(d => d.val_rmse ?? null) },
-      { name: 'val_mae',  type: 'line', smooth: true, data: history.map(d => d.val_mae  ?? null) },
-    ],
+    yAxis: {
+      type: 'value',
+      name: kind === 'regression' ? '误差' : '指标',
+      ...(kind === 'regression' ? {} : { min: 0, max: 1 }),
+    },
+    series,
   };
 }
 

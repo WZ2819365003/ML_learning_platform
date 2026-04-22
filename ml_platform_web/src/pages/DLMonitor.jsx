@@ -168,21 +168,40 @@ function buildMetricOption(lossHistory, taskType) {
   };
 }
 
-const epochColumns = [
-  { title: 'Epoch',      dataIndex: 'epoch',      key: 'epoch',      width: 70 },
-  { title: 'Train Loss', dataIndex: 'train_loss', key: 'train_loss', render: v => v != null ? v.toFixed(6) : '-' },
-  { title: 'Val Loss',   dataIndex: 'val_loss',   key: 'val_loss',   render: v => v != null ? v.toFixed(6) : '-' },
-  {
-    title: 'Val Acc / RMSE', key: 'val_metric',
-    render: (_, row) => row.val_acc != null ? row.val_acc.toFixed(4)
-                      : row.val_rmse != null ? row.val_rmse.toFixed(4) : '-',
-  },
-  {
-    title: 'Val F1', key: 'val_f1',
-    render: (_, row) => row.val_f1_macro != null ? row.val_f1_macro.toFixed(4) : '-',
-  },
-  { title: 'LR', dataIndex: 'lr', key: 'lr', render: v => v != null ? v.toExponential(3) : '-', width: 100 },
-];
+// Task-type-aware epoch table columns.
+// Classification: focus on val_loss + val_acc (F1 is noisy on binary tasks;
+// only shown when ≥3 classes and data actually contains it).
+// Regression: replace accuracy/F1 with RMSE + MAE, which are the real
+// optimization targets for regression runs.
+function buildEpochColumns(taskType, rows = []) {
+  const cols = [
+    { title: 'Epoch',      dataIndex: 'epoch',      key: 'epoch',      width: 70 },
+    { title: 'Train Loss', dataIndex: 'train_loss', key: 'train_loss', width: 120, render: v => v != null ? v.toFixed(6) : '-' },
+    { title: 'Val Loss',   dataIndex: 'val_loss',   key: 'val_loss',   width: 120, render: v => v != null ? v.toFixed(6) : '-' },
+  ];
+  // Resolve effective task type when backend said 'auto'.
+  let kind = taskType;
+  if (!kind || kind === 'auto') {
+    kind = rows.some(r => r.val_rmse != null || r.val_mae != null) ? 'regression' : 'classification';
+  }
+  if (kind === 'regression') {
+    cols.push(
+      { title: 'Val RMSE', dataIndex: 'val_rmse', key: 'val_rmse', width: 110, render: v => v != null ? v.toFixed(4) : '-' },
+      { title: 'Val MAE',  dataIndex: 'val_mae',  key: 'val_mae',  width: 110, render: v => v != null ? v.toFixed(4) : '-' },
+    );
+  } else {
+    cols.push({ title: 'Val Acc', dataIndex: 'val_acc', key: 'val_acc', width: 110, render: v => v != null ? v.toFixed(4) : '-' });
+    // Only surface F1 when it's actually populated AND multiclass (>2 classes
+    // makes F1 more informative than accuracy). Binary F1 ≈ accuracy, so we
+    // hide it by default to reduce noise.
+    const hasInformativeF1 = rows.some(r => r.val_f1_macro != null && r.val_f1_macro > 0);
+    if (hasInformativeF1) {
+      cols.push({ title: 'Val F1', dataIndex: 'val_f1_macro', key: 'val_f1', width: 110, render: v => v != null ? v.toFixed(4) : '-' });
+    }
+  }
+  cols.push({ title: 'LR', dataIndex: 'lr', key: 'lr', width: 100, render: v => v != null ? v.toExponential(3) : '-' });
+  return cols;
+}
 
 function formatLogExtra(extra) {
   if (!extra) {
@@ -617,14 +636,21 @@ function DLTaskDetailView({ taskId, navigate }) {
       )}
 
       {lossHistory.length > 0 && (
-        <Card title={`Epoch 记录（共 ${lossHistory.length} 条）`} style={{ marginBottom: 24 }}>
+        <Card
+          title={`Epoch 记录（共 ${lossHistory.length} 条）`}
+          style={{ marginBottom: 24 }}
+          // Cap the Card body so it stops growing with rows — the Table below
+          // handles its own vertical scroll. Previously the outer Card expanded
+          // and pushed the log panel off-screen while training was running.
+          styles={{ body: { maxHeight: 560, overflow: 'hidden', padding: 16 } }}
+        >
           <Table
             rowKey="key"
             dataSource={pagedEpochData}
-            columns={epochColumns}
+            columns={buildEpochColumns(taskType, lossHistory)}
             pagination={false}
             size="small"
-            scroll={{ y: 420, x: 960 }}
+            scroll={{ y: 440, x: 900 }}
           />
           <div style={{ marginTop: 12, textAlign: 'right' }}>
             <Pagination
