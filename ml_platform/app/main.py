@@ -89,6 +89,12 @@ def _build_columns_info(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
             "dtype": str(df[col].dtype),
             "missing_count": int(df[col].isna().sum()),
             "missing_rate": round(df[col].isna().sum() / total, 4) if total else 0.0,
+            "unique_count": int(df[col].nunique(dropna=True)),
+            "unique_rate": round(df[col].nunique(dropna=True) / total, 4) if total else 0.0,
+            "min_class_count": (
+                int(df[col].value_counts(dropna=True).min())
+                if int(df[col].nunique(dropna=True)) > 0 else 0
+            ),
         }
         for col in df.columns
     }
@@ -142,6 +148,14 @@ async def lifespan(app: FastAPI):
     # Apply V3 workbench schema migrations (idempotent, safe to rerun)
     from app.core.migrations import run_startup_migrations
     await run_startup_migrations(async_engine)
+    # V3 Phase 2 — force-import services so their module-level
+    # ``register_executor`` calls populate the Scheduler registry before any
+    # task dispatch happens.  The router imports already cover training_service
+    # and dl_service, but explain_service is only imported lazily inside
+    # handlers — so pull it in explicitly here.
+    import app.services.training_service  # noqa: F401
+    import app.services.dl_service        # noqa: F401
+    import app.services.explain_service   # noqa: F401
     await _seed_tag_library()
     await _seed_example_datasets()
     await resume_unfinished_ts_tasks()
@@ -158,7 +172,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="ML Training Platform",
-        version="3.1.0",
+        version="3.1.1",
         lifespan=lifespan,
     )
 
@@ -194,7 +208,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["Health"])
     async def health_check():
-        return {"status": "ok", "version": "3.1.0"}
+        return {"status": "ok", "version": "3.1.1"}
 
     return app
 
