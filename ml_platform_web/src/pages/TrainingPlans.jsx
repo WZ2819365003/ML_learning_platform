@@ -14,13 +14,14 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Card, Table, Button, Space, Tag, Popconfirm, Drawer, Form, Input, Select,
+  Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select,
   Switch, InputNumber, Divider, message, Typography, Tooltip, Empty, Segmented,
-  Row, Col,
+  Row, Col, Collapse,
 } from 'antd'
 import {
   PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined,
   ThunderboltOutlined, InfoCircleOutlined, CopyOutlined,
+  CheckCircleOutlined, UndoOutlined,
 } from '@ant-design/icons'
 import { trainingPlansApi, modelingTaskApi, dlApi } from '../services/api'
 import DLConfigPanel from '../components/workbench/DLConfigPanel'
@@ -74,6 +75,120 @@ const _buildDefaultDLConfig = (modelSpec, optimizerParams, trainParams) => {
   }
 }
 
+/**
+ * MLParamsPanel — per-ML-model override editor.
+ *
+ * Shows every param in the registry's `fixed` dict as an editable Input row.
+ * Changes are written back to `search_space[modelId]` on the parent form,
+ * which is what `_expand_baseline` (tuning_service.py) consumes as the
+ * per-model override dict.
+ */
+function MLParamsPanel({ modelId, meta, value, onChange }) {
+  const defaults = meta?.fixed || {}
+  const searchSpace = meta?.search_space || {}
+  const merged = { ...defaults, ...(value || {}) }
+  const paramKeys = Object.keys(defaults)
+
+  const handleFieldChange = (k, v) => {
+    // Coerce numeric strings back to numbers so payload matches registry dtype.
+    let coerced = v
+    if (typeof defaults[k] === 'number') {
+      const n = Number(v)
+      coerced = Number.isFinite(n) ? n : v
+    } else if (typeof defaults[k] === 'boolean') {
+      coerced = !!v
+    }
+    onChange?.({ ...(value || {}), [k]: coerced })
+  }
+
+  const handleReset = () => {
+    onChange?.({})
+    message.success(`已恢复 ${modelId} 的默认参数`)
+  }
+
+  const handleApply = () => {
+    message.success(`${modelId} 参数已应用`)
+  }
+
+  if (paramKeys.length === 0) {
+    return (
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        此模型无可编辑的 fixed 参数，使用注册表默认值。
+      </Text>
+    )
+  }
+
+  return (
+    <div>
+      <Row gutter={[12, 8]}>
+        {paramKeys.map(k => {
+          const defaultVal = defaults[k]
+          const currentVal = merged[k]
+          const isNum = typeof defaultVal === 'number'
+          const isBool = typeof defaultVal === 'boolean'
+          const overridden = value && Object.prototype.hasOwnProperty.call(value, k)
+          const rangeHint = searchSpace[k]
+            ? `搜索范围: ${JSON.stringify(searchSpace[k])}`
+            : null
+          return (
+            <Col key={k} xs={24} sm={12}>
+              <div style={{ fontSize: 12, color: '#475569', marginBottom: 4 }}>
+                <code style={{ fontSize: 11, color: '#0f172a' }}>{k}</code>
+                {overridden && (
+                  <Tag color="orange" style={{ marginLeft: 6, fontSize: 10 }}>已修改</Tag>
+                )}
+                {rangeHint && (
+                  <Tooltip title={rangeHint}>
+                    <InfoCircleOutlined style={{ marginLeft: 6, color: '#94a3b8', fontSize: 11 }} />
+                  </Tooltip>
+                )}
+              </div>
+              {isBool ? (
+                <Switch
+                  checked={!!currentVal}
+                  onChange={v => handleFieldChange(k, v)}
+                />
+              ) : isNum ? (
+                <InputNumber
+                  value={currentVal}
+                  onChange={v => handleFieldChange(k, v)}
+                  style={{ width: '100%' }}
+                  placeholder={`默认 ${defaultVal}`}
+                />
+              ) : (
+                <Input
+                  value={currentVal ?? ''}
+                  onChange={e => handleFieldChange(k, e.target.value)}
+                  placeholder={`默认 ${defaultVal}`}
+                />
+              )}
+            </Col>
+          )
+        })}
+      </Row>
+      <Space style={{ marginTop: 12 }}>
+        <Button
+          size="small"
+          icon={<CheckCircleOutlined />}
+          type="primary"
+          ghost
+          onClick={handleApply}
+        >
+          应用参数
+        </Button>
+        <Button
+          size="small"
+          icon={<UndoOutlined />}
+          onClick={handleReset}
+          disabled={!value || Object.keys(value).length === 0}
+        >
+          还原默认值
+        </Button>
+      </Space>
+    </div>
+  )
+}
+
 export default function TrainingPlans() {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState({ items: [], total: 0 })
@@ -91,6 +206,7 @@ export default function TrainingPlans() {
   const formFamily     = Form.useWatch('model_family', form) || 'ml'
   const formSelected   = Form.useWatch('selected_models', form) || []
   const formDlConfig   = Form.useWatch('dl_config',    form) || {}
+  const formSearchSpace = Form.useWatch('search_space', form) || {}
   const availableModels = tuningSpaces[formTaskType] || {}
 
   // DL models filtered by current task_type — index by id for quick lookup.
@@ -139,6 +255,11 @@ export default function TrainingPlans() {
   const selectedDlTokens = useMemo(
     () => (formSelected || []).filter(t => !!dlModelById[t]),
     [formSelected, dlModelById],
+  )
+  // ...and which are ML? (need an MLParamsPanel each)
+  const selectedMlTokens = useMemo(
+    () => (formSelected || []).filter(t => !dlModelById[t] && availableModels[t]),
+    [formSelected, dlModelById, availableModels],
   )
 
   const loadPlans = useCallback(async () => {
@@ -191,6 +312,7 @@ export default function TrainingPlans() {
       model_family: 'ml',
       selected_models: [],
       dl_config: {},
+      search_space: {},
       eval_metrics: ['accuracy', 'f1'],
       default_objective_metric: 'accuracy',
       budget_config: { max_trials: 20, test_size: 0.2 },
@@ -209,6 +331,7 @@ export default function TrainingPlans() {
       model_family: plan.model_family || 'ml',
       selected_models: plan.selected_models || [],
       dl_config: plan.dl_config || {},
+      search_space: plan.search_space || {},
       eval_metrics: plan.eval_metrics || [],
       default_objective_metric: plan.default_objective_metric,
       budget_config: plan.budget_config || {},
@@ -240,12 +363,19 @@ export default function TrainingPlans() {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields()
+      const selected = values.selected_models || []
       // Only keep dl_config entries for currently-selected DL tokens so stale
       // entries (from deselected models) don't leak into the saved plan.
       const cleanedDlConfig = Object.fromEntries(
         Object.entries(values.dl_config || {}).filter(
-          ([k]) => (values.selected_models || []).includes(k),
+          ([k]) => selected.includes(k),
         ),
+      )
+      // Same hygiene for per-ML-model overrides: only keep entries that are
+      // (a) still selected, (b) non-empty (skip {} noise).
+      const cleanedSearchSpace = Object.fromEntries(
+        Object.entries(values.search_space || {})
+          .filter(([k, v]) => selected.includes(k) && v && Object.keys(v).length > 0),
       )
       const payload = {
         name: values.name,
@@ -253,14 +383,13 @@ export default function TrainingPlans() {
         task_type: values.task_type,
         strategy_type: values.strategy_type,
         model_family: values.model_family || 'ml',
-        selected_models: values.selected_models,
+        selected_models: selected,
         dl_config: cleanedDlConfig,
+        search_space: Object.keys(cleanedSearchSpace).length ? cleanedSearchSpace : null,
         eval_metrics: values.eval_metrics,
         default_objective_metric: values.default_objective_metric,
         default_objective_direction: _objectiveDirection(values.default_objective_metric),
         budget_config: values.budget_config,
-        // search_space overrides are not exposed in this MVP UI — the plan
-        // uses the registry defaults until the user edits it via a JSON API.
       }
       setSaving(true)
       if (editingId) {
@@ -409,16 +538,37 @@ export default function TrainingPlans() {
         />
       </Card>
 
-      {/* ─────── Create / Edit drawer ─────── */}
-      <Drawer
+      {/* ─────── Create / Edit modal ─────── */}
+      {/*
+        Migrated from Drawer to Modal per v3.1.2 UX feedback: the side Drawer
+        felt detached from the table below, and the original single "创建"
+        button left users no way to tune per-model params. The Modal version
+        exposes a per-model param editor (MLParamsPanel / DLConfigPanel) and
+        a two-step footer: 取消 · [保存参数] (local validate) · 创建/保存.
+      */}
+      <Modal
         title={editingId ? '编辑训练方案' : '新建训练方案'}
-        width={620}
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onCancel={() => setDrawerOpen(false)}
         destroyOnClose
+        width={920}
+        centered
+        maskClosable={false}
         footer={
           <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
             <Button onClick={() => setDrawerOpen(false)}>取消</Button>
+            <Button
+              onClick={async () => {
+                try {
+                  await form.validateFields()
+                  message.success('当前参数已应用（尚未提交到服务器）')
+                } catch {
+                  /* antd renders errors inline */
+                }
+              }}
+            >
+              保存参数
+            </Button>
             <Button type="primary" loading={saving} onClick={handleSubmit}>
               {editingId ? '保存' : '创建'}
             </Button>
@@ -530,37 +680,74 @@ export default function TrainingPlans() {
             />
           </Form.Item>
 
-          {/* Per-DL-model config panels (only visible when DL models are selected).
-              Note: dl_config is already a tracked form field (via setFieldsValue
-              from each DLConfigPanel's onChange) — the outer Form.Item here is a
-              label-only wrapper, so we intentionally omit `name` to avoid antd
-              trying to inject value/onChange into the <div> child. */}
-          {selectedDlTokens.length > 0 && (
+          {/* Per-model param editor — one Collapse per selected model so users
+              can tune fixed params (ML) or arch/opt/train knobs (DL) inline.
+              This is the fix for the v3.1.1 complaint: "候选模型应该能够生成
+              一个表单". `search_space` and `dl_config` are tracked as form
+              fields, so we intentionally omit `name` on the outer wrappers
+              and write back via `form.setFieldsValue`. */}
+          {(selectedMlTokens.length > 0 || selectedDlTokens.length > 0) && (
             <Form.Item label={
               <Space size={4}>
-                <span>DL 超参配置</span>
+                <span>候选模型参数</span>
                 <Text type="secondary" style={{ fontSize: 11 }}>
-                  （每个 DL 模型独立配置；未修改项使用注册表默认值）
+                  （未展开的模型使用注册表默认值；修改后可点击"应用参数"确认）
                 </Text>
               </Space>
             }>
-              <div>
-                {selectedDlTokens.map(token => (
-                  <DLConfigPanel
-                    key={token}
-                    modelId={token}
-                    modelSpec={dlModelById[token]}
-                    optimizerParams={dlRegistry.optimizer_params}
-                    trainParams={dlRegistry.train_params}
-                    value={formDlConfig?.[token]}
-                    onChange={(next) => {
-                      form.setFieldsValue({
-                        dl_config: { ...(formDlConfig || {}), [token]: next },
-                      })
-                    }}
-                  />
-                ))}
-              </div>
+              <Collapse
+                size="small"
+                accordion={false}
+                items={[
+                  ...selectedMlTokens.map(token => ({
+                    key: `ml-${token}`,
+                    label: (
+                      <Space>
+                        <Tag color="blue" style={{ margin: 0 }}>ML</Tag>
+                        <span>{availableModels[token]?.display_name || token}</span>
+                        {formSearchSpace?.[token] && Object.keys(formSearchSpace[token]).length > 0 && (
+                          <Tag color="orange" style={{ fontSize: 10 }}>已自定义</Tag>
+                        )}
+                      </Space>
+                    ),
+                    children: (
+                      <MLParamsPanel
+                        modelId={token}
+                        meta={availableModels[token]}
+                        value={formSearchSpace?.[token]}
+                        onChange={(next) => {
+                          form.setFieldsValue({
+                            search_space: { ...(formSearchSpace || {}), [token]: next },
+                          })
+                        }}
+                      />
+                    ),
+                  })),
+                  ...selectedDlTokens.map(token => ({
+                    key: `dl-${token}`,
+                    label: (
+                      <Space>
+                        <Tag color="purple" style={{ margin: 0 }}>DL</Tag>
+                        <span>{dlModelById[token]?.display_name || token}</span>
+                      </Space>
+                    ),
+                    children: (
+                      <DLConfigPanel
+                        modelId={token}
+                        modelSpec={dlModelById[token]}
+                        optimizerParams={dlRegistry.optimizer_params}
+                        trainParams={dlRegistry.train_params}
+                        value={formDlConfig?.[token]}
+                        onChange={(next) => {
+                          form.setFieldsValue({
+                            dl_config: { ...(formDlConfig || {}), [token]: next },
+                          })
+                        }}
+                      />
+                    ),
+                  })),
+                ]}
+              />
             </Form.Item>
           )}
 
@@ -605,11 +792,11 @@ export default function TrainingPlans() {
           </Row>
 
           <Paragraph type="secondary" style={{ fontSize: 11, marginTop: 4 }}>
-            高级搜索空间（per-model 覆盖）将使用 tuning-spaces 注册表默认值；
-            如需自定义，请通过 API 直接 PATCH search_space。
+            未修改的模型将使用 tuning-spaces 注册表默认值；
+            在"候选模型参数"面板中展开任一模型即可编辑其 fixed 超参。
           </Paragraph>
         </Form>
-      </Drawer>
+      </Modal>
     </div>
   )
 }
