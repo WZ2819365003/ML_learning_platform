@@ -134,20 +134,16 @@ function buildMetricOption(lossHistory, taskType) {
   ];
 
   if (isClassification) {
-    const hasF1 = lossHistory.some(d => d.val_f1_macro != null);
-    legendItems.push('val_acc');
+    legendItems.push('val_acc', 'val_error');
     series.push({
       name: 'val_acc', type: 'line', smooth: true, yAxisIndex: 1,
       data: lossHistory.map(d => d.val_acc ?? null),
     });
-    if (hasF1) {
-      legendItems.push('val_f1');
-      series.push({
-        name: 'val_f1', type: 'line', smooth: true, yAxisIndex: 1,
-        lineStyle: { type: 'dashed' },
-        data: lossHistory.map(d => d.val_f1_macro ?? null),
-      });
-    }
+    series.push({
+      name: 'val_error', type: 'line', smooth: true, yAxisIndex: 1,
+      lineStyle: { type: 'dashed' },
+      data: lossHistory.map(d => d.val_acc != null ? 1 - d.val_acc : null),
+    });
   } else {
     legendItems.push('val_rmse');
     series.push({
@@ -162,16 +158,15 @@ function buildMetricOption(lossHistory, taskType) {
     xAxis: { type: 'category', data: epochs, name: 'Epoch' },
     yAxis: [
       { type: 'value', name: 'Loss' },
-      { type: 'value', name: isClassification ? '准确率 / F1' : 'RMSE', position: 'right' },
+      { type: 'value', name: isClassification ? 'Acc / Error' : 'RMSE', position: 'right' },
     ],
     series,
   };
 }
 
 // Task-type-aware epoch table columns.
-// Classification: focus on val_loss + val_acc (F1 is noisy on binary tasks;
-// only shown when ≥3 classes and data actually contains it).
-// Regression: replace accuracy/F1 with RMSE + MAE, which are the real
+// Classification: focus on val_loss + val_acc + val_error.
+// Regression: replace accuracy-style metrics with RMSE + MAE, which are the real
 // optimization targets for regression runs.
 function buildEpochColumns(taskType, rows = []) {
   const cols = [
@@ -190,14 +185,10 @@ function buildEpochColumns(taskType, rows = []) {
       { title: 'Val MAE',  dataIndex: 'val_mae',  key: 'val_mae',  width: 110, render: v => v != null ? v.toFixed(4) : '-' },
     );
   } else {
-    cols.push({ title: 'Val Acc', dataIndex: 'val_acc', key: 'val_acc', width: 110, render: v => v != null ? v.toFixed(4) : '-' });
-    // Only surface F1 when it's actually populated AND multiclass (>2 classes
-    // makes F1 more informative than accuracy). Binary F1 ≈ accuracy, so we
-    // hide it by default to reduce noise.
-    const hasInformativeF1 = rows.some(r => r.val_f1_macro != null && r.val_f1_macro > 0);
-    if (hasInformativeF1) {
-      cols.push({ title: 'Val F1', dataIndex: 'val_f1_macro', key: 'val_f1', width: 110, render: v => v != null ? v.toFixed(4) : '-' });
-    }
+    cols.push(
+      { title: 'Val Acc', dataIndex: 'val_acc', key: 'val_acc', width: 110, render: v => v != null ? v.toFixed(4) : '-' },
+      { title: 'Val Error', key: 'val_error', width: 110, render: (_, row) => row.val_acc != null ? (1 - row.val_acc).toFixed(4) : '-' },
+    );
   }
   cols.push({ title: 'LR', dataIndex: 'lr', key: 'lr', width: 100, render: v => v != null ? v.toExponential(3) : '-' });
   return cols;

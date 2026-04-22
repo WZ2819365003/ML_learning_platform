@@ -419,14 +419,14 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
               <Space wrap>
                 <Button
                   icon={<RocketOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/training?taskId=${detail.task_id}`); }}
+                  onClick={() => { setDetailOpen(false); navigate(`/training/monitor?taskId=${detail.task_id}`); }}
                 >
                   查看训练监控
                 </Button>
                 <Button
                   type="primary"
                   icon={<TrophyOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/results?taskId=${detail.task_id}`); }}
+                  onClick={() => { setDetailOpen(false); navigate(`/training/results?taskId=${detail.task_id}`); }}
                 >
                   查看结果可视化
                 </Button>

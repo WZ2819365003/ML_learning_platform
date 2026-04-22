@@ -257,7 +257,7 @@ export default function ModelDeploy() {
         }
       }
       if (kind === 'ts') {
-        // 动态从第一个数据集组装 payload
+        // 动态选择第一份真正像时序的数据集组装 payload
         // 时序预测需要：
         //   time_column  — datetime dtype 或名字含 time/date/timestamp/ds
         //   value_column — 数值型（int/float）且 unique_rate < 0.9（过滤 UDI 这种 ID）
@@ -265,11 +265,11 @@ export default function ModelDeploy() {
         const dsRes = await dataApi.listDatasets({ page: 1, page_size: 20 })
         const datasets = dsRes.items ?? dsRes.datasets ?? []
         if (datasets.length === 0) return
-        const ds = datasets[0]
+        let selectedDs = null
         let valueCol = null
         let timeCol  = null
-        try {
-          const preview = await dataApi.previewDataset(ds.id)
+
+        const inferColumns = (preview, ds) => {
           const colsInfo = preview?.columns_info ?? {}
           const stats    = preview?.statistics ?? {}
           const rowCount = preview?.row_count || ds.row_count || 0
@@ -291,11 +291,25 @@ export default function ModelDeploy() {
 
           timeCol  = cols.find(isDatetime) ?? null
           valueCol = cols.find(c => c !== timeCol && isNumericNonId(c)) ?? null
-        } catch { /* 列推断失败，留给用户手工编辑 JSON */ }
+          return { timeCol, valueCol }
+        }
+
+        for (const ds of datasets) {
+          try {
+            const preview = await dataApi.previewDataset(ds.id)
+            const inferred = inferColumns(preview, ds)
+            if (inferred.timeCol && inferred.valueCol) {
+              selectedDs = ds
+              timeCol = inferred.timeCol
+              valueCol = inferred.valueCol
+              break
+            }
+          } catch { /* try next dataset */ }
+        }
         const payload = {
-          dataset_id: ds.id,
+          dataset_id: selectedDs?.id ?? '',
           value_column: valueCol ?? '',
-          time_column: timeCol,
+          time_column: timeCol ?? '',
           horizon: 24,
           frequency: 'D',
         }
@@ -388,7 +402,11 @@ export default function ModelDeploy() {
           rows: Array.isArray(rows) ? rows : [rows],
         })
       } else {
-        result = await tsApi.predictDeployment(drawer.record.deployment_id, JSON.parse(tester[kind].input))
+        const payload = JSON.parse(tester[kind].input)
+        if (!payload.dataset_id || !payload.value_column || !payload.time_column) {
+          throw new Error('时序测试需要 dataset_id、value_column 和 time_column，请先补齐参数')
+        }
+        result = await tsApi.predictDeployment(drawer.record.deployment_id, payload)
       }
       setTester(s => ({ ...s, [kind]: { ...s[kind], result } }))
     } catch (err) {
@@ -669,7 +687,7 @@ export default function ModelDeploy() {
                       type="info" showIcon message="在线测试说明"
                       description={
                         drawer.kind === 'ts'
-                          ? 'TimesFM 请求需要 dataset_id（已自动填入第一条）、value_column（已按数值型 + 唯一率<90% 过滤，跳过 UDI 等 ID 列）、time_column（已按 datetime dtype 或 time/date/timestamp/ds 命名推断）、horizon、frequency（pandas 偏移码：D/H/T/S/M/Q/Y/W）。'
+                          ? 'TimesFM 请求需要 dataset_id、value_column、time_column、horizon、frequency。系统只会自动填入同时具备时间列和数值目标列的数据集；若未推断到，请手工补齐，避免把 UDI 等 ID 列当作预测值。'
                           : 'ML / DL 请求已根据训练数据集自动预填第一行样本（已删除目标列），可直接点发送。'
                       }
                     />

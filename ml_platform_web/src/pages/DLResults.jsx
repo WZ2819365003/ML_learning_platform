@@ -19,14 +19,13 @@ function useQuery() {
 const metricDisplayNames = {
   best_val_loss:    '最优验证损失',
   val_acc:          '验证准确率',
+  val_error:        '验证误差',
   val_rmse:         '验证 RMSE',
   val_mae:          '验证 MAE',
   val_r2:           '验证 R²',
   val_mape:         '验证 MAPE',
   final_epoch:      '最终 Epoch',
   train_loss:       '训练损失',
-  val_f1_macro:     '验证 F1 (Macro)',
-  val_f1_weighted:  '验证 F1 (Weighted)',
   val_precision:    '验证精确率',
   val_recall:       '验证召回率',
   val_auc_roc:      '验证 AUC-ROC',
@@ -35,7 +34,7 @@ function getMetricDisplayName(key) { return metricDisplayNames[key] ?? key; }
 function formatMetricValue(key, value) {
   if (value == null) return '-';
   if (key === 'final_epoch') return String(Math.round(value));
-  if (key === 'val_acc') return `${(value * 100).toFixed(2)}%`;
+  if (key === 'val_acc' || key === 'val_error') return `${(value * 100).toFixed(2)}%`;
   if (typeof value === 'number') return value.toFixed(4);
   return String(value);
 }
@@ -43,13 +42,13 @@ function formatMetricValue(key, value) {
 // Scalar-only metric keys to display as Statistic cards.
 // Order matters — the most task-relevant metrics go first (train/val loss
 // are universal, then regression error metrics before classification
-// accuracy/F1, because the next filter step drops non-matching keys anyway).
+// accuracy/error, because the next filter step drops non-matching keys anyway).
 const SCALAR_METRIC_DISPLAY_ORDER = [
   'best_val_loss',
   // Regression core (RMSE / MAE / R² / MAPE)
   'val_rmse', 'val_mae', 'val_r2', 'val_mape',
   // Classification headline metrics
-  'val_acc', 'val_f1_macro', 'val_f1_weighted',
+  'val_acc', 'val_error',
   'val_precision', 'val_recall', 'val_auc_roc',
   'final_epoch',
 ];
@@ -73,7 +72,7 @@ function buildMetricHistoryOption(history, taskType) {
   const epochs = history.map(d => d.epoch ?? d.step ?? '');
   // Resolve effective type: trust backend first, else sniff from data (acc
   // implies classification, rmse/mae implies regression). This keeps the
-  // legend honest and stops us from drawing a flat "val_f1_macro" line on
+  // legend honest and stops us from drawing phantom metric lines on
   // regression runs (the old bug).
   let kind = taskType;
   if (!kind || kind === 'auto') {
@@ -90,13 +89,16 @@ function buildMetricHistoryOption(history, taskType) {
       ]
     : [
         { key: 'val_acc',      name: 'val_acc' },
-        { key: 'val_f1_macro', name: 'val_f1' },  // omitted if all-null below
+        { key: 'val_error',    name: 'val_error' },
       ];
   const series = candidates
-    .filter(c => history.some(d => d[c.key] != null))
+    .filter(c => history.some(d => c.key === 'val_error' ? d.val_acc != null : d[c.key] != null))
     .map(c => ({
       name: c.name, type: 'line', smooth: true,
-      data: history.map(d => d[c.key] ?? null),
+      data: history.map(d => {
+        if (c.key === 'val_error') return d.val_acc != null ? 1 - d.val_acc : null;
+        return d[c.key] ?? null;
+      }),
     }));
 
   return {
@@ -365,9 +367,16 @@ function DLResultDetailView({ taskId, navigate }) {
   const scatter = rawMetrics.val_scatter ?? null;
 
   // Only show scalar numeric metrics in cards (exclude history, confusion_matrix, etc.)
+  const derivedMetrics = {
+    ...rawMetrics,
+    ...(rawMetrics.val_error == null && rawMetrics.val_acc != null
+      ? { val_error: 1 - rawMetrics.val_acc }
+      : {}),
+  };
+
   const metricEntries = SCALAR_METRIC_DISPLAY_ORDER
-    .filter(k => rawMetrics[k] != null && typeof rawMetrics[k] === 'number')
-    .map(k => [k, rawMetrics[k]]);
+    .filter(k => derivedMetrics[k] != null && typeof derivedMetrics[k] === 'number')
+    .map(k => [k, derivedMetrics[k]]);
 
   return (
     <div>

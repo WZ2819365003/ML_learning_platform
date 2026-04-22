@@ -16,12 +16,12 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select,
   Switch, InputNumber, Divider, message, Typography, Tooltip, Empty, Segmented,
-  Row, Col, Collapse,
+  Row, Col,
 } from 'antd'
 import {
   PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined,
   ThunderboltOutlined, InfoCircleOutlined, CopyOutlined,
-  CheckCircleOutlined, UndoOutlined,
+  CheckCircleOutlined, UndoOutlined, SaveOutlined,
 } from '@ant-design/icons'
 import { trainingPlansApi, modelingTaskApi, dlApi } from '../services/api'
 import DLConfigPanel from '../components/workbench/DLConfigPanel'
@@ -194,6 +194,9 @@ export default function TrainingPlans() {
   const [data, setData] = useState({ items: [], total: 0 })
   const [taskType, setTaskType] = useState('all')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [paramModalOpen, setParamModalOpen] = useState(false)
+  const [editingModelToken, setEditingModelToken] = useState(null)
+  const [savedParamTokens, setSavedParamTokens] = useState({})
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
   const [tuningSpaces, setTuningSpaces] = useState({ classification: {}, regression: {} })
@@ -251,16 +254,31 @@ export default function TrainingPlans() {
     ]
   }, [availableModels, dlModelsForTask, formFamily])
 
-  // Of the currently-selected tokens, which are DL? (need a per-model panel)
-  const selectedDlTokens = useMemo(
-    () => (formSelected || []).filter(t => !!dlModelById[t]),
-    [formSelected, dlModelById],
+  const selectedModelRows = useMemo(
+    () => (formSelected || []).map(token => {
+      const isDl = !!dlModelById[token]
+      const meta = isDl ? dlModelById[token] : availableModels[token]
+      const customConfig = isDl ? formDlConfig?.[token] : formSearchSpace?.[token]
+      const hasCustom = !!customConfig && Object.keys(customConfig).length > 0
+      return {
+        token,
+        family: isDl ? 'dl' : 'ml',
+        name: meta?.display_name || token,
+        description: meta?.description || '',
+        param_count: isDl
+          ? ((meta?.arch_params || []).length + (dlRegistry.optimizer_params || []).length + (dlRegistry.train_params || []).length)
+          : Object.keys(meta?.fixed || {}).length,
+        hasCustom,
+        saved: !!savedParamTokens[token],
+      }
+    }),
+    [formSelected, dlModelById, availableModels, formDlConfig, formSearchSpace, dlRegistry, savedParamTokens],
   )
-  // ...and which are ML? (need an MLParamsPanel each)
-  const selectedMlTokens = useMemo(
-    () => (formSelected || []).filter(t => !dlModelById[t] && availableModels[t]),
-    [formSelected, dlModelById, availableModels],
-  )
+
+  const editingIsDl = !!dlModelById[editingModelToken]
+  const editingModelMeta = editingIsDl
+    ? dlModelById[editingModelToken]
+    : availableModels[editingModelToken]
 
   const loadPlans = useCallback(async () => {
     setLoading(true)
@@ -305,6 +323,8 @@ export default function TrainingPlans() {
 
   const handleCreate = () => {
     setEditingId(null)
+    setSavedParamTokens({})
+    setEditingModelToken(null)
     form.resetFields()
     form.setFieldsValue({
       task_type: 'classification',
@@ -322,6 +342,7 @@ export default function TrainingPlans() {
 
   const handleEdit = async (plan) => {
     setEditingId(plan.id)
+    setEditingModelToken(null)
     form.resetFields()
     form.setFieldsValue({
       name: plan.name,
@@ -336,6 +357,7 @@ export default function TrainingPlans() {
       default_objective_metric: plan.default_objective_metric,
       budget_config: plan.budget_config || {},
     })
+    setSavedParamTokens(Object.fromEntries((plan.selected_models || []).map(t => [t, true])))
     setDrawerOpen(true)
   }
 
@@ -488,9 +510,9 @@ export default function TrainingPlans() {
   return (
     <div style={{ padding: '20px 4px' }}>
       <Card
-        bordered={false}
+        variant="borderless"
         style={{ borderRadius: 16, boxShadow: '0 1px 4px rgba(15,23,42,0.06)' }}
-        bodyStyle={{ padding: 0 }}
+        styles={{ body: { padding: 0 } }}
       >
         <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9' }}>
           <Row justify="space-between" align="middle">
@@ -549,8 +571,11 @@ export default function TrainingPlans() {
       <Modal
         title={editingId ? '编辑训练方案' : '新建训练方案'}
         open={drawerOpen}
-        onCancel={() => setDrawerOpen(false)}
-        destroyOnClose
+        onCancel={() => {
+          setDrawerOpen(false)
+          setParamModalOpen(false)
+        }}
+        destroyOnHidden
         width={920}
         centered
         maskClosable={false}
@@ -567,7 +592,7 @@ export default function TrainingPlans() {
                 }
               }}
             >
-              保存参数
+              保存模型表单
             </Button>
             <Button type="primary" loading={saving} onClick={handleSubmit}>
               {editingId ? '保存' : '创建'}
@@ -595,9 +620,11 @@ export default function TrainingPlans() {
                     form.setFieldsValue({
                       selected_models: [],
                       dl_config: {},
+                      search_space: {},
                       eval_metrics: [],
                       default_objective_metric: undefined,
                     })
+                    setSavedParamTokens({})
                   }}
                 />
               </Form.Item>
@@ -642,6 +669,9 @@ export default function TrainingPlans() {
                   Object.entries(currentDlCfg).filter(([k]) => filtered.includes(k)),
                 )
                 form.setFieldsValue({ selected_models: filtered, dl_config: cleanedDl })
+                setSavedParamTokens(prev => Object.fromEntries(
+                  filtered.map(t => [t, prev[t] ?? false]),
+                ))
               }}
             />
           </Form.Item>
@@ -676,80 +706,100 @@ export default function TrainingPlans() {
                   if (!nextTokens.includes(k)) delete nextDl[k]
                 }
                 form.setFieldsValue({ dl_config: nextDl })
+                setSavedParamTokens(prev => Object.fromEntries(
+                  nextTokens.map(t => [t, prev[t] ?? false]),
+                ))
               }}
             />
           </Form.Item>
 
-          {/* Per-model param editor — one Collapse per selected model so users
-              can tune fixed params (ML) or arch/opt/train knobs (DL) inline.
-              This is the fix for the v3.1.1 complaint: "候选模型应该能够生成
-              一个表单". `search_space` and `dl_config` are tracked as form
-              fields, so we intentionally omit `name` on the outer wrappers
-              and write back via `form.setFieldsValue`. */}
-          {(selectedMlTokens.length > 0 || selectedDlTokens.length > 0) && (
-            <Form.Item label={
-              <Space size={4}>
-                <span>候选模型参数</span>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  （未展开的模型使用注册表默认值；修改后可点击"应用参数"确认）
-                </Text>
-              </Space>
-            }>
-              <Collapse
-                size="small"
-                accordion={false}
-                items={[
-                  ...selectedMlTokens.map(token => ({
-                    key: `ml-${token}`,
-                    label: (
+          <Form.Item label={
+            <Space size={4}>
+              <span>候选模型配置表</span>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                （选中模型后生成配置行；点击"编辑参数"进入独立参数配置页）
+              </Text>
+            </Space>
+          }>
+            <Table
+              size="small"
+              rowKey="token"
+              dataSource={selectedModelRows}
+              pagination={false}
+              style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}
+              locale={{
+                emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="先选择候选模型，系统会在这里生成配置表" />,
+              }}
+              columns={[
+                {
+                  title: '模型',
+                  key: 'model',
+                  render: (_, row) => (
+                    <Space direction="vertical" size={2}>
                       <Space>
-                        <Tag color="blue" style={{ margin: 0 }}>ML</Tag>
-                        <span>{availableModels[token]?.display_name || token}</span>
-                        {formSearchSpace?.[token] && Object.keys(formSearchSpace[token]).length > 0 && (
-                          <Tag color="orange" style={{ fontSize: 10 }}>已自定义</Tag>
-                        )}
+                        <Tag color={row.family === 'dl' ? 'purple' : 'blue'} style={{ margin: 0 }}>
+                          {row.family.toUpperCase()}
+                        </Tag>
+                        <Text strong>{row.name}</Text>
                       </Space>
-                    ),
-                    children: (
-                      <MLParamsPanel
-                        modelId={token}
-                        meta={availableModels[token]}
-                        value={formSearchSpace?.[token]}
-                        onChange={(next) => {
-                          form.setFieldsValue({
-                            search_space: { ...(formSearchSpace || {}), [token]: next },
-                          })
+                      <Text type="secondary" style={{ fontSize: 11 }}>{row.token}</Text>
+                    </Space>
+                  ),
+                },
+                {
+                  title: '参数',
+                  key: 'params',
+                  width: 180,
+                  render: (_, row) => (
+                    <Space size={4} wrap>
+                      <Tag>{row.param_count} 项</Tag>
+                      {row.hasCustom ? <Tag color="orange">已自定义</Tag> : <Tag>默认</Tag>}
+                    </Space>
+                  ),
+                },
+                {
+                  title: '保存状态',
+                  key: 'saved',
+                  width: 110,
+                  render: (_, row) => (
+                    <Tag color={row.saved ? 'green' : 'orange'}>
+                      {row.saved ? '已保存' : '未保存'}
+                    </Tag>
+                  ),
+                },
+                {
+                  title: '操作',
+                  key: 'actions',
+                  width: 210,
+                  render: (_, row) => (
+                    <Space size={4}>
+                      <Button
+                        size="small"
+                        icon={<EditOutlined />}
+                        onClick={() => {
+                          setEditingModelToken(row.token)
+                          setParamModalOpen(true)
                         }}
-                      />
-                    ),
-                  })),
-                  ...selectedDlTokens.map(token => ({
-                    key: `dl-${token}`,
-                    label: (
-                      <Space>
-                        <Tag color="purple" style={{ margin: 0 }}>DL</Tag>
-                        <span>{dlModelById[token]?.display_name || token}</span>
-                      </Space>
-                    ),
-                    children: (
-                      <DLConfigPanel
-                        modelId={token}
-                        modelSpec={dlModelById[token]}
-                        optimizerParams={dlRegistry.optimizer_params}
-                        trainParams={dlRegistry.train_params}
-                        value={formDlConfig?.[token]}
-                        onChange={(next) => {
-                          form.setFieldsValue({
-                            dl_config: { ...(formDlConfig || {}), [token]: next },
-                          })
+                      >
+                        编辑参数
+                      </Button>
+                      <Button
+                        size="small"
+                        icon={<SaveOutlined />}
+                        onClick={() => {
+                          setSavedParamTokens(prev => ({ ...prev, [row.token]: true }))
+                          message.success(`${row.name} 参数已保存到当前方案草稿`)
                         }}
-                      />
-                    ),
-                  })),
-                ]}
-              />
-            </Form.Item>
-          )}
+                      >
+                        保存
+                      </Button>
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+          </Form.Item>
 
           <Divider style={{ margin: '16px 0' }}>评估与预算</Divider>
 
@@ -793,9 +843,91 @@ export default function TrainingPlans() {
 
           <Paragraph type="secondary" style={{ fontSize: 11, marginTop: 4 }}>
             未修改的模型将使用 tuning-spaces 注册表默认值；
-            在"候选模型参数"面板中展开任一模型即可编辑其 fixed 超参。
+            在"候选模型配置表"中点击"编辑参数"即可进入该模型的独立参数配置页。
           </Paragraph>
         </Form>
+      </Modal>
+
+      <Modal
+        title="模型参数配置"
+        open={paramModalOpen}
+        onCancel={() => setParamModalOpen(false)}
+        destroyOnHidden
+        width={780}
+        centered
+        footer={
+          <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+            <Button onClick={() => setParamModalOpen(false)}>取消</Button>
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              disabled={!editingModelToken}
+              onClick={() => {
+                setSavedParamTokens(prev => ({ ...prev, [editingModelToken]: true }))
+                setParamModalOpen(false)
+                message.success('模型参数已保存到配置表')
+              }}
+            >
+              保存到配置表
+            </Button>
+          </Space>
+        }
+      >
+        {!editingModelToken || !editingModelMeta ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未选择模型" />
+        ) : (
+          <Space direction="vertical" size={14} style={{ width: '100%' }}>
+            <div style={{
+              padding: 16,
+              borderRadius: 16,
+              border: '1px solid #dbeafe',
+              background: 'linear-gradient(135deg, #eff6ff 0%, #ffffff 100%)',
+            }}>
+              <Space direction="vertical" size={6}>
+                <Space wrap>
+                  <Tag color={editingIsDl ? 'purple' : 'blue'} style={{ margin: 0 }}>
+                    {editingIsDl ? 'DL' : 'ML'}
+                  </Tag>
+                  <Text strong style={{ fontSize: 16 }}>
+                    {editingModelMeta?.display_name || editingModelToken}
+                  </Text>
+                  <code style={{ fontSize: 11, color: '#64748b' }}>{editingModelToken}</code>
+                </Space>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {editingModelMeta?.description || '编辑该模型在当前训练方案中的参数配置。'}
+                </Text>
+              </Space>
+            </div>
+
+            {editingIsDl ? (
+              <DLConfigPanel
+                modelId={editingModelToken}
+                modelSpec={editingModelMeta}
+                optimizerParams={dlRegistry.optimizer_params}
+                trainParams={dlRegistry.train_params}
+                value={formDlConfig?.[editingModelToken]}
+                onChange={(next) => {
+                  form.setFieldsValue({
+                    dl_config: { ...(formDlConfig || {}), [editingModelToken]: next },
+                  })
+                  setSavedParamTokens(prev => ({ ...prev, [editingModelToken]: false }))
+                }}
+              />
+            ) : (
+              <MLParamsPanel
+                modelId={editingModelToken}
+                meta={editingModelMeta}
+                value={formSearchSpace?.[editingModelToken]}
+                onChange={(next) => {
+                  form.setFieldsValue({
+                    search_space: { ...(formSearchSpace || {}), [editingModelToken]: next },
+                  })
+                  setSavedParamTokens(prev => ({ ...prev, [editingModelToken]: false }))
+                }}
+              />
+            )}
+          </Space>
+        )}
       </Modal>
     </div>
   )
