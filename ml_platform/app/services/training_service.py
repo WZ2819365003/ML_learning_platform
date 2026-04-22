@@ -5,7 +5,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -29,13 +29,67 @@ _executor = ThreadPoolExecutor(max_workers=4)
 # Track running tasks for cancellation
 _running_tasks: dict[str, asyncio.Task] = {}
 
+
+def _progress_fraction(step: int | float, total: int | float) -> float:
+    """Return scheduler progress on the PlatformTask 0..1 scale."""
+    try:
+        total_f = float(total)
+        if total_f <= 0:
+            return 0.0
+        progress = float(step) / total_f
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+    return max(0.0, min(1.0, progress))
+
+
+def _make_platform_progress_callback(
+    platform_task_id: str | None,
+    loop: asyncio.AbstractEventLoop,
+) -> Callable[[int, int, dict], None] | None:
+    if not platform_task_id:
+        return None
+
+    from app.scheduler.task_runner import update_platform_task_status
+
+    def _callback(step: int, total: int, metrics: dict) -> None:
+        future = asyncio.run_coroutine_threadsafe(
+            update_platform_task_status(
+                platform_task_id,
+                "RUNNING",
+                metrics=metrics,
+                progress=_progress_fraction(step, total),
+            ),
+            loop,
+        )
+        future.add_done_callback(
+            lambda f: logger.debug(
+                "PlatformTask progress callback failed: %s", f.exception()
+            ) if f.exception() else None
+        )
+
+    return _callback
+
 def _prepare_data(file_path: str, target_column: str, test_size: float, is_regression: bool = False):
     """Load data, encode labels, split into train/val sets."""
     df = load_dataframe(file_path)
     X, y, _, _ = prepare_training_frame(df, target_column)
 
     # Regression targets are continuous — stratify is not applicable
-    stratify = None if is_regression else y.values
+    stratify = None
+    if not is_regression:
+        counts = pd.Series(y).value_counts(dropna=True)
+        unique_count = int(counts.shape[0])
+        min_class_count = int(counts.min()) if unique_count else 0
+        if unique_count < 2:
+            raise ValueError(
+                f"分类目标列 {target_column!r} 只有 {unique_count} 个类别，至少需要 2 个类别。"
+            )
+        if min_class_count < 2:
+            raise ValueError(
+                f"分类目标列 {target_column!r} 的最小类别样本数为 {min_class_count}，"
+                "无法进行分层切分；请不要选择 ID/序号列，改选真实标签列。"
+            )
+        stratify = y.values
     X_train, X_val, y_train, y_val = train_test_split(
         X.values, y.values, test_size=test_size, random_state=42, stratify=stratify
     )
@@ -110,6 +164,7 @@ def _run_training_sync(
     cv_folds: int,
     model_save_dir: str,
     class_weight: str | None = None,
+    progress_callback: Callable[[int, int, dict], None] | None = None,
 ) -> dict:
     """Synchronous training function to run in thread pool."""
     # Initialize per-task logger
@@ -120,7 +175,7 @@ def _run_training_sync(
         return _run_training_sync_inner(
             tl, task_id, file_path, target_column, model_type,
             hyperparameters, test_size, eval_metrics, cv_folds,
-            model_save_dir, class_weight,
+            model_save_dir, class_weight, progress_callback,
         )
     except Exception as exc:
         # Record the failure explicitly so the Inspector can show WHY it
@@ -153,6 +208,7 @@ def _run_training_sync_inner(
     cv_folds: int,
     model_save_dir: str,
     class_weight: str | None,
+    progress_callback: Callable[[int, int, dict], None] | None,
 ) -> dict:
     # Try MLflow integration (optional)
     mlflow = _try_init_mlflow()
@@ -194,6 +250,8 @@ def _run_training_sync_inner(
     # Callback that logs each fold/step
     def on_fold_complete(step: int, total: int, metrics: dict):
         tl.log_metrics(step=step, total_steps=total, metrics=metrics)
+        if progress_callback:
+            progress_callback(step, total, metrics)
         # Log fold metrics to MLflow
         if mlflow:
             try:
@@ -345,12 +403,13 @@ async def _run_training_sync_by_id(
 
     try:
         loop = asyncio.get_event_loop()
+        progress_callback = _make_platform_progress_callback(platform_task_id, loop)
         training_result = await loop.run_in_executor(
             _executor,
             _run_training_sync,
             training_task_id, file_path, target_column, model_type,
             hyperparams, test_size, eval_metrics, cv_folds,
-            str(settings.storage_models), None,
+            str(settings.storage_models), None, progress_callback,
         )
         metrics = {k: v for k, v in training_result["result_metrics"].items() if k != "cv_folds"}
 
@@ -484,11 +543,13 @@ async def _execute_training(
     try:
         # Run training in thread pool
         loop = asyncio.get_event_loop()
+        progress_callback = _make_platform_progress_callback(platform_task_id, loop)
         training_result = await loop.run_in_executor(
             _executor,
             _run_training_sync,
             task_id, file_path, target_column, model_type,
-            hyperparameters, test_size, eval_metrics, cv_folds, model_save_dir, class_weight,
+            hyperparameters, test_size, eval_metrics, cv_folds, model_save_dir,
+            class_weight, progress_callback,
         )
 
         # Remove cv_folds detail from stored metrics to keep it clean
@@ -662,3 +723,15 @@ async def update_training_task_meta(
         task.tags = tags
     await db.flush()
     return task
+
+
+# ---------------------------------------------------------------------------
+# Executor registration — V3 Phase 2
+# ---------------------------------------------------------------------------
+# This lets the Scheduler call us through the registry without importing
+# training_service directly.  The executor contract is:
+#     async (domain_id, platform_task_id) -> {"metrics": {...}, ...}
+# which _run_training_sync_by_id already satisfies — so we register it as-is.
+
+from app.scheduler.executors import register_executor as _register_executor  # noqa: E402
+_register_executor("train", _run_training_sync_by_id)

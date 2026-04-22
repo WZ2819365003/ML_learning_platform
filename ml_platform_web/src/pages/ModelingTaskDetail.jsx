@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
   Card, Button, Tabs, Tag, Space, Table, Descriptions, Typography, Empty,
-  Row, Col, Spin, Alert, Statistic, Tooltip, Breadcrumb, message, Popconfirm,
+  Row, Col, Spin, Alert, Statistic, Tooltip, Breadcrumb, message, Progress,
 } from 'antd'
 import {
   ArrowLeftOutlined, ReloadOutlined, PlusOutlined, TrophyOutlined,
@@ -9,9 +9,11 @@ import {
   CheckCircleFilled, CloseCircleFilled, ClockCircleFilled, FireOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
-import { modelingTaskApi, platformRunsApi } from '../services/api'
+import { modelingTaskApi } from '../services/api'
 import ExperimentBatchModal from '../components/workbench/ExperimentBatchModal'
 import RunInspector from '../components/workbench/RunInspector'
+import TrainingPlanSnapshotView from '../components/workbench/TrainingPlanSnapshotView'
+import ProgressTree from '../components/workbench/ProgressTree'
 
 const { Text, Paragraph } = Typography
 
@@ -50,6 +52,8 @@ export default function ModelingTaskDetail() {
   const [runStats, setRunStats] = useState({ total: 0, success: 0, running: 0, failed: 0 })
   const [leaderboard, setLeaderboard] = useState([])
   const [lbLoading, setLbLoading] = useState(false)
+  const [runs, setRuns] = useState([])
+  const [runsLoading, setRunsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
 
   // Modals
@@ -82,23 +86,40 @@ export default function ModelingTaskDetail() {
     }
   }, [taskId])
 
+  const loadRuns = useCallback(async () => {
+    setRunsLoading(true)
+    try {
+      const resp = await modelingTaskApi.runs(taskId)
+      setRuns(resp?.items || [])
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '加载 Run 矩阵失败')
+    } finally {
+      setRunsLoading(false)
+    }
+  }, [taskId])
+
   useEffect(() => { loadTask() }, [loadTask])
   // Always load the leaderboard once on mount so Overview's "最佳 Run" card
   // has data; Runs/Explain tabs trigger a refresh on their own.
   useEffect(() => { loadLeaderboard() }, [loadLeaderboard])
+  useEffect(() => { loadRuns() }, [loadRuns])
   useEffect(() => {
-    if (activeTab === 'runs' || activeTab === 'explain') loadLeaderboard()
-  }, [activeTab, loadLeaderboard])
+    if (activeTab === 'runs' || activeTab === 'explain') {
+      loadLeaderboard()
+      loadRuns()
+    }
+  }, [activeTab, loadLeaderboard, loadRuns])
 
   // Auto-refresh when task is running
   useEffect(() => {
     if (task?.status !== 'RUNNING') return
-    const id = setInterval(() => { loadTask(); loadLeaderboard() }, 5000)
+    const id = setInterval(() => { loadTask(); loadLeaderboard(); loadRuns() }, 5000)
     return () => clearInterval(id)
-  }, [task?.status, loadTask, loadLeaderboard])
+  }, [task?.status, loadTask, loadLeaderboard, loadRuns])
 
   const refreshAll = async () => {
     await loadTask()
+    await loadRuns()
     if (activeTab === 'runs' || activeTab === 'explain') await loadLeaderboard()
   }
 
@@ -175,6 +196,17 @@ export default function ModelingTaskDetail() {
               description={<Text type="secondary" style={{ fontSize: 12 }}>还没有成功的 Run</Text>} />
           )}
         </Card>
+      </Col>
+
+      <Col span={24}>
+        <TrainingPlanSnapshotView
+          snapshot={task.training_plan_snapshot}
+          status={task.training_plan_status}
+        />
+      </Col>
+
+      <Col span={24}>
+        <ProgressTree modelingTaskId={task.id} />
       </Col>
 
       <Col span={6}>
@@ -291,12 +323,16 @@ export default function ModelingTaskDetail() {
     </Card>
   )
 
-  // ── Tab: Runs (leaderboard) ───────────────────────────────────────────────
+  // ── Tab: Runs (full run matrix + leaderboard order) ──────────────────────
+  const runRows = runs.length ? runs : leaderboard
   const leaderboardColumns = [
     {
-      title: 'Rank', dataIndex: 'rank', key: 'rank', width: 70,
-      render: (r) => r === 1 ? <Tag color="gold" icon={<TrophyOutlined />}>{r}</Tag>
-        : r <= 3 ? <Tag color="blue">{r}</Tag> : <span style={{ color: '#64748b' }}>{r}</span>,
+      title: '全局', key: 'global_rank', width: 72,
+      render: (_, __, index) => {
+        const rank = index + 1
+        return rank === 1 ? <Tag color="gold" icon={<TrophyOutlined />}>{rank}</Tag>
+          : rank <= 3 ? <Tag color="blue">{rank}</Tag> : <span style={{ color: '#64748b' }}>{rank}</span>
+      },
     },
     {
       title: '实验', dataIndex: 'experiment_name', key: 'experiment_name', ellipsis: true,
@@ -308,6 +344,30 @@ export default function ModelingTaskDetail() {
           </Tag>
         </div>
       ),
+    },
+    {
+      title: '模型', key: 'model', width: 140,
+      render: (_, row) => <Tag>{row.params?.model_type || '-'}</Tag>,
+    },
+    {
+      title: '状态', dataIndex: 'status', key: 'status', width: 105,
+      render: (status, row) => renderStatus(row.platform_task?.status || status || 'SUCCESS'),
+    },
+    {
+      title: '进度', key: 'progress', width: 130,
+      render: (_, row) => {
+        const raw = row.platform_task?.progress
+        const value = Number(raw ?? (row.status === 'SUCCESS' ? 1 : 0))
+        const percent = value > 1 ? Math.round(value) : Math.round(value * 100)
+        const status = (row.platform_task?.status || row.status || '').toUpperCase()
+        return (
+          <Progress
+            percent={Math.max(0, Math.min(100, percent))}
+            size="small"
+            status={status === 'FAILED' ? 'exception' : status === 'SUCCESS' ? 'success' : 'active'}
+          />
+        )
+      },
     },
     { title: 'Trial', dataIndex: 'trial_no', key: 'trial_no', width: 70 },
     {
@@ -353,23 +413,23 @@ export default function ModelingTaskDetail() {
       <div style={{ padding: '10px 14px', borderBottom: '1px solid #f1f5f9',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Space>
-          <Text strong>Run 排行榜</Text>
-          <Tag>{leaderboard.length}</Tag>
+          <Text strong>Run 矩阵</Text>
+          <Tag>{runRows.length}</Tag>
           <Text type="secondary" style={{ fontSize: 12 }}>
             按 <code>{task?.objective_metric}</code> ({task?.objective_direction}) 排序
           </Text>
         </Space>
-        <Button size="small" icon={<ReloadOutlined />} onClick={loadLeaderboard} loading={lbLoading}>
+        <Button size="small" icon={<ReloadOutlined />} onClick={refreshAll} loading={lbLoading || runsLoading}>
           刷新
         </Button>
       </div>
       <Table
         size="small"
         rowKey="run_id"
-        loading={lbLoading}
+        loading={lbLoading || runsLoading}
         columns={leaderboardColumns}
-        dataSource={leaderboard}
-        pagination={leaderboard.length > 10 ? {
+        dataSource={runRows}
+        pagination={runRows.length > 10 ? {
           pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条`,
           style: { padding: '10px 14px', margin: 0 },
         } : false}
@@ -378,7 +438,7 @@ export default function ModelingTaskDetail() {
           style: { cursor: 'pointer' },
         })}
         locale={{ emptyText: <div style={{ padding: 24 }}>
-          <Empty description="还没有成功的 Run" />
+          <Empty description="还没有 Run" />
         </div> }}
       />
     </Card>
@@ -464,7 +524,7 @@ export default function ModelingTaskDetail() {
           items={[
             { key: 'overview',    label: <span><ExperimentOutlined /> 任务概览</span>, children: overviewTab },
             { key: 'experiments', label: <span><NodeIndexOutlined /> 实验编排 ({experiments.length})</span>, children: experimentsTab },
-            { key: 'runs',        label: <span><LineChartOutlined /> Run 对比 ({runStats.success || 0})</span>, children: runsTab },
+            { key: 'runs',        label: <span><LineChartOutlined /> Run 对比 ({runStats.total || 0})</span>, children: runsTab },
             { key: 'explain',     label: <span><BulbOutlined /> 模型解释</span>, children: explainTab },
           ]}
         />
@@ -477,6 +537,7 @@ export default function ModelingTaskDetail() {
         onClose={() => setBatchOpen(false)}
         onSubmitted={async () => {
           await loadTask()
+          await loadRuns()
           setActiveTab('experiments')
         }}
       />

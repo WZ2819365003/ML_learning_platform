@@ -239,6 +239,7 @@ export const platformTasksApi = {
   tree:   (params = {}) => api.get('/platform/tasks/tree', { params }),
   stats:  ()            => api.get('/platform/tasks/stats'),
   get:    (id)          => api.get(`/platform/tasks/${id}`),
+  detail: (id, params = {}) => api.get(`/platform/tasks/${id}/detail`, { params }),
   retry:  (id)          => api.post(`/platform/tasks/${id}/retry`),
   cancel: (id)          => api.post(`/platform/tasks/${id}/cancel`),
   delete: (id)          => api.delete(`/platform/tasks/${id}`),
@@ -273,9 +274,14 @@ export const modelingTaskApi = {
   delete: (taskId) => api.delete(`/v3/tasks/${taskId}`),
   leaderboard: (taskId, topK = 20) =>
     api.get(`/v3/tasks/${taskId}/leaderboard`, { params: { top_k: topK } }),
+  runs: (taskId, params = {}) =>
+    api.get(`/v3/tasks/${taskId}/runs`, { params }),
   createExperimentBatch: (taskId, data) =>
     api.post(`/v3/tasks/${taskId}/experiments`, data),
+  createExperimentBundle: (taskId, data) =>
+    api.post(`/v3/tasks/${taskId}/experiments/bulk`, data),
   tuningSpaces: (taskType) => api.get(`/v3/tasks/tuning-spaces/${taskType}`),
+  progressTree: (taskId) => api.get(`/v3/tasks/${taskId}/progress-tree`),
 };
 
 export const platformRunsApi = {

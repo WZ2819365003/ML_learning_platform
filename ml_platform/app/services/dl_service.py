@@ -63,7 +63,21 @@ def _detect_task_type(y: np.ndarray, requested: str) -> str:
 def _prepare_dl_data(file_path: str, target_column: str, test_size: float, task_type: str):
     df = load_dataframe(file_path)
     X, y, _, _ = prepare_training_frame(df, target_column)
-    stratify = y.values if task_type == "classification" else None
+    stratify = None
+    if task_type == "classification":
+        counts = pd.Series(y).value_counts(dropna=True)
+        unique_count = int(counts.shape[0])
+        min_class_count = int(counts.min()) if unique_count else 0
+        if unique_count < 2:
+            raise ValueError(
+                f"分类目标列 {target_column!r} 只有 {unique_count} 个类别，至少需要 2 个类别。"
+            )
+        if min_class_count < 2:
+            raise ValueError(
+                f"分类目标列 {target_column!r} 的最小类别样本数为 {min_class_count}，"
+                "无法进行分层切分；请不要选择 ID/序号列，改选真实标签列。"
+            )
+        stratify = y.values
     X_train, X_val, y_train, y_val = train_test_split(
         X.values, y.values, test_size=test_size, random_state=42, stratify=stratify
     )
@@ -179,6 +193,7 @@ def _run_dl_sync(
     train_config: dict,
     model_save_dir: str,
     loop: asyncio.AbstractEventLoop,
+    platform_task_id: str | None = None,
 ) -> dict:
     epochs    = int(train_config.get("epochs", 50))
     test_size = float(train_config.get("test_size", 0.2))
@@ -239,6 +254,18 @@ def _run_dl_sync(
             _store_dl_epoch_progress(task_id=task_id, epoch=epoch, progress=progress),
             loop,
         )
+        if platform_task_id:
+            from app.scheduler.task_runner import update_platform_task_status
+
+            asyncio.run_coroutine_threadsafe(
+                update_platform_task_status(
+                    platform_task_id,
+                    "RUNNING",
+                    metrics=data,
+                    progress=max(0.0, min(1.0, progress / 100.0)),
+                ),
+                loop,
+            )
         # Persist full epoch record (every epoch) for page-refresh recovery
         asyncio.run_coroutine_threadsafe(
             _store_dl_epoch_record(task_id=task_id, epoch=epoch, total_epochs=epochs, metrics=data),
@@ -356,6 +383,7 @@ async def _run_dl_training_by_id(
             _run_dl_sync,
             dl_task_id, file_path, target_column, model_type, task_type_req,
             arch_config, opt_config, train_config, str(settings.storage_models), loop,
+            platform_task_id,
         )
         stored_metrics = training_result["result_metrics"]
 
@@ -425,6 +453,7 @@ async def _execute_dl_training(
             _run_dl_sync,
             task_id, file_path, target_column, model_type, task_type,
             arch_config, opt_config, train_config, model_save_dir, loop,
+            platform_task_id,
         )
 
         stored_metrics = training_result["result_metrics"]
@@ -888,3 +917,14 @@ async def predict_dl_task_direct(
         "probabilities":   prob_list,
         "feature_columns": feature_columns,
     }
+
+
+# ---------------------------------------------------------------------------
+# Executor registration — V3 Phase 2
+# ---------------------------------------------------------------------------
+# Register the DL training coroutine in the unified executor registry so the
+# Scheduler can dispatch ``kind="dl_train"`` tasks without a special-case
+# branch.  Contract matches (domain_id, platform_task_id) → {"metrics", ...}.
+
+from app.scheduler.executors import register_executor as _register_executor  # noqa: E402
+_register_executor("dl_train", _run_dl_training_by_id)

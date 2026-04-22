@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 import optuna
 
+from app.services import training_service as training_svc
 from app.services import tuning_service as svc
 from app.services.modeling_task_service import load_tuning_spaces
 
@@ -138,6 +139,94 @@ def test_baseline_overrides_merge_with_fixed():
     assert params["max_iter"] == 500
 
 
+def test_baseline_preserves_deep_learning_family_and_nested_configs():
+    defaults = load_tuning_spaces("classification")
+    trials = svc._expand_baseline(
+        selected_models=["mlp_dl"],
+        tuning_defaults=defaults,
+        overrides=None,
+    )
+    assert len(trials) == 1
+    assert trials[0]["family"] == "dl"
+    params = trials[0]["hyperparameters"]
+    assert "arch_config" in params
+    assert "opt_config" in params
+    assert "train_config" in params
+    assert params["train_config"]["epochs"] <= 10
+
+
+async def test_dispatch_experiment_bundle_creates_one_batch_per_strategy(db, monkeypatch):
+    """A multi-strategy submission should persist separate experiment batches."""
+    from app.models.database import Dataset, ModelingTask, PlatformExperiment
+    from sqlalchemy import select
+
+    monkeypatch.setattr(svc, "_launch_concurrent", lambda *args, **kwargs: None)
+    monkeypatch.setattr(svc, "_launch_bayesian", lambda *args, **kwargs: None)
+
+    ds = Dataset(name="demo.csv", file_path="/tmp/demo.csv", file_size=1, row_count=20)
+    db.add(ds)
+    await db.flush()
+
+    task = ModelingTask(
+        name="multi-strategy-task",
+        dataset_id=ds.id,
+        dataset_name=ds.name,
+        target_column="Target",
+        task_type="classification",
+        objective_metric="accuracy",
+        objective_direction="max",
+    )
+    db.add(task)
+    await db.flush()
+
+    result = await svc.dispatch_experiment_bundle(
+        db,
+        modeling_task_id=task.id,
+        name="full-search",
+        strategies=[
+            {
+                "strategy_type": "baseline",
+                "selected_models": ["random_forest", "mlp_dl"],
+                "search_space": {},
+                "budget_config": {"max_trials": 2},
+            },
+            {
+                "strategy_type": "grid_search",
+                "selected_models": ["random_forest"],
+                "search_space": {"random_forest": {"n_estimators": [10], "max_depth": [3]}},
+                "budget_config": {"max_trials": 1},
+            },
+            {
+                "strategy_type": "bayesian_search",
+                "selected_models": ["random_forest"],
+                "search_space": {
+                    "random_forest": {
+                        "n_estimators": {"type": "int", "low": 10, "high": 20, "step": 10}
+                    }
+                },
+                "budget_config": {"max_trials": 1, "n_trials_per_model": 1},
+            },
+        ],
+    )
+
+    assert result["batch_count"] == 3
+    assert result["strategy_types"] == ["baseline", "grid_search", "bayesian_search"]
+
+    rows = await db.execute(
+        select(PlatformExperiment)
+        .where(PlatformExperiment.modeling_task_id == task.id)
+        .order_by(PlatformExperiment.created_at.asc())
+    )
+    experiments = rows.scalars().all()
+    assert [e.strategy_type for e in experiments] == [
+        "baseline",
+        "grid_search",
+        "bayesian_search",
+    ]
+    assert experiments[0].selected_models == ["random_forest", "mlp_dl"]
+    assert experiments[1].selected_models == ["random_forest"]
+
+
 # ---------------------------------------------------------------------------
 # Bayesian count + sampling
 # ---------------------------------------------------------------------------
@@ -192,6 +281,14 @@ def test_sample_from_distribution_rejects_bad_type():
         svc._sample_from_distribution(trial, {"x": {"type": "uniform", "low": 0, "high": 1}})
 
 
+def test_progress_fraction_uses_platform_task_scale():
+    """PlatformTask.progress uses 0..1 while legacy domain rows often use 0..100."""
+    assert training_svc._progress_fraction(1, 5) == pytest.approx(0.2)
+    assert training_svc._progress_fraction(5, 5) == pytest.approx(1.0)
+    assert training_svc._progress_fraction(0, 5) == pytest.approx(0.0)
+    assert training_svc._progress_fraction(3, 0) == pytest.approx(0.0)
+
+
 # ---------------------------------------------------------------------------
 # Dispatch entry-point validation
 # ---------------------------------------------------------------------------
@@ -220,6 +317,60 @@ async def test_dispatch_requires_dataset_and_target(db):
             budget_config={},
         )
     assert exc.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# V3 Phase 1 — DL trial expansion
+# ---------------------------------------------------------------------------
+
+def test_expand_dl_baseline_uses_registry_defaults_when_config_missing():
+    # V3.1.1 canonical key convention: DL trials expose ``arch_config`` /
+    # ``opt_config`` / ``train_config`` (matches ``_create_dl_training_task_record``
+    # + the UI's ``DLConfigPanel`` form shape).
+    from app.core.dl_registry import DL_MODEL_REGISTRY
+    dl_token = next(m["id"] for m in DL_MODEL_REGISTRY
+                    if "classification" in m.get("task_types", []))
+    trials = svc._expand_dl_baseline(
+        dl_models=[dl_token],
+        dl_config={},
+        task_type="classification",
+    )
+    assert len(trials) == 1
+    t = trials[0]
+    assert t["model_type"] == dl_token
+    assert t["family"] == "dl"
+    assert t["search_meta"]["family"] == "dl"
+    hp = t["hyperparameters"]
+    # Registry defaults must fill all three sections
+    assert set(hp.keys()) == {"arch_config", "opt_config", "train_config"}
+    assert hp["train_config"].get("epochs") is not None
+
+
+def test_expand_dl_baseline_merges_partial_override():
+    from app.core.dl_registry import DL_MODEL_REGISTRY
+    dl_token = next(m["id"] for m in DL_MODEL_REGISTRY
+                    if "classification" in m.get("task_types", []))
+    trials = svc._expand_dl_baseline(
+        dl_models=[dl_token],
+        dl_config={dl_token: {"train_config": {"epochs": 3}}},
+        task_type="classification",
+    )
+    hp = trials[0]["hyperparameters"]
+    # Override survives
+    assert hp["train_config"]["epochs"] == 3
+    # Other train defaults still present (merged, not replaced)
+    assert len(hp["train_config"]) > 1
+
+
+def test_renumber_trials_produces_dense_indices():
+    trials = [
+        {"model_type": "a", "hyperparameters": {}, "trial_no": 1},
+        {"model_type": "b", "hyperparameters": {}, "trial_no": 2},
+    ]
+    out = svc._renumber_trials(trials, start=5)
+    assert [t["trial_no"] for t in out] == [5, 6]
+    # Non-destructive
+    assert [t["trial_no"] for t in trials] == [1, 2]
 
 
 async def test_dispatch_rejects_unknown_model(db):

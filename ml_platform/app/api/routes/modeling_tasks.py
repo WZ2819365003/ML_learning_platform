@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_db
 from app.services import modeling_task_service
+from app.services.progress_tree_service import get_progress_tree
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,11 @@ class CreateModelingTaskRequest(BaseModel):
     objective_direction: str = "max"          # max | min
     description: str | None = None
     config: dict | None = None
+    training_plan_id: str | None = Field(
+        default=None,
+        description="Optional TrainingPlan to bind. A frozen snapshot is captured at "
+                    "create-time so subsequent plan edits don't rewrite history.",
+    )
 
 
 class UpdateModelingTaskRequest(BaseModel):
@@ -59,6 +65,29 @@ class CreateExperimentBatchRequest(BaseModel):
     selected_models: list[str] = Field(..., min_length=1)
     search_space: dict | None = None
     budget_config: dict | None = None
+    description: str | None = None
+    model_family: str | None = Field(
+        default=None, description="ml | dl | mixed — inferred from selected_models if omitted"
+    )
+    dl_config: dict | None = Field(
+        default=None,
+        description="Per-DL-model presets { model_id: { arch, opt, train } }; missing entries backfilled from registry defaults",
+    )
+
+
+class ExperimentStrategyRequest(BaseModel):
+    strategy_type: str = Field(description="baseline | grid_search | bayesian_search")
+    selected_models: list[str] = Field(..., min_length=1)
+    search_space: dict | None = None
+    budget_config: dict | None = None
+    name: str | None = None
+    description: str | None = None
+
+
+class CreateExperimentBundleRequest(BaseModel):
+    """Launch several strategy batches under one modeling task."""
+    name: str
+    strategies: list[ExperimentStrategyRequest] = Field(..., min_length=1)
     description: str | None = None
 
 
@@ -108,6 +137,7 @@ async def create_modeling_task(
         objective_direction=body.objective_direction,
         description=body.description,
         config=body.config,
+        training_plan_id=body.training_plan_id,
     )
 
 
@@ -146,6 +176,40 @@ async def delete_modeling_task(
 
 
 # ---------------------------------------------------------------------------
+# Progress tree — per-model / per-epoch aggregate for ModelingTaskDetail
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{task_id}/progress-tree",
+    summary="Per-experiment / per-run progress aggregate (ML + DL in one shape)",
+)
+async def task_progress_tree(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """
+    Powers the ProgressTree widget on ModelingTaskDetail.
+
+    Shape::
+
+        {
+          modeling_task: {id, name, status, progress_aggregated, ...},
+          experiments: [{
+              id, name, strategy_type, status,
+              progress_aggregated, run_count,
+              runs: [{id, model_type, family, status, progress, current_step, …}]
+          }],
+          has_active_runs: bool,   # true → UI should keep polling
+        }
+
+    ``family`` is ``"ml" | "dl" | "unknown"`` and lets the frontend pick
+    ML vs DL icons.  ``current_step`` is a short human string like
+    ``"epoch 12/50"`` (DL) or ``"训练中 (60%)"`` (ML).
+    """
+    return await get_progress_tree(db, task_id)
+
+
+# ---------------------------------------------------------------------------
 # Aggregated leaderboard across all experiments under this task
 # ---------------------------------------------------------------------------
 
@@ -156,6 +220,15 @@ async def task_leaderboard(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
     return await modeling_task_service.task_leaderboard(db, task_id, top_k=top_k)
+
+
+@router.get("/{task_id}/runs", summary="All runs with scheduler progress")
+async def task_runs(
+    task_id: str,
+    status: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    return await modeling_task_service.task_runs(db, task_id, status=status)
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +271,8 @@ async def create_experiment_batch(
             search_space=body.search_space or {},
             budget_config=body.budget_config or {},
             description=body.description,
+            model_family=body.model_family,
+            dl_config=body.dl_config,
         )
     except ImportError as exc:
         # Commit C not yet applied — return 501 rather than crashing.
@@ -208,3 +283,20 @@ async def create_experiment_batch(
         ) from exc
 
 
+@router.post("/{task_id}/experiments/bulk", summary="Launch multiple experiment batches", status_code=201)
+async def create_experiment_bundle(
+    task_id: str,
+    body: CreateExperimentBundleRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Submit baseline/grid/bayesian batches together from the V3 workbench."""
+    from app.services import tuning_service
+
+    strategies = [item.model_dump() for item in body.strategies]
+    return await tuning_service.dispatch_experiment_bundle(
+        db,
+        modeling_task_id=task_id,
+        name=body.name,
+        strategies=strategies,
+        description=body.description,
+    )

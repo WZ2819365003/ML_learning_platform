@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { modelingTaskApi, dataApi } from '../services/api'
+import TrainingPlanPicker from '../components/workbench/TrainingPlanPicker'
 
 const STATUS_META = {
   CREATED:   { color: 'default', icon: <ClockCircleFilled />, label: '待启动' },
@@ -126,9 +127,15 @@ export default function ModelingTasks() {
     if (!columnInfo) return []
     const entries = Object.entries(columnInfo)
     const isNumeric = (dt) => /int|float|double|number/i.test(String(dt))
+    const isIdLikeClassificationTarget = (meta) => {
+      const uniqueRate = Number(meta.unique_rate ?? 0)
+      const minClassCount = Number(meta.min_class_count ?? 0)
+      return taskTypeWatch === 'classification'
+        && (uniqueRate > 0.5 || minClassCount < 2)
+    }
     const filtered = taskTypeWatch === 'regression'
       ? entries.filter(([, m]) => isNumeric(m.dtype))
-      : entries
+      : entries.filter(([, m]) => !isIdLikeClassificationTarget(m))
     filtered.sort((a, b) => {
       const an = isNumeric(a[1].dtype) ? 0 : 1
       const bn = isNumeric(b[1].dtype) ? 0 : 1
@@ -145,6 +152,11 @@ export default function ModelingTasks() {
           {meta.missing_rate > 0 && (
             <Tag style={{ fontSize: 10, margin: 0 }} color="warning">
               缺失 {(meta.missing_rate * 100).toFixed(0)}%
+            </Tag>
+          )}
+          {meta.unique_count != null && (
+            <Tag style={{ fontSize: 10, margin: 0 }} color="geekblue">
+              {meta.unique_count} 类
             </Tag>
           )}
         </Space>
@@ -164,6 +176,7 @@ export default function ModelingTasks() {
         task_type: values.task_type,
         objective_metric: values.objective_metric,
         objective_direction: _objectiveDirection(values.objective_metric),
+        training_plan_id: values.training_plan_id || null,
       }
       const result = await modelingTaskApi.create(payload)
       message.success(`建模任务 "${result.name}" 已创建`)
@@ -441,6 +454,8 @@ export default function ModelingTasks() {
                   onChange={() => {
                     const t = form.getFieldValue('task_type')
                     form.setFieldValue('objective_metric', t === 'regression' ? 'rmse' : 'accuracy')
+                    // task_type changed → clear plan binding because plans are task-type-specific
+                    form.setFieldValue('training_plan_id', undefined)
                   }}
                 />
               </Form.Item>
@@ -451,6 +466,13 @@ export default function ModelingTasks() {
               </Form.Item>
             </Col>
           </Row>
+          <Form.Item
+            name="training_plan_id"
+            label="训练方案（可选）"
+            tooltip="选择已保存的训练方案后，本任务将在创建时冻结方案快照，后续编辑方案不会影响此任务。"
+          >
+            <TrainingPlanPicker taskType={taskTypeWatch} />
+          </Form.Item>
         </Form>
       </Modal>
     </div>

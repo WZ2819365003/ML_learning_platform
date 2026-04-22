@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import yaml
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -27,8 +28,10 @@ from app.models.database import (
     DatasetVersion,
     ExperimentRun,
     ModelingTask,
+    PlatformTask,
     PlatformExperiment,
 )
+from app.services.prediction_service import load_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,9 @@ def serialize_modeling_task(task: ModelingTask) -> dict[str, Any]:
         "best_run_id": task.best_run_id,
         "config": task.config or {},
         "summary_snapshot": task.summary_snapshot or {},
+        # V3 Phase 2 — plan binding
+        "training_plan_id": task.training_plan_id,
+        "training_plan_snapshot": task.training_plan_snapshot,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         "finished_at": task.finished_at.isoformat() if task.finished_at else None,
@@ -169,6 +175,7 @@ async def create_modeling_task(
     description: str | None = None,
     dataset_version_id: str | None = None,
     config: dict | None = None,
+    training_plan_id: str | None = None,
 ) -> dict[str, Any]:
     if task_type not in ("classification", "regression"):
         raise HTTPException(status_code=422, detail="task_type must be classification|regression")
@@ -176,11 +183,13 @@ async def create_modeling_task(
         raise HTTPException(status_code=422, detail="objective_direction must be max|min")
 
     dataset_name: str | None = None
+    ds: Dataset | None = None
     if dataset_id:
         ds = (await db.execute(select(Dataset).where(Dataset.id == dataset_id))).scalar_one_or_none()
         if ds is None:
             raise HTTPException(status_code=404, detail=f"Dataset {dataset_id!r} not found")
         dataset_name = ds.name
+        _validate_target_column(ds, target_column, task_type)
 
     if dataset_version_id:
         dv = (
@@ -192,6 +201,40 @@ async def create_modeling_task(
             raise HTTPException(
                 status_code=404, detail=f"DatasetVersion {dataset_version_id!r} not found"
             )
+
+    # -----------------------------------------------------------------------
+    # V3 Phase 2 — bind to a TrainingPlan and freeze a snapshot.
+    # We validate the plan's task_type agrees so the user never picks a
+    # regression plan for a classification task (would produce nonsense runs).
+    # The snapshot is frozen HERE (at bind time) — any subsequent plan edits
+    # don't retroactively rewrite this task's recipe.
+    # -----------------------------------------------------------------------
+    training_plan_snapshot: dict | None = None
+    if training_plan_id:
+        from app.models.database import TrainingPlan
+        from app.services.training_plan_service import capture_snapshot, mark_used
+
+        plan = (
+            await db.execute(
+                select(TrainingPlan).where(TrainingPlan.id == training_plan_id)
+            )
+        ).scalar_one_or_none()
+        if plan is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"TrainingPlan {training_plan_id!r} not found",
+            )
+        if plan.task_type and plan.task_type != task_type:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"TrainingPlan task_type={plan.task_type!r} does not match "
+                    f"ModelingTask task_type={task_type!r}"
+                ),
+            )
+        training_plan_snapshot = capture_snapshot(plan)
+        # Track usage — side effect, does not alter the snapshot
+        await mark_used(db, plan.id)
 
     task = ModelingTask(
         name=name,
@@ -205,6 +248,8 @@ async def create_modeling_task(
         objective_direction=objective_direction,
         status="CREATED",
         config=config,
+        training_plan_id=training_plan_id,
+        training_plan_snapshot=training_plan_snapshot,
     )
     db.add(task)
     await db.flush()
@@ -212,9 +257,103 @@ async def create_modeling_task(
     return serialize_modeling_task(task)
 
 
+def _validate_target_column(
+    dataset: Dataset,
+    target_column: str | None,
+    task_type: str,
+) -> None:
+    """Reject obviously invalid target columns before creating V3 work."""
+    if not target_column:
+        return
+
+    try:
+        df = load_dataframe(dataset.file_path)
+    except Exception as exc:  # noqa: BLE001
+        # Historical tests and stale dev DB rows can point at unavailable
+        # files. Keep creation best-effort; actual training still fails with
+        # the concrete file error if the user launches a run.
+        logger.warning(
+            "Skipping target validation for dataset %s; failed to read %s: %s",
+            dataset.id,
+            dataset.file_path,
+            exc,
+        )
+        return
+
+    if target_column not in df.columns:
+        raise HTTPException(
+            status_code=422,
+            detail=f"目标列 {target_column!r} 不存在，请从数据集列中重新选择。",
+        )
+
+    series = df[target_column].dropna()
+    if series.empty:
+        raise HTTPException(
+            status_code=422,
+            detail=f"目标列 {target_column!r} 全为空，不能用于建模。",
+        )
+
+    if task_type == "regression":
+        if not pd.api.types.is_numeric_dtype(series):
+            raise HTTPException(
+                status_code=422,
+                detail=f"回归目标列 {target_column!r} 必须是数值列。",
+            )
+        return
+
+    counts = series.value_counts(dropna=True)
+    unique_count = int(counts.shape[0])
+    total = int(series.shape[0])
+    min_class_count = int(counts.min()) if unique_count else 0
+    unique_rate = unique_count / total if total else 0.0
+
+    if unique_count < 2:
+        raise HTTPException(
+            status_code=422,
+            detail=f"分类目标列 {target_column!r} 只有 {unique_count} 个类别，至少需要 2 个类别。",
+        )
+
+    if min_class_count < 2 or unique_count == total or unique_rate > 0.5:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"分类目标列 {target_column!r} 不适合作为标签："
+                f"类别数 {unique_count} / 样本数 {total}，最小类别样本数 {min_class_count}。"
+                "这通常是 ID、序号或高基数字段；请改选 Target、label、Failure Type 等真实标签列。"
+            ),
+        )
+
+
 async def get_modeling_task(db: AsyncSession, task_id: str) -> dict[str, Any]:
     task = await _get_task_or_404(db, task_id)
     payload = serialize_modeling_task(task)
+
+    # -----------------------------------------------------------------------
+    # V3 Phase 2 — plan staleness indicator
+    # When the linked plan's current version != the version frozen at bind
+    # time, the UI surfaces a "plan updated since bind" banner.  We never
+    # overwrite the snapshot automatically; that would defeat reproducibility.
+    # -----------------------------------------------------------------------
+    if task.training_plan_id and task.training_plan_snapshot:
+        from app.models.database import TrainingPlan
+
+        plan_row = (
+            await db.execute(
+                select(TrainingPlan.version, TrainingPlan.name)
+                .where(TrainingPlan.id == task.training_plan_id)
+            )
+        ).first()
+        snapshot_version = (
+            (task.training_plan_snapshot or {}).get("plan_version")
+            or 1
+        )
+        payload["training_plan_status"] = {
+            "plan_exists": plan_row is not None,
+            "snapshot_version": snapshot_version,
+            "current_version": plan_row[0] if plan_row else None,
+            "stale": bool(plan_row and plan_row[0] != snapshot_version),
+            "current_name": plan_row[1] if plan_row else None,
+        }
 
     exp_rows = await db.execute(
         select(PlatformExperiment)
@@ -356,6 +495,102 @@ async def task_leaderboard(db: AsyncSession, task_id: str, top_k: int = 20) -> l
         }
         for idx, (run, value) in enumerate(scored[:top_k])
     ]
+
+
+async def task_runs(
+    db: AsyncSession,
+    task_id: str,
+    *,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """Return all runs for a modeling task, including scheduler progress."""
+    task = await _get_task_or_404(db, task_id)
+
+    exp_rows = await db.execute(
+        select(PlatformExperiment)
+        .where(PlatformExperiment.modeling_task_id == task_id)
+        .order_by(PlatformExperiment.created_at.desc())
+    )
+    experiments = exp_rows.scalars().all()
+    if not experiments:
+        return {"items": [], "total": 0}
+
+    exp_index = {
+        exp.id: {
+            "name": exp.name,
+            "strategy_type": exp.strategy_type,
+            "status": exp.status,
+        }
+        for exp in experiments
+    }
+
+    stmt = select(ExperimentRun).where(ExperimentRun.experiment_id.in_(exp_index.keys()))
+    if status:
+        stmt = stmt.where(ExperimentRun.status == status.upper())
+    run_rows = await db.execute(
+        stmt.order_by(
+            ExperimentRun.created_at.desc(),
+            ExperimentRun.trial_no.asc(),
+        )
+    )
+    runs = run_rows.scalars().all()
+
+    task_ids = [run.task_id for run in runs if run.task_id]
+    platform_tasks: dict[str, PlatformTask] = {}
+    if task_ids:
+        ptask_rows = await db.execute(select(PlatformTask).where(PlatformTask.id.in_(task_ids)))
+        platform_tasks = {pt.id: pt for pt in ptask_rows.scalars().all()}
+
+    def _platform_payload(pt: PlatformTask | None) -> dict[str, Any] | None:
+        if pt is None:
+            return None
+        return {
+            "id": pt.id,
+            "kind": pt.kind,
+            "status": pt.status,
+            "progress": pt.progress,
+            "payload_ref": pt.payload_ref,
+            "retry_count": pt.retry_count,
+            "max_retries": pt.max_retries,
+            "error_message": pt.error_message,
+            "queued_at": pt.queued_at.isoformat() if pt.queued_at else None,
+            "started_at": pt.started_at.isoformat() if pt.started_at else None,
+            "finished_at": pt.finished_at.isoformat() if pt.finished_at else None,
+        }
+
+    items = []
+    for run in runs:
+        exp_meta = exp_index.get(run.experiment_id, {})
+        pt = platform_tasks.get(run.task_id) if run.task_id else None
+        objective_value = _pick_metric(run.metrics or {}, task.objective_metric or "accuracy")
+        items.append({
+            "run_id": run.id,
+            "experiment_id": run.experiment_id,
+            "experiment_name": exp_meta.get("name"),
+            "experiment_status": exp_meta.get("status"),
+            "strategy_type": exp_meta.get("strategy_type") or run.source_experiment_type,
+            "trial_no": run.trial_no,
+            "rank": run.rank,
+            "status": run.status,
+            "objective_value": objective_value,
+            "metric_name": task.objective_metric,
+            "params": run.params or {},
+            "metrics": run.metrics or {},
+            "search_meta": run.search_meta or {},
+            "platform_task": _platform_payload(pt),
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        })
+
+    reverse = (task.objective_direction or "max") == "max"
+    items.sort(
+        key=lambda row: (
+            row["objective_value"] is None,
+            -float(row["objective_value"] or 0) if reverse else float(row["objective_value"] or 0),
+        )
+    )
+    return {"items": items, "total": len(items)}
 
 
 async def refresh_task_summary(db: AsyncSession, task_id: str) -> None:

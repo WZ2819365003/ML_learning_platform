@@ -47,9 +47,13 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.dl_registry import build_default_dl_config, get_dl_model_spec
+from app.core.model_registry import resolve_model_family
 from app.models.database import (
+    DLTrainingTask,
     ExperimentRun,
     ModelingTask,
+    PlatformTask,
     PlatformExperiment,
     async_session_factory,
 )
@@ -86,6 +90,8 @@ async def dispatch_experiment_batch(
     search_space: dict[str, Any],
     budget_config: dict[str, Any],
     description: str | None = None,
+    model_family: str | None = None,
+    dl_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Create a PlatformExperiment for this batch, expand trials, and launch them.
@@ -93,6 +99,16 @@ async def dispatch_experiment_batch(
     Returns a serialised experiment plus trial counts.  Actual training runs
     execute asynchronously through asyncio.create_task — the HTTP response
     returns immediately after runs are persisted in PENDING state.
+
+    V3 Phase 1 — DL integration
+    ----------------------------
+    ``selected_models`` may contain both ML and DL tokens.  Each token is
+    resolved against the model registries; unknown tokens raise 422.
+    DL tokens are dispatched as ``PlatformTask(kind='dl_train')`` and executed
+    by ``dl_service._run_dl_training_by_id``.  For DL models, grid/bayesian
+    strategies are **downgraded to baseline** in Phase 1 (Optuna for PyTorch
+    is a separate future work item).  ML models continue to support all three
+    strategies in the same batch.
     """
     task = await _get_task_or_404(db, modeling_task_id)
     if not task.dataset_id or not task.target_column:
@@ -104,13 +120,70 @@ async def dispatch_experiment_batch(
     task_type = task.task_type or "classification"
     tuning_defaults = load_tuning_spaces(task_type)
 
-    unknown_models = [m for m in selected_models if m not in tuning_defaults]
+    # -----------------------------------------------------------------------
+    # V3 Phase 2 — snapshot-first defaulting
+    # If the caller omitted selected_models / search_space / dl_config /
+    # budget_config, fall back to the plan snapshot frozen at task creation.
+    # Snapshot is authoritative; editing the live plan after bind does NOT
+    # change what the task runs (reproducibility).
+    # -----------------------------------------------------------------------
+    snapshot_payload: dict[str, Any] = {}
+    snapshot = getattr(task, "training_plan_snapshot", None) or {}
+    if isinstance(snapshot, dict):
+        snapshot_payload = snapshot.get("payload") or {}
+
+    if not selected_models and snapshot_payload.get("selected_models"):
+        selected_models = list(snapshot_payload["selected_models"])
+    if (not search_space) and snapshot_payload.get("search_space"):
+        search_space = dict(snapshot_payload["search_space"])
+    if (not budget_config) and snapshot_payload.get("budget_config"):
+        budget_config = dict(snapshot_payload["budget_config"])
+    if dl_config is None and snapshot_payload.get("dl_config"):
+        dl_config = dict(snapshot_payload["dl_config"])
+    if model_family is None and snapshot_payload.get("model_family"):
+        model_family = snapshot_payload["model_family"]
+    if (not strategy_type) and snapshot_payload.get("strategy_type"):
+        strategy_type = snapshot_payload["strategy_type"]
+
+    # Split selected_models by family via registry lookup.  Any token that
+    # belongs to neither registry is rejected.
+    ml_models: list[str] = []
+    dl_models: list[str] = []
+    unknown_models: list[str] = []
+    for token in selected_models:
+        family = resolve_model_family(token)
+        if family == "ml":
+            if token not in tuning_defaults:
+                unknown_models.append(token)
+            else:
+                ml_models.append(token)
+        elif family == "dl":
+            spec = get_dl_model_spec(token)
+            if spec is None or task_type not in spec.get("task_types", []):
+                unknown_models.append(token)
+            else:
+                dl_models.append(token)
+        else:
+            unknown_models.append(token)
     if unknown_models:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"Unknown model_type(s): {unknown_models}. "
-                f"Available for {task_type}: {sorted(tuning_defaults.keys())}"
+                f"Unknown or incompatible model_type(s): {unknown_models}. "
+                f"Available ML for {task_type}: {sorted(tuning_defaults.keys())}"
+            ),
+        )
+
+    dl_models = [
+        model for model in selected_models
+        if (tuning_defaults.get(model) or {}).get("family", "ml") == "dl"
+    ]
+    if strategy_type != "baseline" and dl_models:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Deep-learning models are currently supported in baseline batches only. "
+                f"Remove from {strategy_type}: {dl_models}"
             ),
         )
 
@@ -150,8 +223,26 @@ async def dispatch_experiment_batch(
     max_trials = budget_config.get("max_trials") if budget_config else None
     test_size = float((budget_config or {}).get("test_size") or 0.2)
 
+    # DL trials are always baseline in Phase 1.  If the caller picked
+    # grid/bayesian but selected DL models, we run those DL models as baseline
+    # and log a downgrade warning.  ML models continue to honour the strategy.
+    if dl_models and strategy_type in ("grid_search", "bayesian_search"):
+        logger.warning(
+            "Downgrading %d DL model(s) to baseline for experiment %s "
+            "(strategy=%s; DL search is not supported in Phase 1): %s",
+            len(dl_models), exp.id, strategy_type, dl_models,
+        )
+    dl_trials = _expand_dl_baseline(dl_models, dl_config or {}, task_type)
+
     if strategy_type == "baseline":
-        trials = _expand_baseline(selected_models, tuning_defaults, search_space)
+        # ``_expand_baseline`` is family-aware so a single call covers both
+        # ML and DL tokens; the ``search_space`` acts as a per-model override
+        # (ML: hyperparameter overrides; DL: arch/opt/train section overrides).
+        merged_overrides = dict(search_space or {})
+        for token in dl_models:
+            if token not in merged_overrides and (dl_config or {}).get(token):
+                merged_overrides[token] = dl_config[token]
+        trials = _expand_baseline(selected_models, tuning_defaults, merged_overrides)
         total_trials = len(trials)
         if total_trials == 0:
             raise HTTPException(status_code=422, detail="Baseline produced no trials — check selected_models")
@@ -159,7 +250,8 @@ async def dispatch_experiment_batch(
         await db.commit()
         _launch_concurrent(exp.id, modeling_task_id)
     elif strategy_type == "grid_search":
-        trials = _expand_grid_search(selected_models, tuning_defaults, search_space, max_trials)
+        ml_trials = _expand_grid_search(ml_models, tuning_defaults, search_space, max_trials)
+        trials = ml_trials + _renumber_trials(dl_trials, start=len(ml_trials) + 1)
         total_trials = len(trials)
         if total_trials == 0:
             raise HTTPException(
@@ -170,18 +262,24 @@ async def dispatch_experiment_batch(
         await db.commit()
         _launch_concurrent(exp.id, modeling_task_id)
     elif strategy_type == "bayesian_search":
-        total_trials = _count_bayesian_trials(selected_models, budget_config, max_trials)
+        # ML part runs bayesian; DL part runs baseline concurrently (persisted now).
+        if dl_trials:
+            await _persist_trials(db, exp, task, dl_trials, eval_metrics, test_size=test_size)
+        total_trials = _count_bayesian_trials(ml_models, budget_config, max_trials) + len(dl_trials)
         await db.commit()
-        _launch_bayesian(
-            experiment_id=exp.id,
-            modeling_task_id=modeling_task_id,
-            selected_models=selected_models,
-            search_space=search_space,
-            tuning_defaults=tuning_defaults,
-            budget_config=budget_config,
-            eval_metrics=eval_metrics,
-            test_size=test_size,
-        )
+        if dl_trials:
+            _launch_concurrent(exp.id, modeling_task_id)
+        if ml_models:
+            _launch_bayesian(
+                experiment_id=exp.id,
+                modeling_task_id=modeling_task_id,
+                selected_models=ml_models,
+                search_space=search_space,
+                tuning_defaults=tuning_defaults,
+                budget_config=budget_config,
+                eval_metrics=eval_metrics,
+                test_size=test_size,
+            )
     else:
         raise HTTPException(status_code=422, detail=f"Unsupported strategy_type: {strategy_type!r}")
 
@@ -189,6 +287,62 @@ async def dispatch_experiment_batch(
         "experiment": serialize_experiment(exp),
         "trials_planned": total_trials,
         "strategy_type": strategy_type,
+    }
+
+
+async def dispatch_experiment_bundle(
+    db: AsyncSession,
+    *,
+    modeling_task_id: str,
+    name: str,
+    strategies: list[dict[str, Any]],
+    description: str | None = None,
+) -> dict[str, Any]:
+    """Submit several strategy batches for the same modeling task in one call."""
+    if not strategies:
+        raise HTTPException(status_code=422, detail="At least one strategy is required")
+
+    submitted: list[dict[str, Any]] = []
+    strategy_types: list[str] = []
+    total_trials = 0
+    for idx, spec in enumerate(strategies, start=1):
+        strategy_type = spec.get("strategy_type")
+        if strategy_type not in ("baseline", "grid_search", "bayesian_search"):
+            raise HTTPException(
+                status_code=422,
+                detail="strategy_type must be baseline|grid_search|bayesian_search",
+            )
+        selected_models = list(spec.get("selected_models") or [])
+        if not selected_models:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{strategy_type} requires at least one selected model",
+            )
+
+        label = {
+            "baseline": "基线",
+            "grid_search": "网格",
+            "bayesian_search": "贝叶斯",
+        }[strategy_type]
+        result = await dispatch_experiment_batch(
+            db,
+            modeling_task_id=modeling_task_id,
+            name=spec.get("name") or f"{name}-{idx}-{label}",
+            strategy_type=strategy_type,
+            selected_models=selected_models,
+            search_space=spec.get("search_space") or {},
+            budget_config=spec.get("budget_config") or {},
+            description=spec.get("description") or description,
+        )
+        submitted.append(result)
+        strategy_types.append(strategy_type)
+        total_trials += int(result.get("trials_planned") or 0)
+
+    return {
+        "batch_count": len(submitted),
+        "strategy_types": strategy_types,
+        "total_trials_planned": total_trials,
+        "items": submitted,
     }
 
 
@@ -201,14 +355,50 @@ def _expand_baseline(
     tuning_defaults: dict[str, Any],
     overrides: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    """One trial per model, using fixed defaults (+ user overrides)."""
+    """One trial per model, using fixed defaults (+ user overrides).
+
+    Handles both ML and DL tokens.  ML pulls ``fixed`` hyperparameters from
+    ``tuning_defaults``; DL builds ``arch_config`` / ``opt_config`` /
+    ``train_config`` blocks via ``build_default_dl_config`` and merges any
+    per-model overrides from the caller (supporting both the ``arch`` short
+    form and the ``arch_config`` suffixed form for backward-compat).
+
+    Baseline DL trials are capped at ``epochs <= 10`` so a mixed ML+DL batch
+    finishes in seconds rather than minutes during a baseline sweep.
+    """
     overrides = overrides or {}
-    trials = []
+    trials: list[dict[str, Any]] = []
     for idx, model_type in enumerate(selected_models, start=1):
-        template = tuning_defaults[model_type]
+        family = resolve_model_family(model_type) or "ml"
+        if family == "dl":
+            defaults = build_default_dl_config(model_type)
+            per_model = overrides.get(model_type) or {}
+            arch_override = per_model.get("arch_config") or per_model.get("arch") or {}
+            opt_override = per_model.get("opt_config") or per_model.get("opt") or {}
+            train_override = per_model.get("train_config") or per_model.get("train") or {}
+            train_config = {**defaults["train"], **train_override}
+            # Cap baseline epochs — full sweeps go through grid/bayesian paths.
+            if int(train_config.get("epochs", 10) or 10) > 10:
+                train_config["epochs"] = 10
+            hyperparameters = {
+                "arch_config": {**defaults["arch"], **arch_override},
+                "opt_config": {**defaults["opt"], **opt_override},
+                "train_config": train_config,
+            }
+            trials.append({
+                "family": "dl",
+                "model_type": model_type,
+                "hyperparameters": hyperparameters,
+                "trial_no": idx,
+                "search_meta": {"strategy": "baseline", "grid_index": None, "family": "dl"},
+            })
+            continue
+
+        template = tuning_defaults.get(model_type) or {}
         params = dict(template.get("fixed") or {})
         params.update((overrides.get(model_type) or {}))
         trials.append({
+            "family": template.get("family", "ml"),
             "model_type": model_type,
             "hyperparameters": params,
             "trial_no": idx,
@@ -232,6 +422,10 @@ def _expand_grid_search(
 
     for model_type in selected_models:
         template = tuning_defaults[model_type]
+        family = template.get("family", "ml")
+        if family == "dl":
+            logger.warning("Grid search: DL model %s is baseline-only, skipping", model_type)
+            continue
         user_grid = search_space.get(model_type) or {}
         # Use user grid if present, otherwise fall back to registry defaults.
         grid = user_grid or (template.get("grid_values") or {})
@@ -251,6 +445,7 @@ def _expand_grid_search(
             trial_no += 1
             params = {**fixed, **combo}
             trials.append({
+                "family": family,
                 "model_type": model_type,
                 "hyperparameters": params,
                 "trial_no": trial_no,
@@ -263,6 +458,35 @@ def _expand_grid_search(
             if max_trials and trial_no >= max_trials:
                 return trials
     return trials
+
+
+def _expand_dl_baseline(
+    dl_models: list[str],
+    dl_config: dict[str, Any],
+    task_type: str,
+) -> list[dict[str, Any]]:
+    """
+    One trial per DL model.  Thin wrapper over ``_expand_baseline`` that
+    preserves the older ``(dl_models, dl_config, task_type)`` signature used
+    by grid/bayesian downgrade paths; emits trials with the canonical
+    ``arch_config``/``opt_config``/``train_config`` hyperparameter keys and
+    ``family='dl'`` so ``_persist_trials`` picks the DL branch.
+    """
+    trials = _expand_baseline(
+        selected_models=list(dl_models),
+        tuning_defaults={},
+        overrides=dl_config or {},
+    )
+    # Tag task_type for downstream DL trainer selection (classification / regression).
+    return [{**t, "_task_type": task_type} for t in trials]
+
+
+def _renumber_trials(trials: list[dict[str, Any]], *, start: int) -> list[dict[str, Any]]:
+    """Rewrite trial_no in-place starting at ``start`` so ML+DL trial indices stay dense."""
+    out = []
+    for offset, t in enumerate(trials):
+        out.append({**t, "trial_no": start + offset})
+    return out
 
 
 def _count_bayesian_trials(
@@ -288,23 +512,50 @@ async def _persist_trials(
     *,
     test_size: float = 0.2,
 ) -> None:
-    """Create TrainingTask + ExperimentRun + PlatformTask for each trial."""
+    """Create domain task + ExperimentRun + PlatformTask for each trial.
+
+    ML trials create a ``TrainingTask`` + ``PlatformTask(kind='train')``;
+    DL trials create a ``DLTrainingTask`` + ``PlatformTask(kind='dl_train')``.
+    The run's ``params['family']`` is set so the concurrent executor can
+    dispatch to the right service.
+    """
     for trial in trials:
-        domain_task = await create_training_task_record(
-            db,
-            {
-                "dataset_id": task.dataset_id,
-                "model_type": trial["model_type"],
-                "target_column": task.target_column,
-                "hyperparameters": trial["hyperparameters"],
-                "test_size": test_size,
-                "eval_metrics": eval_metrics,
-            },
-        )
+        # ``trial["family"]`` is set by the expander (_expand_baseline / _expand_grid_search /
+        # _expand_dl_baseline).  DL trials use the helper that drops their hyperparameter
+        # tree into arch/opt/train sections; ML trials go through create_training_task_record
+        # which handles ID-leakage feature dropping downstream.
+        family = trial.get("family", "ml")
+        if family == "dl":
+            domain_task = await _create_dl_training_task_record(
+                db=db,
+                dataset_id=task.dataset_id,
+                target_column=task.target_column,
+                task_type=task.task_type,
+                model_type=trial["model_type"],
+                config=trial["hyperparameters"],
+                test_size=test_size,
+            )
+            kind = "dl_train"
+            payload_ref = f"dl_train:{domain_task.id}"
+        else:
+            domain_task = await create_training_task_record(
+                db,
+                {
+                    "dataset_id": task.dataset_id,
+                    "model_type": trial["model_type"],
+                    "target_column": task.target_column,
+                    "hyperparameters": trial["hyperparameters"],
+                    "test_size": test_size,
+                    "eval_metrics": eval_metrics,
+                },
+            )
+            kind = "train"
+            payload_ref = f"train:{domain_task.id}"
 
         run = ExperimentRun(
             experiment_id=exp.id,
             params={
+                "family": family,
                 "model_type": trial["model_type"],
                 "hyperparameters": trial["hyperparameters"],
                 "dataset_id": task.dataset_id,
@@ -323,8 +574,8 @@ async def _persist_trials(
 
         platform_task = await register_domain_task(
             db=db,
-            kind="train",
-            payload_ref=f"train:{domain_task.id}",
+            kind=kind,
+            payload_ref=payload_ref,
         )
         run.task_id = platform_task.id
         await db.flush()
@@ -332,6 +583,48 @@ async def _persist_trials(
         trial["_domain_task_id"] = domain_task.id
         trial["_platform_task_id"] = platform_task.id
         trial["_run_id"] = run.id
+
+
+async def _create_dl_training_task_record(
+    *,
+    db: AsyncSession,
+    dataset_id: str,
+    target_column: str,
+    task_type: str,
+    model_type: str,
+    config: dict[str, Any],
+    test_size: float,
+) -> DLTrainingTask:
+    """Create a DLTrainingTask row without auto-launching it."""
+    from app.core.dl_registry import get_dl_trainer_registry
+
+    available = list(get_dl_trainer_registry().keys())
+    if model_type not in available:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown DL model {model_type!r}. Available: {available}",
+        )
+
+    import uuid as _uuid_mod
+
+    train_config = dict(config.get("train_config") or {})
+    train_config.setdefault("test_size", test_size)
+    short_id = str(_uuid_mod.uuid4())[:8]
+    task = DLTrainingTask(
+        dataset_id=dataset_id,
+        name=f"{model_type}_{short_id}",
+        target_column=target_column,
+        model_type=model_type,
+        task_type=task_type or "classification",
+        arch_config=dict(config.get("arch_config") or {}),
+        opt_config=dict(config.get("opt_config") or {}),
+        train_config=train_config,
+        status="PENDING",
+    )
+    db.add(task)
+    await db.flush()
+    await db.refresh(task)
+    return task
 
 
 # ---------------------------------------------------------------------------
@@ -358,24 +651,30 @@ async def _run_concurrent_batch(experiment_id: str, modeling_task_id: str) -> No
             for run in runs
         ]
 
-    # Retrieve payload_ref → domain_task_id via PlatformTask lookup.
+    # Retrieve payload_ref → (kind, domain_task_id) via PlatformTask lookup.
+    # ``kind`` decides which executor the trial runs through (ML train vs DL train).
     async with async_session_factory() as db:
-        full_triples: list[tuple[str, str, str]] = []
+        full_entries: list[tuple[str, str, str, str]] = []  # (kind, domain_id, platform_id, run_id)
         for platform_task_id, run_id, domain_fallback in triples:
-            from app.models.database import PlatformTask
             pt = (
                 await db.execute(
                     select(PlatformTask).where(PlatformTask.id == platform_task_id)
                 )
             ).scalar_one_or_none()
             if pt and pt.payload_ref and ":" in pt.payload_ref:
-                _, _, domain_task_id = pt.payload_ref.partition(":")
-                full_triples.append((domain_task_id, platform_task_id, run_id))
+                # ``pt.kind`` is authoritative for executor-registry lookup; fall back
+                # to parsing payload_ref for older rows that only recorded the prefix.
+                payload_kind, _, domain_task_id = pt.payload_ref.partition(":")
+                resolved_kind = (pt.kind or payload_kind or "train")
+                full_entries.append((resolved_kind, domain_task_id, platform_task_id, run_id))
             elif domain_fallback:
-                full_triples.append((domain_fallback, platform_task_id, run_id))
+                full_entries.append(("train", domain_fallback, platform_task_id, run_id))
 
     await asyncio.gather(
-        *(_execute_single_trial(dti, pti, rid, experiment_id) for dti, pti, rid in full_triples),
+        *(
+            _execute_single_trial(dti, pti, rid, experiment_id, kind=kind)
+            for kind, dti, pti, rid in full_entries
+        ),
         return_exceptions=True,
     )
     await _finalise_batch(experiment_id, modeling_task_id)
@@ -393,10 +692,23 @@ async def _execute_single_trial(
     platform_task_id: str,
     run_id: str,
     experiment_id: str,
+    *,
+    kind: str = "train",
 ) -> dict[str, Any]:
-    """Run one trial to completion and write metrics + PlatformTask state back."""
+    """Run one trial to completion and write metrics + PlatformTask state back.
+
+    V3 Phase 2 — no more ``if kind == "dl_train"`` branching.  The
+    ``Executor Registry`` holds the (domain_id, platform_task_id) → dict
+    callable for every supported kind; ML and DL are now peers.  Adding a
+    new kind (prepare_data, evaluate, …) is a one-line registration in the
+    owning service module.
+
+    Codex's ``_normalise_run_metrics`` is still applied after the executor
+    returns so the leaderboard sees ``accuracy``/``rmse`` aliases regardless
+    of whether the underlying run was ML or DL.
+    """
     from app.services.experiment_service import update_run_metrics
-    from app.services.training_service import _run_training_sync_by_id
+    from app.scheduler.executors import get_executor
 
     await update_platform_task_status(platform_task_id, "RUNNING")
 
@@ -413,8 +725,9 @@ async def _execute_single_trial(
         logger.warning("Could not mark run %s RUNNING: %s", run_id, exc)
 
     try:
-        result = await _run_training_sync_by_id(domain_task_id, platform_task_id)
-        metrics = result.get("metrics") or {}
+        executor = get_executor(kind)
+        result = await executor(domain_task_id, platform_task_id)
+        metrics = _normalise_run_metrics(result.get("metrics") or {})
         async with async_session_factory() as db:
             await update_run_metrics(db, run_id, metrics, status="SUCCESS")
             await db.commit()
@@ -430,6 +743,31 @@ async def _execute_single_trial(
             pass
         await update_platform_task_status(platform_task_id, "FAILED", error=str(exc))
         return {"run_id": run_id, "status": "FAILED"}
+
+
+def _normalise_run_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Expose common leaderboard metric keys for both ML and DL runs."""
+    normalised: dict[str, Any] = {}
+    for key, value in (metrics or {}).items():
+        if hasattr(value, "item"):
+            try:
+                value = value.item()
+            except Exception:
+                pass
+        normalised[key] = value
+
+    aliases = {
+        "val_acc": "accuracy",
+        "val_f1_macro": "f1",
+        "val_auc_roc": "roc_auc",
+        "val_rmse": "rmse",
+        "val_mae": "mae",
+        "val_r2": "r2",
+    }
+    for source, target in aliases.items():
+        if target not in normalised and isinstance(normalised.get(source), (int, float)):
+            normalised[target] = float(normalised[source])
+    return normalised
 
 
 async def _finalise_batch(experiment_id: str, modeling_task_id: str) -> None:
@@ -521,7 +859,19 @@ async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> 
             r for r in runs if not (r.metrics or {}).get("shap_importances")
         ]
         candidates.sort(key=_score, reverse=reverse)
-        top_runs = candidates[: max(0, int(top_k))]
+        ml_candidates: list[ExperimentRun] = []
+        for run in candidates:
+            if not run.task_id:
+                continue
+            platform_task = (
+                await db.execute(
+                    select(PlatformTask).where(PlatformTask.id == run.task_id)
+                )
+            ).scalar_one_or_none()
+            if platform_task and platform_task.kind == "train":
+                ml_candidates.append(run)
+
+        top_runs = ml_candidates[: max(0, int(top_k))]
         if not top_runs:
             return
 
@@ -658,10 +1008,11 @@ async def _run_bayesian_search(
                 )
 
                 outcome = await _execute_single_trial(
-                    domain_task_id=domain_task_id,
-                    platform_task_id=platform_task_id,
-                    run_id=run_id,
-                    experiment_id=experiment_id,
+                    domain_task_id,
+                    platform_task_id,
+                    run_id,
+                    experiment_id,
+                    kind="train",
                 )
                 value = (outcome.get("metrics") or {}).get(objective_metric)
                 if value is None:
