@@ -10,6 +10,7 @@ import {
   PlusOutlined, ReloadOutlined, StopOutlined,
 } from '@ant-design/icons';
 import { dataApi, logsApi, trainingApi } from '../services/api';
+import { useLogStream } from '../hooks/useLogStream';
 
 const { Text, Title } = Typography;
 
@@ -298,15 +299,19 @@ function TaskListView({ navigate }) {
 // ── Detail view ───────────────────────────────────────────────────────────────
 function TaskDetailView({ taskId, navigate }) {
   const [task, setTask] = useState(null);
-  const [logText, setLogText] = useState('');
   const [loading, setLoading] = useState(true);
+  // WS log stream (auto-reconnect w/ exponential backoff, seeded from REST)
+  const { logs, connected, seedHistorical } = useLogStream({
+    domainTaskId: taskId,
+    enabled: !!taskId,
+    maxEntries: 500,
+  });
 
   useEffect(() => {
     void loadTask();
-    void loadLogs();
-    const timer = setInterval(() => {
-      void loadTask();
-    }, 3000);
+    void seedLogsFromRest();
+    // Keep status/metrics polling at 3s for progress bar (logs now streamed).
+    const timer = setInterval(() => { void loadTask(); }, 3000);
     return () => clearInterval(timer);
   }, [taskId]);
 
@@ -321,17 +326,20 @@ function TaskDetailView({ taskId, navigate }) {
     }
   }
 
-  async function loadLogs() {
+  async function seedLogsFromRest() {
+    // Fetch the last page of historical logs once at mount so the user sees
+    // context from before the WS connected; after that, the WS appends live.
     try {
       const res = await logsApi.getLogs(taskId, { page_size: 30 });
-      const text = (res.entries ?? [])
-        .map(e => `${e.created_at} | ${e.level} | ${e.message}`)
-        .join('\n');
-      setLogText(text || '暂无日志。');
+      seedHistorical(res.entries ?? []);
     } catch {
-      setLogText('日志加载失败。');
+      /* no historical logs yet */
     }
   }
+
+  const logText = logs.length
+    ? logs.map(e => `${e.timestamp ?? ''} | ${e.level ?? 'INFO'} | ${e.message}`).join('\n')
+    : '暂无日志。';
 
   async function handleStop() {
     try {
@@ -361,7 +369,7 @@ function TaskDetailView({ taskId, navigate }) {
           {s === 'RUNNING' && (
             <Button danger icon={<StopOutlined />} onClick={handleStop}>停止训练</Button>
           )}
-          <Button icon={<ReloadOutlined />} onClick={() => { void loadTask(); void loadLogs(); }}>
+          <Button icon={<ReloadOutlined />} onClick={() => { void loadTask(); void seedLogsFromRest(); }}>
             刷新
           </Button>
         </Space>
@@ -411,7 +419,16 @@ function TaskDetailView({ taskId, navigate }) {
             </Card>
           )}
 
-          <Card title="最近日志">
+          <Card
+            title={
+              <Space>
+                <span>实时日志</span>
+                <Tag color={connected ? 'green' : 'default'}>
+                  {connected ? '已连接' : '未连接'}
+                </Tag>
+              </Space>
+            }
+          >
             <pre style={{ margin: 0, whiteSpace: 'pre-wrap', maxHeight: 300, overflow: 'auto' }}>
               {logText}
             </pre>

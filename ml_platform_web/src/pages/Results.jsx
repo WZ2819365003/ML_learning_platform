@@ -179,6 +179,13 @@ function ResultDetailView({ taskId, navigate }) {
     confusionMatrix: null, rocCurve: null,
     featureImportance: null, learningCurve: null,
   });
+  // Per-chart error string (null = ok / not-yet-loaded). Lets one chart fail
+  // without blanking the whole page (previously Promise.all bubbled a single
+  // 500 into an all-or-nothing fallback).
+  const [vizErrors, setVizErrors] = useState({
+    detail: null, confusionMatrix: null, rocCurve: null,
+    featureImportance: null, learningCurve: null,
+  });
   const [loading, setLoading] = useState(true);
   const [vizLoading, setVizLoading] = useState(false);
 
@@ -201,21 +208,63 @@ function ResultDetailView({ taskId, navigate }) {
 
   async function loadVisualizations() {
     setVizLoading(true);
-    try {
-      const [det, cm, roc, fi, lc] = await Promise.all([
-        modelApi.getModelDetail(taskId),
-        vizApi.getConfusionMatrix(taskId),
-        vizApi.getRocCurve(taskId),
-        vizApi.getFeatureImportance(taskId),
-        vizApi.getLearningCurve(taskId),
-      ]);
-      setDetail(det);
-      setVizState({ confusionMatrix: cm, rocCurve: roc, featureImportance: fi, learningCurve: lc });
-    } catch {
-      message.error('加载可视化详情失败');
-    } finally {
-      setVizLoading(false);
+    const results = await Promise.allSettled([
+      modelApi.getModelDetail(taskId),
+      vizApi.getConfusionMatrix(taskId),
+      vizApi.getRocCurve(taskId),
+      vizApi.getFeatureImportance(taskId),
+      vizApi.getLearningCurve(taskId),
+    ]);
+    const keys = ['detail', 'confusionMatrix', 'rocCurve', 'featureImportance', 'learningCurve'];
+    const nextErrors = {};
+    const payloads = {};
+    results.forEach((r, idx) => {
+      const k = keys[idx];
+      if (r.status === 'fulfilled') {
+        nextErrors[k] = null;
+        payloads[k] = r.value;
+      } else {
+        nextErrors[k] = r.reason?.message || r.reason?.toString?.() || '加载失败';
+        payloads[k] = null;
+      }
+    });
+    setVizErrors(nextErrors);
+    if (payloads.detail) setDetail(payloads.detail);
+    setVizState({
+      confusionMatrix: payloads.confusionMatrix ?? null,
+      rocCurve: payloads.rocCurve ?? null,
+      featureImportance: payloads.featureImportance ?? null,
+      learningCurve: payloads.learningCurve ?? null,
+    });
+    // Only surface a toast if every single endpoint failed; otherwise the
+    // per-chart inline error is enough (no 4× popup spam).
+    const allFailed = keys.every(k => nextErrors[k]);
+    if (allFailed) message.error('加载可视化详情失败');
+    setVizLoading(false);
+  }
+
+  // Small renderer: shows chart container when data is present, inline error
+  // (with retry) when that specific endpoint failed, empty state otherwise.
+  function ChartSlot({ errorKey, hasData, emptyText, children }) {
+    const err = vizErrors[errorKey];
+    if (err) {
+      return (
+        <Alert
+          type="error"
+          showIcon
+          message="图表加载失败"
+          description={err}
+          action={
+            <Button size="small" onClick={() => void loadVisualizations()} icon={<ReloadOutlined />}>
+              重试
+            </Button>
+          }
+          style={{ margin: '40px 0' }}
+        />
+      );
     }
+    if (hasData) return children;
+    return <Empty description={emptyText} style={{ padding: '60px 0' }} />;
   }
 
   const selectedModel = useMemo(
@@ -391,10 +440,13 @@ function ResultDetailView({ taskId, navigate }) {
                           title={<Space><HeatMapOutlined /> 混淆矩阵</Space>}
                           bordered={false}
                         >
-                          {vizState.confusionMatrix
-                            ? <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
-                            : <Empty description="暂无混淆矩阵数据" style={{ padding: '60px 0' }} />
-                          }
+                          <ChartSlot
+                            errorKey="confusionMatrix"
+                            hasData={!!vizState.confusionMatrix}
+                            emptyText="暂无混淆矩阵数据"
+                          >
+                            <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
+                          </ChartSlot>
                         </Card>
                       </Col>
                       <Col xs={24} xl={12}>
@@ -402,10 +454,13 @@ function ResultDetailView({ taskId, navigate }) {
                           title={<Space><LineChartOutlined /> ROC 曲线</Space>}
                           bordered={false}
                         >
-                          {vizState.rocCurve
-                            ? <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
-                            : <Empty description="暂无 ROC 曲线数据（仅分类任务）" style={{ padding: '60px 0' }} />
-                          }
+                          <ChartSlot
+                            errorKey="rocCurve"
+                            hasData={!!vizState.rocCurve}
+                            emptyText="暂无 ROC 曲线数据（仅分类任务）"
+                          >
+                            <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
+                          </ChartSlot>
                         </Card>
                       </Col>
                     </Row>
@@ -416,21 +471,18 @@ function ResultDetailView({ taskId, navigate }) {
                   label: <Space><BulbOutlined />模型解释</Space>,
                   children: (
                     <div>
-                      {vizState.featureImportance ? (
-                        <>
-                          <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
-                            模型原生特征重要性（基于 sklearn
-                            <Tag style={{ marginLeft: 6, fontSize: 10 }}>feature_importances_</Tag>
-                            属性，前 10 个特征）
-                          </div>
-                          <div ref={featureImportanceRef} style={{ width: '100%', height: 420 }} />
-                        </>
-                      ) : (
-                        <Empty
-                          description="暂无特征重要性数据（树模型训练后自动生成）"
-                          style={{ padding: '60px 0' }}
-                        />
-                      )}
+                      <ChartSlot
+                        errorKey="featureImportance"
+                        hasData={!!vizState.featureImportance}
+                        emptyText="暂无特征重要性数据（树模型训练后自动生成）"
+                      >
+                        <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
+                          模型原生特征重要性（基于 sklearn
+                          <Tag style={{ marginLeft: 6, fontSize: 10 }}>feature_importances_</Tag>
+                          属性，前 10 个特征）
+                        </div>
+                        <div ref={featureImportanceRef} style={{ width: '100%', height: 420 }} />
+                      </ChartSlot>
                       <Alert
                         type="info"
                         showIcon
@@ -444,9 +496,15 @@ function ResultDetailView({ taskId, navigate }) {
                 {
                   key: 'learning',
                   label: <Space><RiseOutlined />训练过程</Space>,
-                  children: vizState.learningCurve
-                    ? <div ref={learningCurveRef} style={{ width: '100%', height: 360 }} />
-                    : <Empty description="暂无训练过程数据" style={{ padding: '60px 0' }} />,
+                  children: (
+                    <ChartSlot
+                      errorKey="learningCurve"
+                      hasData={!!vizState.learningCurve}
+                      emptyText="暂无训练过程数据"
+                    >
+                      <div ref={learningCurveRef} style={{ width: '100%', height: 360 }} />
+                    </ChartSlot>
+                  ),
                 },
               ]}
             />
