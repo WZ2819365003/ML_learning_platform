@@ -330,3 +330,22 @@ async def get_shap_result(run_id: str) -> dict[str, Any] | None:
     except Exception as exc:
         logger.warning("Could not get presigned URL for SHAP artifact: %s", exc)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Executor registration — V3 Phase 2
+# ---------------------------------------------------------------------------
+# ``run_shap_explanation`` returns a SHAP result dict keyed by
+# ``feature_importances`` / ``shap_values_uri`` — not ``metrics`` — so we
+# wrap it to surface a small numeric summary that downstream status write-
+# back will persist onto ``PlatformTask.metrics_snapshot``.
+
+async def _explain_executor(domain_id: str, platform_task_id: str) -> dict:
+    result = await run_shap_explanation(domain_id, platform_task_id)
+    importances = result.get("feature_importances") or {}
+    metrics = {"feature_count": len(importances)}
+    return {**result, "metrics": metrics}
+
+
+from app.scheduler.executors import register_executor as _register_executor  # noqa: E402
+_register_executor("explain", _explain_executor)

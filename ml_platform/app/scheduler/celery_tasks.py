@@ -221,3 +221,97 @@ async def _execute_explain(platform_task_id: str) -> dict:
 
     from app.services.explain_service import run_shap_explanation
     return await run_shap_explanation(run_id, platform_task_id)
+
+
+# ---------------------------------------------------------------------------
+# Task: run_platform_task_generic (Phase 5 — CeleryScheduler entry point)
+#
+# Instead of per-kind Celery tasks, the V3 scheduler routes every submission
+# through this one task: it looks up the PlatformTask, then delegates to the
+# executor registry (``app.scheduler.executors``).  That way a new ``kind``
+# only needs to ``register_executor(...)`` at service-import time — no Celery
+# boilerplate.  Status writeback is handled inside ``run_with_status`` so the
+# Celery retry envelope only needs to swallow/re-raise.
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    bind=True,
+    base=MLBaseTask,
+    name="app.scheduler.celery_tasks.run_platform_task_generic",
+    max_retries=3,
+    default_retry_delay=30,
+)
+def run_platform_task_generic(self, platform_task_id: str) -> dict:
+    """Generic PlatformTask runner — dispatches via the executor registry."""
+    try:
+        # Record the Celery task id so the UI's "worker/celery task id" column
+        # has something to show (status transitions beyond RUNNING are owned
+        # by run_with_status).
+        _run_async(_mark_celery_id(platform_task_id, self.request.id))
+        result = _run_async(_execute_generic(platform_task_id))
+        return result
+    except SoftTimeLimitExceeded:
+        _run_async(_mark_task_failed(platform_task_id, "Task exceeded time limit"))
+        raise
+    except Exception as exc:
+        # run_with_status already wrote FAILED; bubble up so Celery retries.
+        raise self.retry(exc=exc)
+
+
+async def _mark_celery_id(platform_task_id: str, celery_id: str) -> None:
+    """Only stamp the celery_task_id — status/timestamps are owned elsewhere."""
+    from app.models.database import PlatformTask, async_session_factory
+    from sqlalchemy import select
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(PlatformTask).where(PlatformTask.id == platform_task_id)
+        )
+        task = result.scalar_one_or_none()
+        if task:
+            task.celery_task_id = celery_id
+            await db.commit()
+
+
+async def _execute_generic(platform_task_id: str) -> dict:
+    """Resolve kind + payload_ref and invoke the executor via run_with_status."""
+    from app.models.database import PlatformTask, async_session_factory
+    from sqlalchemy import select
+    from app.scheduler.executors import has_executor, run_with_status
+
+    # Force-import services so their register_executor calls have fired —
+    # the Celery worker process may not have run app.main lifespan.
+    import app.services.training_service  # noqa: F401
+    import app.services.dl_service        # noqa: F401
+    import app.services.explain_service   # noqa: F401
+
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(PlatformTask).where(PlatformTask.id == platform_task_id)
+        )
+        ptask = result.scalar_one_or_none()
+        if ptask is None:
+            raise ValueError(f"PlatformTask {platform_task_id} not found")
+        kind = ptask.kind or ""
+        payload_ref = ptask.payload_ref or ""
+
+    _, _, domain_id = payload_ref.partition(":")
+    if not kind or not domain_id:
+        raise ValueError(
+            f"Invalid PlatformTask {platform_task_id}: kind={kind!r}, "
+            f"payload_ref={payload_ref!r}"
+        )
+
+    if not has_executor(kind):
+        # Fall back to legacy per-kind dispatch so services that haven't
+        # migrated (e.g. ts_forecast in edge cases) still work under Celery.
+        from app.scheduler.task_runner import dispatch_platform_task
+        await dispatch_platform_task(
+            platform_task_id=platform_task_id,
+            kind=kind,
+            payload_ref=payload_ref,
+            priority=5,
+        )
+        return {"metrics": {}}
+
+    # run_with_status owns RUNNING → SUCCESS/FAILED transitions.
+    return await run_with_status(kind, domain_id, platform_task_id)

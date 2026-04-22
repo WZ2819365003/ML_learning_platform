@@ -525,3 +525,48 @@ def get_models_by_task(task_type: str) -> list[dict]:
 def get_model_ids() -> list[str]:
     """Return all registered model IDs."""
     return [m["id"] for m in MODEL_REGISTRY]
+
+
+# ---------------------------------------------------------------------------
+# Cross-registry helpers (ML + DL)
+# ---------------------------------------------------------------------------
+
+def list_all_models(
+    family: str | None = None,
+    task_type: str | None = None,
+) -> list[dict]:
+    """
+    Unified listing of ML + DL models for UI pickers.
+
+    Each returned spec has an extra ``family`` field ('ml' | 'dl') so the
+    frontend can render them in the correct tab.  Filtering:
+      - family=None      → both families
+      - family='ml'      → ML only
+      - family='dl'      → DL only
+      - task_type        → filter to specs supporting the given task_type
+    """
+    from app.core.dl_registry import DL_MODEL_REGISTRY  # local import: avoid cycles
+
+    out: list[dict] = []
+    if family in (None, "ml"):
+        for m in MODEL_REGISTRY:
+            if task_type and task_type not in m["task_types"]:
+                continue
+            out.append({**m, "family": "ml"})
+    if family in (None, "dl"):
+        for m in DL_MODEL_REGISTRY:
+            if task_type and task_type not in m["task_types"]:
+                continue
+            out.append({**m, "family": "dl"})
+    return out
+
+
+def resolve_model_family(model_id: str) -> str | None:
+    """Return 'ml', 'dl', or None if the model id is not in either registry."""
+    from app.core.dl_registry import get_dl_model_spec  # local import
+
+    if get_model_spec(model_id) is not None:
+        return "ml"
+    if get_dl_model_spec(model_id) is not None:
+        return "dl"
+    return None

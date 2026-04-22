@@ -259,6 +259,48 @@ def _backfill_experiment_runs(conn: Connection) -> None:
     )
 
 
+def _migrate_training_plans(conn: Connection) -> None:
+    """V3 Phase 1 — DL integration fields on training_plans."""
+    _add_column_if_missing(
+        conn,
+        "training_plans",
+        "model_family",
+        "VARCHAR(16) NOT NULL DEFAULT 'ml'",
+    )
+    _add_column_if_missing(conn, "training_plans", "dl_config", "JSON NULL")
+
+
+def _migrate_training_plans_version(conn: Connection) -> None:
+    """V3 Phase 2 — version counter for snapshot attribution."""
+    _add_column_if_missing(
+        conn,
+        "training_plans",
+        "version",
+        "INT NOT NULL DEFAULT 1",
+    )
+
+
+def _migrate_modeling_tasks_plan_binding(conn: Connection) -> None:
+    """V3 Phase 2 — bind ModelingTask to a TrainingPlan + capture snapshot."""
+    _add_column_if_missing(
+        conn, "modeling_tasks", "training_plan_id", "VARCHAR(36) NULL"
+    )
+    _add_column_if_missing(
+        conn, "modeling_tasks", "training_plan_snapshot", "JSON NULL"
+    )
+    _add_index_if_missing(
+        conn,
+        "modeling_tasks",
+        "ix_modeling_tasks_training_plan_id",
+        ["training_plan_id"],
+    )
+
+
+def _migrate_platform_tasks_depends_on(conn: Connection) -> None:
+    """V3 Phase 2 — DAG edge column; runtime gate turns on in Phase 5."""
+    _add_column_if_missing(conn, "platform_tasks", "depends_on", "JSON NULL")
+
+
 # ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
@@ -271,6 +313,10 @@ async def run_startup_migrations(engine: AsyncEngine) -> None:
             await conn.run_sync(_migrate_experiment_runs)
             await conn.run_sync(_backfill_modeling_tasks)
             await conn.run_sync(_backfill_experiment_runs)
+            await conn.run_sync(_migrate_training_plans)
+            await conn.run_sync(_migrate_training_plans_version)
+            await conn.run_sync(_migrate_modeling_tasks_plan_binding)
+            await conn.run_sync(_migrate_platform_tasks_depends_on)
     except Exception as exc:  # noqa: BLE001
         # Startup must never crash because of a migration hiccup; log and move on.
         logger.warning("V3 workbench migrations skipped (%s): %s", type(exc).__name__, exc)

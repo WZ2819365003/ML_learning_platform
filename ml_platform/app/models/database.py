@@ -530,6 +530,25 @@ class ModelingTask(Base):
     config: Mapped[dict | None] = mapped_column(JSON, default=None)
     summary_snapshot: Mapped[dict | None] = mapped_column(JSON, default=None)
 
+    # V3 Phase 2 — TrainingPlan binding.
+    # `training_plan_id` is a live FK (ON DELETE SET NULL) for "jump to current
+    # plan" UX; `training_plan_snapshot` is the immutable recipe captured at
+    # bind-time so historical runs remain reproducible even after the plan is
+    # edited or deleted.  Snapshot shape:
+    #   { "plan_id", "plan_version", "captured_at",
+    #     "payload": {name, task_type, strategy_type, model_family,
+    #                 selected_models, search_space, dl_config,
+    #                 budget_config, eval_metrics,
+    #                 default_objective_metric, default_objective_direction},
+    #     "dag_shape": { "nodes": [...] } }
+    training_plan_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("training_plans.id", ondelete="SET NULL"),
+        default=None,
+        index=True,
+    )
+    training_plan_snapshot: Mapped[dict | None] = mapped_column(JSON, default=None)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -576,6 +595,14 @@ class PlatformTask(Base):
 
     # "kind:id" — e.g. "train:abc123" links to training_tasks.id
     payload_ref: Mapped[str | None] = mapped_column(String(512), default=None)
+
+    # V3 Phase 2 — DAG edge list.  Stores sibling PlatformTask.ids this task
+    # waits for; empty / null means "no dependencies, schedule immediately".
+    # Phase 2 populates this column but the InProcessScheduler treats all tasks
+    # as independent (backwards-compatible with today's behaviour).  Phase 5
+    # CeleryScheduler turns on the gate so downstream tasks only submit once
+    # all upstream tasks reach SUCCESS.
+    depends_on: Mapped[list | None] = mapped_column(JSON, default=None)
 
     progress: Mapped[float] = mapped_column(Float, default=0.0)
 
@@ -762,11 +789,21 @@ class TrainingPlan(Base):
     strategy_type: Mapped[str] = mapped_column(String(32), nullable=False, default="baseline")
     # 'baseline' | 'grid_search' | 'bayesian_search'
 
+    # V3 Phase 1 — DL integration
+    model_family: Mapped[str] = mapped_column(String(16), nullable=False, default="ml")
+    # 'ml' | 'dl' | 'mixed' — decides which registry(ies) selected_models are drawn from
+
     selected_models: Mapped[list | None] = mapped_column(JSON, default=None)
-    # list of model_type tokens that must exist in the tuning_spaces registry
+    # list of model_type tokens. For mixed plans, tokens may belong to either the
+    # ML registry or the DL registry; the family is resolved per-token at dispatch time.
 
     search_space: Mapped[dict | None] = mapped_column(JSON, default=None)
-    # per-model overrides: { "xgboost": { "max_depth": {...override...} } }
+    # per-model overrides for ML models: { "xgboost": { "max_depth": {...override...} } }
+
+    dl_config: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # per-model DL presets: { "mlp_dl": { "arch": {...}, "opt": {...}, "train": {...} } }
+    # Used as baseline config when strategy_type == "baseline". grid/bayesian on DL
+    # is downgraded to baseline in Phase 1.
 
     budget_config: Mapped[dict | None] = mapped_column(JSON, default=None)
     # { "max_trials": 20, "test_size": 0.2, "cv_folds": 5, "timeout_minutes": 60 }
@@ -779,6 +816,12 @@ class TrainingPlan(Base):
     use_count: Mapped[int] = mapped_column(Integer, default=0)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
+    # V3 Phase 2 — version bumped on every payload-touching update_plan call.
+    # ModelingTask.training_plan_snapshot records the version in effect at binding
+    # time, so "which version of this plan did this task run?" stays answerable
+    # even after the plan has been edited.
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -786,7 +829,7 @@ class TrainingPlan(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<TrainingPlan id={self.id!r} name={self.name!r} "
+            f"<TrainingPlan id={self.id!r} name={self.name!r} v={self.version} "
             f"task_type={self.task_type!r} strategy_type={self.strategy_type!r}>"
         )
 

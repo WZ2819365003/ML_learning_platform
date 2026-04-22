@@ -24,11 +24,12 @@ import {
 import {
   CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined,
   DatabaseOutlined, ExclamationCircleOutlined, ExperimentOutlined,
-  LineChartOutlined, ReloadOutlined, RedoOutlined, SyncOutlined,
+  EyeOutlined, LineChartOutlined, ReloadOutlined, RedoOutlined, SyncOutlined,
 } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { platformTasksApi } from '../services/api'
 import RunInspector from '../components/workbench/RunInspector'
+import OrphanTaskDetailDrawer from '../components/workbench/OrphanTaskDetailDrawer'
 
 const { Text, Title } = Typography
 
@@ -354,6 +355,7 @@ function FlatView() {
   const [filterStatus, setFilterStatus] = useState(undefined)
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
   const [batchRetrying, setBatchRetrying] = useState(false)
+  const [detailTaskId, setDetailTaskId] = useState(null)
   const PAGE_SIZE = 20
 
   const fetchTasks = useCallback(async (p = 1) => {
@@ -460,10 +462,15 @@ function FlatView() {
             {new Date(v).toLocaleString('zh-CN', { hour12: false })}
           </Text>
         : '—' },
-    { title: '操作', width: 130, render: (_, r) => {
+    { title: '操作', width: 180, render: (_, r) => {
       const s = r.status?.toUpperCase()
       return (
         <Space size={4}>
+          <Button
+            size="small"
+            icon={<EyeOutlined />}
+            onClick={() => setDetailTaskId(r.id)}
+          >详情</Button>
           {(s === 'FAILED' || s === 'RETRY') && (
             <Button size="small" icon={<RedoOutlined />} onClick={() => handleRetry(r.id)}>重试</Button>
           )}
@@ -541,6 +548,14 @@ function FlatView() {
           onChange: fetchTasks,
           showTotal: t => `共 ${t} 条`, showSizeChanger: false,
         }}
+      />
+      <OrphanTaskDetailDrawer
+        taskId={detailTaskId}
+        open={!!detailTaskId}
+        onClose={() => setDetailTaskId(null)}
+        onRetry={async (id) => { await handleRetry(id) }}
+        onCancel={async (id) => { await handleCancel(id) }}
+        onDelete={async (id) => { await handleDelete(id) }}
       />
     </div>
   )

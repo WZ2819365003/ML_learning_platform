@@ -20,6 +20,7 @@ from app.models.database import (
     get_db,
 )
 from app.scheduler.task_runner import cancel_task, dispatch_platform_task, retry_task
+from app.services.platform_task_detail_service import get_platform_task_detail
 
 router = APIRouter(prefix="/platform/tasks", tags=["Platform Tasks V3"])
 
@@ -315,6 +316,34 @@ async def list_platform_tasks(
         "page": page,
         "page_size": page_size,
     }
+
+
+# ---------------------------------------------------------------------------
+# Detail (orphan-task drawer)  ── must precede /{task_id} to avoid capture
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{task_id}/detail",
+    summary="Enriched PlatformTask detail — resolves payload_ref and tails logs",
+)
+async def platform_task_detail(
+    task_id: str,
+    log_limit: int = Query(200, ge=1, le=2000),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """
+    Backs the ``OrphanTaskDetailDrawer`` in TaskCenter's 孤立任务 tab.
+
+    The response wraps the base PlatformTask serialization with:
+      * ``source_label`` — human-readable tag (e.g. "时序预测") derived from payload_ref
+      * ``domain_kind`` / ``domain_id`` — parsed prefix of payload_ref
+      * ``domain`` — per-kind summary dict (TrainingTask, DLTrainingTask,
+        ExperimentRun, TimeSeriesForecastTask) or ``None`` if the row is
+        gone.  Individual resolver failures are swallowed so the drawer
+        still opens.
+      * ``recent_logs`` — tail of ``storage/logs/{domain_id}.log``
+    """
+    return await get_platform_task_detail(db, task_id, log_limit=log_limit)
 
 
 # ---------------------------------------------------------------------------

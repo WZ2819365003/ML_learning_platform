@@ -304,3 +304,37 @@ def get_dl_trainer(model_type: str):
     if cls is None:
         raise ValueError(f"Unknown DL model '{model_type}'. Available: {list(registry.keys())}")
     return cls()
+
+
+# ---------------------------------------------------------------------------
+# Metadata helpers (mirror model_registry.py)
+# ---------------------------------------------------------------------------
+
+def get_dl_model_spec(model_id: str) -> dict | None:
+    """Return the DL ModelSpec for a given model ID, or None if not found."""
+    return next((m for m in DL_MODEL_REGISTRY if m["id"] == model_id), None)
+
+
+def get_dl_models_by_task(task_type: str) -> list[dict]:
+    """Return all DL models that support the given task type."""
+    return [m for m in DL_MODEL_REGISTRY if task_type in m["task_types"]]
+
+
+def get_dl_model_ids() -> list[str]:
+    """Return all registered DL model IDs."""
+    return [m["id"] for m in DL_MODEL_REGISTRY]
+
+
+def build_default_dl_config(model_id: str) -> dict:
+    """
+    Build a baseline DL config (arch + opt + train) from registry defaults.
+    Used by training_plan_service when the user picks DL models without
+    customising hyperparams.
+    """
+    spec = get_dl_model_spec(model_id)
+    if spec is None:
+        raise ValueError(f"Unknown DL model '{model_id}'")
+    arch = {p["name"]: p["default"] for p in spec.get("arch_params", [])}
+    opt = {p["name"]: p["default"] for p in DL_OPTIMIZER_PARAMS}
+    train = {p["name"]: p["default"] for p in DL_TRAIN_PARAMS}
+    return {"arch": arch, "opt": opt, "train": train}

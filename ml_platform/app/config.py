@@ -62,6 +62,24 @@ class Settings:
         )
     )
 
+    # Scheduler strategy — ``celery`` routes PlatformTask submissions through
+    # the Celery worker pool (prod default once a Redis+worker pair is part
+    # of every deployment); ``inprocess`` runs executors on the FastAPI
+    # event loop (unit tests, single-process dev without Redis).
+    # Leaving the default at ``inprocess`` keeps existing dev setups working
+    # with zero config; ops can opt in via ``SCHEDULER_MODE=celery`` in .env.
+    scheduler_mode: str = field(
+        default_factory=lambda: os.getenv("SCHEDULER_MODE", "inprocess").lower()
+    )
+
+    # Event bus mode — ``memory`` keeps the in-process pub/sub (unit tests +
+    # inprocess scheduler); ``redis`` uses Redis channels so Celery workers
+    # running in separate processes can publish training progress events
+    # that WebSocket clients (living in the FastAPI process) pick up.
+    event_bus_mode: str = field(
+        default_factory=lambda: os.getenv("EVENT_BUS_MODE", "memory").lower()
+    )
+
     # Storage directories
     storage_uploads: Path = field(
         default_factory=lambda: _resolve_path(

@@ -22,7 +22,8 @@ import {
   PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined,
   ThunderboltOutlined, InfoCircleOutlined, CopyOutlined,
 } from '@ant-design/icons'
-import { trainingPlansApi, modelingTaskApi } from '../services/api'
+import { trainingPlansApi, modelingTaskApi, dlApi } from '../services/api'
+import DLConfigPanel from '../components/workbench/DLConfigPanel'
 
 const { Text, Paragraph } = Typography
 
@@ -56,6 +57,23 @@ const METRIC_PRESETS = {
 const _objectiveDirection = (metric) =>
   ['rmse', 'mae', 'mse', 'mape'].includes(metric) ? 'min' : 'max'
 
+const FAMILY_OPTIONS = [
+  { label: 'ML 经典', value: 'ml' },
+  { label: 'DL 深度', value: 'dl' },
+  { label: '混合',    value: 'mixed' },
+]
+
+// Build a dl_config entry from a registry spec using its defaults.
+const _buildDefaultDLConfig = (modelSpec, optimizerParams, trainParams) => {
+  const fromSpecs = (specs) =>
+    Object.fromEntries((specs || []).map(s => [s.name, s.default]))
+  return {
+    arch:  fromSpecs(modelSpec?.arch_params),
+    opt:   fromSpecs(optimizerParams),
+    train: fromSpecs(trainParams),
+  }
+}
+
 export default function TrainingPlans() {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState({ items: [], total: 0 })
@@ -64,10 +82,64 @@ export default function TrainingPlans() {
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
   const [tuningSpaces, setTuningSpaces] = useState({ classification: {}, regression: {} })
+  const [dlRegistry, setDlRegistry] = useState({
+    models: [], optimizer_params: [], train_params: [],
+  })
   const [form] = Form.useForm()
 
-  const formTaskType = Form.useWatch('task_type', form) || 'classification'
+  const formTaskType   = Form.useWatch('task_type',    form) || 'classification'
+  const formFamily     = Form.useWatch('model_family', form) || 'ml'
+  const formSelected   = Form.useWatch('selected_models', form) || []
+  const formDlConfig   = Form.useWatch('dl_config',    form) || {}
   const availableModels = tuningSpaces[formTaskType] || {}
+
+  // DL models filtered by current task_type — index by id for quick lookup.
+  const dlModelsForTask = useMemo(
+    () => (dlRegistry.models || []).filter(m =>
+      !m.task_types || m.task_types.includes(formTaskType)
+    ),
+    [dlRegistry.models, formTaskType],
+  )
+  const dlModelById = useMemo(
+    () => Object.fromEntries(dlModelsForTask.map(m => [m.id, m])),
+    [dlModelsForTask],
+  )
+
+  // Compose the Select options based on selected model_family.
+  const modelOptions = useMemo(() => {
+    const mlOpts = Object.entries(availableModels).map(([key, meta]) => ({
+      value: key,
+      label: (
+        <Space>
+          <Tag color="blue" style={{ margin: 0 }}>ML</Tag>
+          <span>{meta?.display_name || key}</span>
+          <code style={{ fontSize: 10, color: '#64748b' }}>{key}</code>
+        </Space>
+      ),
+    }))
+    const dlOpts = dlModelsForTask.map(m => ({
+      value: m.id,
+      label: (
+        <Space>
+          <Tag color="purple" style={{ margin: 0 }}>DL</Tag>
+          <span>{m.display_name || m.id}</span>
+          <code style={{ fontSize: 10, color: '#64748b' }}>{m.id}</code>
+        </Space>
+      ),
+    }))
+    if (formFamily === 'ml')  return mlOpts
+    if (formFamily === 'dl')  return dlOpts
+    return [
+      { label: 'ML 经典模型', options: mlOpts },
+      { label: 'DL 深度模型', options: dlOpts },
+    ]
+  }, [availableModels, dlModelsForTask, formFamily])
+
+  // Of the currently-selected tokens, which are DL? (need a per-model panel)
+  const selectedDlTokens = useMemo(
+    () => (formSelected || []).filter(t => !!dlModelById[t]),
+    [formSelected, dlModelById],
+  )
 
   const loadPlans = useCallback(async () => {
     setLoading(true)
@@ -95,8 +167,20 @@ export default function TrainingPlans() {
     } catch {/* non-fatal */}
   }, [])
 
+  const loadDlRegistry = useCallback(async () => {
+    try {
+      const resp = await dlApi.listModels()
+      setDlRegistry({
+        models:           resp?.models           || [],
+        optimizer_params: resp?.optimizer_params || [],
+        train_params:     resp?.train_params     || [],
+      })
+    } catch {/* non-fatal — DL just won't appear in the picker */}
+  }, [])
+
   useEffect(() => { loadPlans() }, [loadPlans])
   useEffect(() => { loadSpaces() }, [loadSpaces])
+  useEffect(() => { loadDlRegistry() }, [loadDlRegistry])
 
   const handleCreate = () => {
     setEditingId(null)
@@ -104,7 +188,9 @@ export default function TrainingPlans() {
     form.setFieldsValue({
       task_type: 'classification',
       strategy_type: 'baseline',
+      model_family: 'ml',
       selected_models: [],
+      dl_config: {},
       eval_metrics: ['accuracy', 'f1'],
       default_objective_metric: 'accuracy',
       budget_config: { max_trials: 20, test_size: 0.2 },
@@ -120,7 +206,9 @@ export default function TrainingPlans() {
       description: plan.description,
       task_type: plan.task_type,
       strategy_type: plan.strategy_type,
+      model_family: plan.model_family || 'ml',
       selected_models: plan.selected_models || [],
+      dl_config: plan.dl_config || {},
       eval_metrics: plan.eval_metrics || [],
       default_objective_metric: plan.default_objective_metric,
       budget_config: plan.budget_config || {},
@@ -152,12 +240,21 @@ export default function TrainingPlans() {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields()
+      // Only keep dl_config entries for currently-selected DL tokens so stale
+      // entries (from deselected models) don't leak into the saved plan.
+      const cleanedDlConfig = Object.fromEntries(
+        Object.entries(values.dl_config || {}).filter(
+          ([k]) => (values.selected_models || []).includes(k),
+        ),
+      )
       const payload = {
         name: values.name,
         description: values.description,
         task_type: values.task_type,
         strategy_type: values.strategy_type,
+        model_family: values.model_family || 'ml',
         selected_models: values.selected_models,
+        dl_config: cleanedDlConfig,
         eval_metrics: values.eval_metrics,
         default_objective_metric: values.default_objective_metric,
         default_objective_direction: _objectiveDirection(values.default_objective_metric),
@@ -200,6 +297,18 @@ export default function TrainingPlans() {
       render: (v) => <Tag color={v === 'regression' ? 'geekblue' : 'cyan'}>
         {v === 'regression' ? '回归' : '分类'}
       </Tag>,
+    },
+    {
+      title: '模型族', dataIndex: 'model_family', width: 90,
+      render: (v) => {
+        const family = v || 'ml'
+        const meta = {
+          ml:     { label: 'ML',    color: 'blue' },
+          dl:     { label: 'DL',    color: 'purple' },
+          mixed:  { label: '混合',  color: 'volcano' },
+        }[family] || { label: family, color: 'default' }
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      },
     },
     {
       title: '策略', dataIndex: 'strategy_type', width: 180,
@@ -335,6 +444,7 @@ export default function TrainingPlans() {
                     // clear model selection + switch default metric when task_type changes
                     form.setFieldsValue({
                       selected_models: [],
+                      dl_config: {},
                       eval_metrics: [],
                       default_objective_metric: undefined,
                     })
@@ -358,6 +468,34 @@ export default function TrainingPlans() {
             </Col>
           </Row>
 
+          <Form.Item name="model_family" label={
+            <Space size={4}>
+              <span>模型族</span>
+              <Tooltip title="ML=sklearn/XGB/LGB 等经典模型；DL=基于 PyTorch 的深度模型；混合=同时包含两类。DL 当前仅支持 baseline 策略（grid/bayesian 会自动降级）。">
+                <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+              </Tooltip>
+            </Space>
+          } rules={[{ required: true }]}>
+            <Segmented
+              options={FAMILY_OPTIONS}
+              onChange={(nextFamily) => {
+                // When family narrows, drop tokens that no longer belong.
+                const currentSelected = form.getFieldValue('selected_models') || []
+                const currentDlCfg    = form.getFieldValue('dl_config') || {}
+                let filtered = currentSelected
+                if (nextFamily === 'ml') {
+                  filtered = currentSelected.filter(t => !dlModelById[t])
+                } else if (nextFamily === 'dl') {
+                  filtered = currentSelected.filter(t => !!dlModelById[t])
+                }
+                const cleanedDl = Object.fromEntries(
+                  Object.entries(currentDlCfg).filter(([k]) => filtered.includes(k)),
+                )
+                form.setFieldsValue({ selected_models: filtered, dl_config: cleanedDl })
+              }}
+            />
+          </Form.Item>
+
           <Form.Item name="selected_models" label={
             <Space size={4}>
               <span>候选模型</span>
@@ -369,17 +507,62 @@ export default function TrainingPlans() {
             <Select
               mode="multiple"
               placeholder="选择参与训练的模型"
-              options={Object.entries(availableModels).map(([key, meta]) => ({
-                value: key,
-                label: (
-                  <Space>
-                    <span>{meta?.display_name || key}</span>
-                    <code style={{ fontSize: 10, color: '#64748b' }}>{key}</code>
-                  </Space>
-                ),
-              }))}
+              options={modelOptions}
+              onChange={(nextTokens) => {
+                // Backfill dl_config defaults for newly selected DL tokens,
+                // drop entries for removed tokens.
+                const prevDl = form.getFieldValue('dl_config') || {}
+                const nextDl = { ...prevDl }
+                for (const t of nextTokens) {
+                  if (dlModelById[t] && !nextDl[t]) {
+                    nextDl[t] = _buildDefaultDLConfig(
+                      dlModelById[t],
+                      dlRegistry.optimizer_params,
+                      dlRegistry.train_params,
+                    )
+                  }
+                }
+                for (const k of Object.keys(nextDl)) {
+                  if (!nextTokens.includes(k)) delete nextDl[k]
+                }
+                form.setFieldsValue({ dl_config: nextDl })
+              }}
             />
           </Form.Item>
+
+          {/* Per-DL-model config panels (only visible when DL models are selected).
+              Note: dl_config is already a tracked form field (via setFieldsValue
+              from each DLConfigPanel's onChange) — the outer Form.Item here is a
+              label-only wrapper, so we intentionally omit `name` to avoid antd
+              trying to inject value/onChange into the <div> child. */}
+          {selectedDlTokens.length > 0 && (
+            <Form.Item label={
+              <Space size={4}>
+                <span>DL 超参配置</span>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  （每个 DL 模型独立配置；未修改项使用注册表默认值）
+                </Text>
+              </Space>
+            }>
+              <div>
+                {selectedDlTokens.map(token => (
+                  <DLConfigPanel
+                    key={token}
+                    modelId={token}
+                    modelSpec={dlModelById[token]}
+                    optimizerParams={dlRegistry.optimizer_params}
+                    trainParams={dlRegistry.train_params}
+                    value={formDlConfig?.[token]}
+                    onChange={(next) => {
+                      form.setFieldsValue({
+                        dl_config: { ...(formDlConfig || {}), [token]: next },
+                      })
+                    }}
+                  />
+                ))}
+              </div>
+            </Form.Item>
+          )}
 
           <Divider style={{ margin: '16px 0' }}>评估与预算</Divider>
 
