@@ -249,8 +249,8 @@ function VizCard({ icon, title, hint, option, height = 320, empty = '暂无数�
   return (
     <Card
       size="small"
-      bordered={false}
-      bodyStyle={{ padding: 12 }}
+      variant="borderless"
+      styles={{ body: { padding: 12 } }}
       title={
         <Space size={6}>
           {icon}

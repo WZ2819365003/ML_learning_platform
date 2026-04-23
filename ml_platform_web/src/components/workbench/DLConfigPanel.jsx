@@ -173,7 +173,7 @@ export default function DLConfigPanel({
       title={headerTitle}
       extra={extra}
       style={{ marginBottom: 10, borderRadius: 8 }}
-      bodyStyle={{ padding: '12px 14px' }}
+      styles={{ body: { padding: '12px 14px' } }}
     >
       <Form layout="vertical" size="small">
         <Section

@@ -9,8 +9,8 @@
  * The page is one screen:
  *   - Top action bar (新建 · 刷新 · task_type filter)
  *   - Table of plans with inline 编辑 / 删除
- *   - Right-hand Drawer for create/edit (loads tuning-spaces registry so the
- *     "可选模型" list is data-driven rather than hard-coded)
+ *   - Modal create/edit: select models -> generated config table -> per-model
+ *     parameter modal (loads tuning-spaces registry; no hard-coded model list)
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
@@ -78,18 +78,74 @@ const _buildDefaultDLConfig = (modelSpec, optimizerParams, trainParams) => {
 /**
  * MLParamsPanel — per-ML-model override editor.
  *
- * Shows every param in the registry's `fixed` dict as an editable Input row.
- * Changes are written back to `search_space[modelId]` on the parent form,
- * which is what `_expand_baseline` (tuning_service.py) consumes as the
- * per-model override dict.
+ * Baseline edits scalar defaults; grid_search edits value lists; bayesian
+ * edits distribution JSON. All changes write back to search_space[modelId],
+ * which the tuning service already consumes per strategy.
  */
-function MLParamsPanel({ modelId, meta, value, onChange }) {
-  const defaults = meta?.fixed || {}
-  const searchSpace = meta?.search_space || {}
+function MLParamsPanel({ modelId, meta, strategyType = 'baseline', value, onChange }) {
+  const fixed = meta?.fixed || {}
+  const gridValues = meta?.grid_values || {}
+  const distribution = meta?.distribution || {}
+  const paramKeys = Array.from(new Set([
+    ...Object.keys(fixed),
+    ...Object.keys(gridValues),
+    ...Object.keys(distribution),
+  ]))
+
+  const defaultFor = (key) => {
+    if (strategyType === 'grid_search') {
+      if (Array.isArray(gridValues[key])) return gridValues[key]
+      if (fixed[key] !== undefined) return [fixed[key]]
+      return []
+    }
+    if (strategyType === 'bayesian_search') {
+      if (distribution[key] !== undefined) return distribution[key]
+      if (fixed[key] !== undefined) {
+        return { type: typeof fixed[key] === 'number' ? 'float' : 'categorical', default: fixed[key] }
+      }
+      return {}
+    }
+    if (fixed[key] !== undefined) return fixed[key]
+    if (Array.isArray(gridValues[key]) && gridValues[key].length > 0) return gridValues[key][0]
+    const dist = distribution[key]
+    if (dist?.default !== undefined) return dist.default
+    if (dist?.low !== undefined) return dist.low
+    if (Array.isArray(dist?.choices) && dist.choices.length > 0) return dist.choices[0]
+    return ''
+  }
+
+  const defaults = Object.fromEntries(paramKeys.map(k => [k, defaultFor(k)]))
   const merged = { ...defaults, ...(value || {}) }
-  const paramKeys = Object.keys(defaults)
+
+  const parseList = (raw, fallback) => {
+    if (Array.isArray(raw)) return raw
+    const tokens = String(raw ?? '')
+      .split(',')
+      .map(v => v.trim())
+      .filter(Boolean)
+    if (tokens.length === 0) return fallback
+    return tokens.map(v => {
+      if (v === 'null') return null
+      if (v === 'true') return true
+      if (v === 'false') return false
+      const n = Number(v)
+      return Number.isFinite(n) ? n : v
+    })
+  }
 
   const handleFieldChange = (k, v) => {
+    if (strategyType === 'grid_search') {
+      onChange?.({ ...(value || {}), [k]: parseList(v, defaults[k]) })
+      return
+    }
+    if (strategyType === 'bayesian_search') {
+      try {
+        onChange?.({ ...(value || {}), [k]: JSON.parse(v || '{}') })
+      } catch {
+        onChange?.({ ...(value || {}), [k]: v })
+      }
+      return
+    }
     // Coerce numeric strings back to numbers so payload matches registry dtype.
     let coerced = v
     if (typeof defaults[k] === 'number') {
@@ -113,7 +169,7 @@ function MLParamsPanel({ modelId, meta, value, onChange }) {
   if (paramKeys.length === 0) {
     return (
       <Text type="secondary" style={{ fontSize: 12 }}>
-        此模型无可编辑的 fixed 参数，使用注册表默认值。
+        此模型暂无注册表参数，使用训练器默认值。
       </Text>
     )
   }
@@ -127,8 +183,8 @@ function MLParamsPanel({ modelId, meta, value, onChange }) {
           const isNum = typeof defaultVal === 'number'
           const isBool = typeof defaultVal === 'boolean'
           const overridden = value && Object.prototype.hasOwnProperty.call(value, k)
-          const rangeHint = searchSpace[k]
-            ? `搜索范围: ${JSON.stringify(searchSpace[k])}`
+          const rangeHint = distribution[k] || gridValues[k]
+            ? `搜索模板: ${JSON.stringify(distribution[k] || gridValues[k])}`
             : null
           return (
             <Col key={k} xs={24} sm={12}>
@@ -143,7 +199,20 @@ function MLParamsPanel({ modelId, meta, value, onChange }) {
                   </Tooltip>
                 )}
               </div>
-              {isBool ? (
+              {strategyType === 'grid_search' ? (
+                <Input
+                  value={Array.isArray(currentVal) ? currentVal.map(v => v === null ? 'null' : String(v)).join(', ') : String(currentVal ?? '')}
+                  onChange={e => handleFieldChange(k, e.target.value)}
+                  placeholder="逗号分隔，例如: 100, 200, 400"
+                />
+              ) : strategyType === 'bayesian_search' ? (
+                <Input.TextArea
+                  autoSize={{ minRows: 2, maxRows: 5 }}
+                  value={typeof currentVal === 'string' ? currentVal : JSON.stringify(currentVal ?? {}, null, 2)}
+                  onChange={e => handleFieldChange(k, e.target.value)}
+                  style={{ fontFamily: 'Consolas, Monaco, monospace', fontSize: 12 }}
+                />
+              ) : isBool ? (
                 <Switch
                   checked={!!currentVal}
                   onChange={v => handleFieldChange(k, v)}
@@ -195,6 +264,7 @@ export default function TrainingPlans() {
   const [taskType, setTaskType] = useState('all')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [paramModalOpen, setParamModalOpen] = useState(false)
+  const [modelSelectOpen, setModelSelectOpen] = useState(false)
   const [editingModelToken, setEditingModelToken] = useState(null)
   const [savedParamTokens, setSavedParamTokens] = useState({})
   const [editingId, setEditingId] = useState(null)
@@ -206,6 +276,7 @@ export default function TrainingPlans() {
   const [form] = Form.useForm()
 
   const formTaskType   = Form.useWatch('task_type',    form) || 'classification'
+  const formStrategyType = Form.useWatch('strategy_type', form) || 'baseline'
   const formFamily     = Form.useWatch('model_family', form) || 'ml'
   const formSelected   = Form.useWatch('selected_models', form) || []
   const formDlConfig   = Form.useWatch('dl_config',    form) || {}
@@ -267,7 +338,11 @@ export default function TrainingPlans() {
         description: meta?.description || '',
         param_count: isDl
           ? ((meta?.arch_params || []).length + (dlRegistry.optimizer_params || []).length + (dlRegistry.train_params || []).length)
-          : Object.keys(meta?.fixed || {}).length,
+          : Array.from(new Set([
+              ...Object.keys(meta?.fixed || {}),
+              ...Object.keys(meta?.grid_values || {}),
+              ...Object.keys(meta?.distribution || {}),
+            ])).length,
         hasCustom,
         saved: !!savedParamTokens[token],
       }
@@ -325,6 +400,7 @@ export default function TrainingPlans() {
     setEditingId(null)
     setSavedParamTokens({})
     setEditingModelToken(null)
+    setModelSelectOpen(false)
     form.resetFields()
     form.setFieldsValue({
       task_type: 'classification',
@@ -358,6 +434,7 @@ export default function TrainingPlans() {
       budget_config: plan.budget_config || {},
     })
     setSavedParamTokens(Object.fromEntries((plan.selected_models || []).map(t => [t, true])))
+    setModelSelectOpen(false)
     setDrawerOpen(true)
   }
 
@@ -688,6 +765,8 @@ export default function TrainingPlans() {
               mode="multiple"
               placeholder="选择参与训练的模型"
               options={modelOptions}
+              open={modelSelectOpen}
+              onOpenChange={setModelSelectOpen}
               onChange={(nextTokens) => {
                 // Backfill dl_config defaults for newly selected DL tokens,
                 // drop entries for removed tokens.
@@ -709,6 +788,7 @@ export default function TrainingPlans() {
                 setSavedParamTokens(prev => Object.fromEntries(
                   nextTokens.map(t => [t, prev[t] ?? false]),
                 ))
+                setModelSelectOpen(false)
               }}
             />
           </Form.Item>
@@ -917,6 +997,7 @@ export default function TrainingPlans() {
               <MLParamsPanel
                 modelId={editingModelToken}
                 meta={editingModelMeta}
+                strategyType={formStrategyType}
                 value={formSearchSpace?.[editingModelToken]}
                 onChange={(next) => {
                   form.setFieldsValue({

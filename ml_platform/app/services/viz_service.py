@@ -160,6 +160,35 @@ def _parse_legacy_log_context(task_id: str) -> dict:
     return out
 
 
+def _parse_legacy_final_metrics(task_id: str) -> dict[str, float] | None:
+    """Parse the final `Training completed | metric=value` line from logs.
+
+    Some recovered/orphan tasks no longer have a TrainingTask row, but the log
+    still contains the final metrics. Returning these lets the UI render proper
+    headline cards instead of zero/empty metrics.
+    """
+    import re
+
+    settings = get_settings()
+    log_path = settings.storage_logs / f"{task_id}.log"
+    if not log_path.exists():
+        return None
+    try:
+        lines = log_path.read_text(errors="ignore").splitlines()
+    except Exception:
+        return None
+    final_lines = [line for line in lines if "Training completed" in line and "=" in line]
+    if not final_lines:
+        return None
+    metrics: dict[str, float] = {}
+    for key, value in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)=([-+]?\d+(?:\.\d+)?)", final_lines[-1]):
+        try:
+            metrics[key] = float(value)
+        except ValueError:
+            continue
+    return metrics or None
+
+
 async def _resolve_dataset_by_path(db: AsyncSession, file_path: str) -> Dataset | None:
     """Look up a Dataset by exact file_path match (used for orphan recovery)."""
     result = await db.execute(select(Dataset).where(Dataset.file_path == file_path))
@@ -240,7 +269,10 @@ async def _synthesize_facade_from_run(
         test_size=test_size,
         status="SUCCESS" if run.status == "SUCCESS" else (run.status or "UNKNOWN"),
         dataset_id=(exp.dataset_id if exp else None),
-        result_metrics=run.metrics or None,
+        result_metrics=run.metrics or next(
+            (m for m in (_parse_legacy_final_metrics(cid) for cid in candidate_ids) if m),
+            None,
+        ),
     )
     return facade, dataset
 
@@ -279,7 +311,7 @@ async def _synthesize_facade_from_orphan(
         test_size=0.2,
         status="SUCCESS",
         dataset_id=dataset.id,
-        result_metrics=None,
+        result_metrics=_parse_legacy_final_metrics(task_id),
     )
     return facade, dataset
 

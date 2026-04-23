@@ -614,12 +614,12 @@ function DLTaskDetailView({ taskId, navigate }) {
       {lossHistory.length > 0 && (
         <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
           <Col xs={24} xl={12}>
-            <Card title="训练损失" bodyStyle={{ padding: 12 }}>
+            <Card title="训练损失" styles={{ body: { padding: 12 } }}>
               <EChart option={buildLossOption(lossHistory)} style={{ height: 340, width: '100%' }} notMerge />
             </Card>
           </Col>
           <Col xs={24} xl={12}>
-            <Card title="验证指标" bodyStyle={{ padding: 12 }}>
+            <Card title="验证指标" styles={{ body: { padding: 12 } }}>
               <EChart option={buildMetricOption(lossHistory, taskType)} style={{ height: 340, width: '100%' }} notMerge />
             </Card>
           </Col>

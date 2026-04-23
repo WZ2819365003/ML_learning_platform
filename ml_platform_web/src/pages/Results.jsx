@@ -34,6 +34,29 @@ import { formatDateTime, formatMetric, metricLabels } from '../utils/formatters'
 
 const { Paragraph, Text, Title } = Typography;
 
+const REGRESSION_METRIC_KEYS = [
+  'rmse', 'mae', 'mse', 'r2',
+  'cv_avg_rmse', 'cv_avg_mae', 'cv_avg_mse', 'cv_avg_r2',
+];
+
+function getApiErrorText(error) {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map(d => d.msg ?? JSON.stringify(d)).join('；');
+  return error?.message || error?.toString?.() || '加载失败';
+}
+
+function inferTaskKind(modelType, metrics = {}) {
+  const mt = String(modelType || '').toLowerCase();
+  if (mt.includes('regressor') || mt.includes('regression')) return 'regression';
+  if (REGRESSION_METRIC_KEYS.some(k => typeof metrics?.[k] === 'number')) return 'regression';
+  return 'classification';
+}
+
+function isPercentMetric(key) {
+  return /(accuracy|acc|precision|recall|auc|f1|error)$/i.test(key);
+}
+
 // ─── URL helper ──────────────────────────────────────────────────────────────
 function useQuery() {
   return new URLSearchParams(useLocation().search);
@@ -178,6 +201,8 @@ function ResultDetailView({ taskId, navigate }) {
   const [vizState, setVizState] = useState({
     confusionMatrix: null, rocCurve: null,
     featureImportance: null, learningCurve: null,
+    residualPlot: null, predictedVsActual: null,
+    taskKind: 'classification',
   });
   // Per-chart error string (null = ok / not-yet-loaded). Lets one chart fail
   // without blanking the whole page (previously Promise.all bubbled a single
@@ -185,6 +210,7 @@ function ResultDetailView({ taskId, navigate }) {
   const [vizErrors, setVizErrors] = useState({
     detail: null, confusionMatrix: null, rocCurve: null,
     featureImportance: null, learningCurve: null,
+    residualPlot: null, predictedVsActual: null,
   });
   const [loading, setLoading] = useState(true);
   const [vizLoading, setVizLoading] = useState(false);
@@ -193,52 +219,88 @@ function ResultDetailView({ taskId, navigate }) {
   const rocCurveRef       = useRef(null);
   const featureImportanceRef = useRef(null);
   const learningCurveRef  = useRef(null);
+  const residualPlotRef = useRef(null);
+  const predictedVsActualRef = useRef(null);
 
   useEffect(() => { void loadAll(); }, [taskId]);
 
   async function loadAll() {
     setLoading(true);
+    let modelItems = [];
     try {
       const res = await modelApi.listModels({ page_size: 200 });
-      setModels(res.items ?? []);
+      modelItems = res.items ?? [];
+      setModels(modelItems);
     } catch { /* ignore */ }
     setLoading(false);
-    void loadVisualizations();
+    void loadVisualizations(modelItems);
   }
 
-  async function loadVisualizations() {
+  async function loadVisualizations(modelItems = models) {
     setVizLoading(true);
-    const results = await Promise.allSettled([
-      modelApi.getModelDetail(taskId),
-      vizApi.getConfusionMatrix(taskId),
-      vizApi.getRocCurve(taskId),
-      vizApi.getFeatureImportance(taskId),
-      vizApi.getLearningCurve(taskId),
-    ]);
-    const keys = ['detail', 'confusionMatrix', 'rocCurve', 'featureImportance', 'learningCurve'];
-    const nextErrors = {};
+    const fallbackModel = (modelItems ?? []).find(m => m.task_id === taskId) ?? null;
+    let detailPayload = null;
+    let detailError = null;
+
+    try {
+      detailPayload = await modelApi.getModelDetail(taskId);
+      setDetail(detailPayload);
+    } catch (err) {
+      detailError = getApiErrorText(err);
+      setDetail(null);
+    }
+
+    const metrics = detailPayload?.result_metrics ?? fallbackModel?.result_metrics ?? {};
+    const taskKind = inferTaskKind(detailPayload?.model_type ?? fallbackModel?.model_type, metrics);
+    const chartRequests = [
+      ['featureImportance', () => vizApi.getFeatureImportance(taskId)],
+      ['learningCurve', () => vizApi.getLearningCurve(taskId)],
+      ...(taskKind === 'regression'
+        ? [
+            ['residualPlot', () => vizApi.getResidualPlot(taskId)],
+            ['predictedVsActual', () => vizApi.getPredictedVsActual(taskId)],
+          ]
+        : [
+            ['confusionMatrix', () => vizApi.getConfusionMatrix(taskId)],
+            ['rocCurve', () => vizApi.getRocCurve(taskId)],
+          ]),
+    ];
+
+    const results = await Promise.allSettled(chartRequests.map(([, fn]) => fn()));
+    const nextErrors = {
+      detail: detailError,
+      confusionMatrix: null,
+      rocCurve: null,
+      featureImportance: null,
+      learningCurve: null,
+      residualPlot: null,
+      predictedVsActual: null,
+    };
     const payloads = {};
     results.forEach((r, idx) => {
-      const k = keys[idx];
+      const k = chartRequests[idx][0];
       if (r.status === 'fulfilled') {
         nextErrors[k] = null;
         payloads[k] = r.value;
       } else {
-        nextErrors[k] = r.reason?.message || r.reason?.toString?.() || '加载失败';
+        nextErrors[k] = getApiErrorText(r.reason);
         payloads[k] = null;
       }
     });
     setVizErrors(nextErrors);
-    if (payloads.detail) setDetail(payloads.detail);
     setVizState({
       confusionMatrix: payloads.confusionMatrix ?? null,
       rocCurve: payloads.rocCurve ?? null,
       featureImportance: payloads.featureImportance ?? null,
       learningCurve: payloads.learningCurve ?? null,
+      residualPlot: payloads.residualPlot ?? null,
+      predictedVsActual: payloads.predictedVsActual ?? null,
+      taskKind,
     });
     // Only surface a toast if every single endpoint failed; otherwise the
     // per-chart inline error is enough (no 4× popup spam).
-    const allFailed = keys.every(k => nextErrors[k]);
+    const chartKeys = chartRequests.map(([k]) => k);
+    const allFailed = chartKeys.every(k => nextErrors[k]);
     if (allFailed) message.error('加载可视化详情失败');
     setVizLoading(false);
   }
@@ -346,8 +408,17 @@ function ResultDetailView({ taskId, navigate }) {
         type: 'category',
         data: vizState.learningCurve.steps.map(s => `Fold ${s.step}`),
       },
-      yAxis: { type: 'value', min: 0, max: 1 },
-      series: ['accuracy', 'f1']
+      yAxis: {
+        type: 'value',
+        ...(vizState.taskKind === 'classification' ? { min: 0, max: 1 } : {}),
+      },
+      series: [
+        ...(vizState.taskKind === 'regression'
+          ? ['rmse', 'mae', 'mse', 'r2']
+          : ['accuracy', 'f1', 'precision', 'recall', 'roc_auc']),
+        ...Object.keys(vizState.learningCurve.steps[0]?.metrics ?? {}).filter(k => k !== 'fold'),
+      ]
+        .filter((k, idx, arr) => arr.indexOf(k) === idx)
         .filter(k => vizState.learningCurve.steps.some(s => typeof s.metrics?.[k] === 'number'))
         .map(k => ({
           name: metricLabels[k] ?? k,
@@ -356,18 +427,62 @@ function ResultDetailView({ taskId, navigate }) {
         })),
     } : null;
 
-    return { confusionMatrix, rocCurve, featureImportance, learningCurve };
+    const predictedVsActual = vizState.predictedVsActual ? {
+      tooltip: { trigger: 'item', formatter: p => `真实值: ${p.value[0]}<br/>预测值: ${p.value[1]}` },
+      grid: { top: 28, left: 70, right: 24, bottom: 56 },
+      xAxis: { type: 'value', name: '真实值' },
+      yAxis: { type: 'value', name: '预测值' },
+      series: [
+        {
+          name: '样本',
+          type: 'scatter',
+          symbolSize: 6,
+          data: vizState.predictedVsActual.actual.map((v, i) => [v, vizState.predictedVsActual.predicted[i]]),
+          itemStyle: { color: '#2563eb', opacity: 0.7 },
+        },
+      ],
+    } : null;
+
+    const residualPlot = vizState.residualPlot ? {
+      tooltip: { trigger: 'item', formatter: p => `预测值: ${p.value[0]}<br/>残差: ${p.value[1]}` },
+      grid: { top: 28, left: 70, right: 24, bottom: 56 },
+      xAxis: { type: 'value', name: '预测值' },
+      yAxis: { type: 'value', name: '残差' },
+      series: [{
+        name: '残差',
+        type: 'scatter',
+        symbolSize: 6,
+        data: vizState.residualPlot.predicted.map((v, i) => [v, vizState.residualPlot.residuals[i]]),
+        itemStyle: { color: '#0f766e', opacity: 0.72 },
+        markLine: {
+          symbol: 'none',
+          lineStyle: { type: 'dashed', color: '#94a3b8' },
+          data: [{ yAxis: 0 }],
+        },
+      }],
+    } : null;
+
+    return { confusionMatrix, rocCurve, featureImportance, learningCurve, predictedVsActual, residualPlot };
   }, [vizState]);
 
   useChart(confusionMatrixRef, chartOptions.confusionMatrix);
   useChart(rocCurveRef, chartOptions.rocCurve);
   useChart(featureImportanceRef, chartOptions.featureImportance);
   useChart(learningCurveRef, chartOptions.learningCurve);
+  useChart(predictedVsActualRef, chartOptions.predictedVsActual);
+  useChart(residualPlotRef, chartOptions.residualPlot);
 
   const resultMetrics = detail?.result_metrics ?? selectedModel?.result_metrics ?? {};
+  const taskKind = vizState.taskKind ?? inferTaskKind(detail?.model_type ?? selectedModel?.model_type, resultMetrics);
   const metricItems = Object.entries(resultMetrics)
     .filter(([, v]) => typeof v === 'number' && !Number.isNaN(v))
     .filter(([k]) => k !== 'cv_folds');
+  const headlineKeys = taskKind === 'regression'
+    ? ['r2', 'rmse', 'mae', 'mse']
+    : ['accuracy', 'f1', 'cv_avg_accuracy', 'cv_avg_f1'];
+  const headlineMetrics = headlineKeys
+    .map(k => [k, resultMetrics?.[k]])
+    .filter(([, v]) => typeof v === 'number' && !Number.isNaN(v));
 
   return (
     <div>
@@ -387,20 +502,22 @@ function ResultDetailView({ taskId, navigate }) {
         <Card><Skeleton active paragraph={{ rows: 4 }} /></Card>
       ) : (
         <>
-          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col xs={24} md={12} xl={6}>
-              <Card><Statistic title="准确率" value={Number(resultMetrics.accuracy ?? 0) * 100} suffix="%" precision={2} /></Card>
-            </Col>
-            <Col xs={24} md={12} xl={6}>
-              <Card><Statistic title="F1" value={resultMetrics.f1 ?? 0} precision={4} /></Card>
-            </Col>
-            <Col xs={24} md={12} xl={6}>
-              <Card><Statistic title="交叉验证准确率" value={Number(resultMetrics.cv_avg_accuracy ?? 0) * 100} suffix="%" precision={2} /></Card>
-            </Col>
-            <Col xs={24} md={12} xl={6}>
-              <Card><Statistic title="交叉验证 F1" value={resultMetrics.cv_avg_f1 ?? 0} precision={4} /></Card>
-            </Col>
-          </Row>
+          {headlineMetrics.length > 0 && (
+            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+              {headlineMetrics.map(([k, v]) => (
+                <Col xs={24} md={12} xl={6} key={k}>
+                  <Card>
+                    <Statistic
+                      title={metricLabels[k] ?? k}
+                      value={isPercentMetric(k) ? Number(v) * 100 : Number(v)}
+                      suffix={isPercentMetric(k) ? '%' : undefined}
+                      precision={isPercentMetric(k) ? 2 : 4}
+                    />
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+          )}
 
           <Card style={{ marginBottom: 16 }}>
             <Descriptions bordered column={{ xs: 1, md: 2, xl: 4 }}>
@@ -426,7 +543,7 @@ function ResultDetailView({ taskId, navigate }) {
             </Card>
           )}
 
-          <Card bodyStyle={{ padding: '0 24px 24px' }}>
+          <Card styles={{ body: { padding: '0 24px 24px' } }}>
             <Tabs
               defaultActiveKey="performance"
               items={[
@@ -435,34 +552,63 @@ function ResultDetailView({ taskId, navigate }) {
                   label: <Space><HeatMapOutlined />性能图表</Space>,
                   children: (
                     <Row gutter={[16, 16]}>
-                      <Col xs={24} xl={12}>
-                        <Card
-                          title={<Space><HeatMapOutlined /> 混淆矩阵</Space>}
-                          bordered={false}
-                        >
-                          <ChartSlot
-                            errorKey="confusionMatrix"
-                            hasData={!!vizState.confusionMatrix}
-                            emptyText="暂无混淆矩阵数据"
-                          >
-                            <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
-                          </ChartSlot>
-                        </Card>
-                      </Col>
-                      <Col xs={24} xl={12}>
-                        <Card
-                          title={<Space><LineChartOutlined /> ROC 曲线</Space>}
-                          bordered={false}
-                        >
-                          <ChartSlot
-                            errorKey="rocCurve"
-                            hasData={!!vizState.rocCurve}
-                            emptyText="暂无 ROC 曲线数据（仅分类任务）"
-                          >
-                            <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
-                          </ChartSlot>
-                        </Card>
-                      </Col>
+                      {taskKind === 'regression' ? (
+                        <>
+                          <Col xs={24} xl={12}>
+                            <Card title={<Space><BarChartOutlined /> 预测值 vs 真实值</Space>} variant="borderless">
+                              <ChartSlot
+                                errorKey="predictedVsActual"
+                                hasData={!!vizState.predictedVsActual}
+                                emptyText="暂无预测-真实值数据"
+                              >
+                                <div ref={predictedVsActualRef} style={{ width: '100%', height: 360 }} />
+                              </ChartSlot>
+                            </Card>
+                          </Col>
+                          <Col xs={24} xl={12}>
+                            <Card title={<Space><LineChartOutlined /> 残差分布</Space>} variant="borderless">
+                              <ChartSlot
+                                errorKey="residualPlot"
+                                hasData={!!vizState.residualPlot}
+                                emptyText="暂无残差数据"
+                              >
+                                <div ref={residualPlotRef} style={{ width: '100%', height: 360 }} />
+                              </ChartSlot>
+                            </Card>
+                          </Col>
+                        </>
+                      ) : (
+                        <>
+                          <Col xs={24} xl={12}>
+                            <Card
+                              title={<Space><HeatMapOutlined /> 混淆矩阵</Space>}
+                              variant="borderless"
+                            >
+                              <ChartSlot
+                                errorKey="confusionMatrix"
+                                hasData={!!vizState.confusionMatrix}
+                                emptyText="暂无混淆矩阵数据"
+                              >
+                                <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
+                              </ChartSlot>
+                            </Card>
+                          </Col>
+                          <Col xs={24} xl={12}>
+                            <Card
+                              title={<Space><LineChartOutlined /> ROC 曲线</Space>}
+                              variant="borderless"
+                            >
+                              <ChartSlot
+                                errorKey="rocCurve"
+                                hasData={!!vizState.rocCurve}
+                                emptyText="暂无 ROC 曲线数据（仅分类任务）"
+                              >
+                                <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
+                              </ChartSlot>
+                            </Card>
+                          </Col>
+                        </>
+                      )}
                     </Row>
                   ),
                 },

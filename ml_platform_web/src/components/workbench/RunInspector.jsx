@@ -113,7 +113,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
       width={780}
       open={open}
       onClose={onClose}
-      bodyStyle={{ padding: '16px 20px' }}
+      styles={{ body: { padding: '16px 20px' } }}
     >
       <Spin spinning={loading}>
         {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}

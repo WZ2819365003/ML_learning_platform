@@ -657,7 +657,7 @@ export default function ModelDeploy() {
         ) : (
           <Tabs
             activeKey={drawer.tab}
-            destroyInactiveTabPane
+            destroyOnHidden
             onChange={onDrawerTabChange}
             items={[
               {

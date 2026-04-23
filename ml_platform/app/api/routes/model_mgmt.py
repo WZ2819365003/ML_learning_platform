@@ -232,7 +232,43 @@ async def model_detail(
     result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
     task = result.scalar_one_or_none()
     if task is None:
-        raise HTTPException(status_code=404, detail="Training task not found")
+        # V3 runs and purged legacy rows may still have a valid model artifact
+        # and metrics log. Reuse the visualization resolver so result pages can
+        # show detail metadata for those recovered tasks as well.
+        from app.services.viz_service import _get_task_and_dataset
+
+        recovered_task, dataset = await _get_task_and_dataset(task_id, db)
+        model_path = recovered_task.model_path
+        model_size = None
+        if model_path:
+            model_file = resolve_runtime_path(model_path)
+            if model_file.exists():
+                model_size = model_file.stat().st_size
+
+        return {
+            "task_id": recovered_task.id,
+            "name": None,
+            "model_type": recovered_task.model_type,
+            "hyperparameters": None,
+            "target_column": recovered_task.target_column,
+            "test_size": recovered_task.test_size,
+            "eval_metrics": None,
+            "result_metrics": recovered_task.result_metrics,
+            "model_path": str(resolve_runtime_path(model_path)) if model_path else None,
+            "model_size": model_size,
+            "status": recovered_task.status,
+            "error_message": None,
+            "notes": None,
+            "tags": None,
+            "started_at": None,
+            "finished_at": None,
+            "dataset": {
+                "id": dataset.id,
+                "name": dataset.name,
+                "row_count": dataset.row_count,
+                "column_count": dataset.column_count,
+            } if dataset else None,
+        }
 
     ds_result = await db.execute(select(Dataset).where(Dataset.id == task.dataset_id))
     dataset = ds_result.scalar_one_or_none()
