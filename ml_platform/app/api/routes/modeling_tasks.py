@@ -275,11 +275,13 @@ async def create_experiment_batch(
             dl_config=body.dl_config,
         )
     except ImportError as exc:
-        # Commit C not yet applied — return 501 rather than crashing.
-        logger.warning("tuning_service not available: %s", exc)
+        # Usually a transient optional dependency (optuna / sklearn) missing —
+        # surface the real cause so operators can fix their install instead of
+        # a generic 501 that hides the traceback.
+        logger.exception("tuning_service import failed during dispatch")
         raise HTTPException(
             status_code=501,
-            detail="Tuning engines not yet enabled on this server (Commit C pending).",
+            detail=f"Tuning engine unavailable: {exc}",
         ) from exc
 
 

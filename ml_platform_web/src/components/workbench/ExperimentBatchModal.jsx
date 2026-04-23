@@ -286,7 +286,17 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
     } else if (strategy === 'grid_search') {
       search_space = modelParams.grid || {}
     } else if (strategy === 'bayesian_search') {
-      search_space = modelParams.distribution || {}
+      // Backfill from registry defaults so untouched params still get sampled.
+      // Without this, the backend's per-model lookup in tuning_service only
+      // sees the params the user edited and silently drops the rest.
+      const userDist = modelParams.distribution || {}
+      search_space = values.selected_models.reduce((acc, modelKey) => {
+        const spec = tuningSpaces[modelKey]
+        const defaults = spec?.distribution || {}
+        const merged = { ...defaults, ...(userDist[modelKey] || {}) }
+        if (Object.keys(merged).length > 0) acc[modelKey] = merged
+        return acc
+      }, {})
     }
 
     const budget_config = {

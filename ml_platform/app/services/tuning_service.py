@@ -75,6 +75,135 @@ logger = logging.getLogger(__name__)
 
 _REGRESSION_METRICS = {"rmse", "mae", "mse", "mape", "r2"}
 
+_VALID_BAYESIAN_DIST_TYPES = {"float", "int", "categorical"}
+
+
+# ---------------------------------------------------------------------------
+# Search-space validation — catches shape mistakes from the workbench UI
+# before we spend cycles persisting PENDING trials that can never run.
+# ---------------------------------------------------------------------------
+
+def _validate_search_space(
+    strategy_type: str,
+    search_space: dict[str, Any] | None,
+    selected_models: list[str],
+) -> None:
+    """Reject malformed search_space payloads with an actionable 422.
+
+    Shape contracts (must match what the expanders in this module consume):
+
+    - baseline:
+        {model_type: {param: scalar | list | dict}}   (overrides, free-form)
+
+    - grid_search:
+        {model_type: {param: [v1, v2, ...]}}          (every leaf MUST be a list;
+        single-value scalars get auto-wrapped by ``_expand_grid_search`` but
+        that's a convenience only — we insist on list form to keep the UI
+        payload legible and to surface "you forgot the comma" mistakes here.)
+
+    - bayesian_search:
+        {model_type: {param: {type: float|int|categorical, ...}}}
+        * float/int require low + high
+        * categorical requires a non-empty choices list
+    """
+    if search_space in (None, {}):
+        return
+
+    if not isinstance(search_space, dict):
+        raise HTTPException(
+            status_code=422,
+            detail=f"search_space must be a dict keyed by model_type, got {type(search_space).__name__}",
+        )
+
+    for model_type, model_space in search_space.items():
+        if model_type not in selected_models:
+            # Harmless extra key — log but don't fail the batch.  (Plan snapshot
+            # can carry stale entries if the user edited selected_models later.)
+            logger.warning(
+                "search_space has entry for %r but that model isn't in selected_models; ignoring",
+                model_type,
+            )
+            continue
+        if model_space in (None, {}):
+            continue
+        if not isinstance(model_space, dict):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"search_space[{model_type!r}] must be a dict of "
+                    f"{{param: spec}}, got {type(model_space).__name__}"
+                ),
+            )
+
+        for param_name, spec in model_space.items():
+            if strategy_type == "grid_search":
+                if not isinstance(spec, list):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"grid_search: search_space[{model_type!r}][{param_name!r}] "
+                            f"must be a list of candidate values, got {type(spec).__name__}. "
+                            f"Example: {{\"{param_name}\": [50, 100, 200]}}"
+                        ),
+                    )
+                if len(spec) == 0:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"grid_search: search_space[{model_type!r}][{param_name!r}] "
+                            "is empty — remove it or provide at least one candidate."
+                        ),
+                    )
+
+            elif strategy_type == "bayesian_search":
+                if not isinstance(spec, dict):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"bayesian_search: search_space[{model_type!r}][{param_name!r}] "
+                            f"must be a distribution dict, got {type(spec).__name__}. "
+                            f"Example: {{\"{param_name}\": {{\"type\": \"float\", \"low\": 0.01, \"high\": 1.0}}}}"
+                        ),
+                    )
+                dist_type = spec.get("type")
+                if dist_type not in _VALID_BAYESIAN_DIST_TYPES:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"bayesian_search: search_space[{model_type!r}][{param_name!r}].type "
+                            f"must be one of {sorted(_VALID_BAYESIAN_DIST_TYPES)}, got {dist_type!r}"
+                        ),
+                    )
+                if dist_type in ("float", "int"):
+                    if "low" not in spec or "high" not in spec:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"bayesian_search: {dist_type} distribution for "
+                                f"{model_type!r}[{param_name!r}] requires both 'low' and 'high'"
+                            ),
+                        )
+                    if spec["low"] >= spec["high"]:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"bayesian_search: {model_type!r}[{param_name!r}] "
+                                f"'low' ({spec['low']}) must be < 'high' ({spec['high']})"
+                            ),
+                        )
+                elif dist_type == "categorical":
+                    choices = spec.get("choices")
+                    if not isinstance(choices, list) or len(choices) == 0:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"bayesian_search: categorical distribution for "
+                                f"{model_type!r}[{param_name!r}] requires non-empty 'choices' list"
+                            ),
+                        )
+
+            # baseline: free-form overrides; no structural check.
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -144,6 +273,11 @@ async def dispatch_experiment_batch(
         model_family = snapshot_payload["model_family"]
     if (not strategy_type) and snapshot_payload.get("strategy_type"):
         strategy_type = snapshot_payload["strategy_type"]
+
+    # Validate search_space shape BEFORE we touch the DB or spawn any tasks.
+    # Shape errors surface as a 422 with an actionable "use [50, 100, 200]"
+    # hint so the workbench UI can fix its payload without guesswork.
+    _validate_search_space(strategy_type, search_space, selected_models)
 
     # Split selected_models by family via registry lookup.  Any token that
     # belongs to neither registry is rejected.
