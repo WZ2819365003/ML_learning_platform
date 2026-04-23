@@ -200,7 +200,8 @@ async def inspect_run(
         ]
 
     # --- 6. SHAP importances if already computed (inline)
-    shap_importances = (run.metrics or {}).get("shap_importances")
+    metrics_dict = run.metrics or {}
+    shap_importances = metrics_dict.get("shap_importances")
     shap_summary: dict[str, Any] | None = None
     if shap_importances:
         # Top-10 by default — front-end can ask for more via the full endpoint.
@@ -211,7 +212,10 @@ async def inspect_run(
             "top_features": [
                 {"feature": k, "importance": float(v)} for k, v in top_items
             ],
-            "method": (run.metrics or {}).get("shap_method", "shap"),
+            "method": metrics_dict.get("shap_method", "shap"),
+            "sample_count": metrics_dict.get("shap_sample_size"),
+            "base_value": metrics_dict.get("shap_base_value"),
+            "task_kind": metrics_dict.get("shap_task_kind"),
         }
     else:
         shap_summary = {"has_explanation": False}
@@ -245,6 +249,7 @@ async def inspect_run(
 )
 async def get_shap_payload(
     run_id: str,
+    compute: bool = Query(False, description="Compute on-demand if no cached payload exists"),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Return the full SHAP payload for ``run_id``.
@@ -315,6 +320,26 @@ async def get_shap_payload(
             "samples": None,
             "source": "inline",
         }
+
+    # On-demand computation — lets the UI show a real payload the first time the
+    # inspector opens a run whose explain task never ran.
+    if compute:
+        try:
+            from app.services import shap_service
+            payload = await shap_service.compute_shap_summary(run_id, db)
+            payload.setdefault("run_id", run_id)
+            payload["source"] = "computed"
+            return payload
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning("On-demand SHAP computation for run %s failed: %s", run_id, exc)
+            return {
+                "run_id": run_id,
+                "status": "error",
+                "error": str(exc),
+                "source": None,
+            }
 
     # No explanation computed yet.
     return {

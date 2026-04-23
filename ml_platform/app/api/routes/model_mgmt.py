@@ -235,9 +235,9 @@ async def model_detail(
         # V3 runs and purged legacy rows may still have a valid model artifact
         # and metrics log. Reuse the visualization resolver so result pages can
         # show detail metadata for those recovered tasks as well.
-        from app.services.viz_service import _get_task_and_dataset
+        from app.services.resolver import resolve_task_and_dataset
 
-        recovered_task, dataset = await _get_task_and_dataset(task_id, db)
+        recovered_task, dataset = await resolve_task_and_dataset(task_id, db)
         model_path = recovered_task.model_path
         model_size = None
         if model_path:
