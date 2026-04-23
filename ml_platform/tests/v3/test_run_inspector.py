@@ -157,3 +157,57 @@ async def test_inspector_log_limit(inspector_fixtures, app_with_db):
     # so with limit=1 we get exactly one entry, the most recent one in DB terms)
     assert resp.status_code == 200
     assert len(resp.json()["logs"]) == 1
+
+
+async def test_inspector_walks_id_chain_for_logs(db, app_with_db):
+    """When run.id != log.task_id, the inspector must find logs via the
+    PlatformTask.payload_ref legacy id (V3 runs are keyed this way)."""
+    # Synthesize a V3-native run where logs live under the legacy trainer id.
+    legacy_id = "legacy-id-xyz"
+    ds = Dataset(name="synth", file_path="/tmp/synth.csv", file_size=1)
+    db.add(ds)
+    await db.flush()
+
+    # No TrainingTask row exists for legacy_id — logs reference it anyway
+    # (mirrors the production state where TrainingTask was purged).
+    db.add_all([
+        TrainingLog(task_id=legacy_id, level="INFO", message="legacy-log-1"),
+        TrainingLog(task_id=legacy_id, level="WARNING", message="legacy-log-2"),
+    ])
+
+    ptask = PlatformTask(
+        kind="train", status="SUCCESS", progress=1.0,
+        payload_ref=f"train:{legacy_id}",
+    )
+    db.add(ptask)
+    await db.flush()
+
+    exp = PlatformExperiment(
+        name="legacy-exp", strategy_type="baseline",
+        objective_metric="accuracy", objective_direction="max",
+        dataset_id=ds.id, status="DONE",
+    )
+    db.add(exp)
+    await db.flush()
+
+    run = ExperimentRun(
+        experiment_id=exp.id, task_id=ptask.id,
+        params={"model_type": "random_forest"},
+        metrics={"accuracy": 0.77},
+        status="SUCCESS", trial_no=1, rank=1,
+        source_experiment_type="baseline",
+    )
+    db.add(run)
+    await db.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app_with_db), base_url="http://test") as client:
+        resp = await client.get(f"/api/platform/runs/{run.id}/inspector")
+    assert resp.status_code == 200
+    data = resp.json()
+    # Logs were found via the payload_ref legacy id even though no TrainingTask
+    # row exists.
+    assert len(data["logs"]) == 2
+    messages = [lg["message"] for lg in data["logs"]]
+    assert "legacy-log-1" in messages
+    assert "legacy-log-2" in messages
+    assert data["log_task_id"] == legacy_id

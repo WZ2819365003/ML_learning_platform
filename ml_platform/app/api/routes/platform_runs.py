@@ -153,8 +153,17 @@ async def inspect_run(
             _, _, domain_task_id = platform_task.payload_ref.partition(":")
 
     # --- 4. Domain training task + dataset
+    #
+    # Logs / TrainingTask rows are keyed by the legacy trainer id, which lives
+    # in PlatformTask.payload_ref = "train:<legacy_id>". When the legacy row
+    # has been purged (or the run never created one), we still want to surface
+    # the on-disk log file and synthesize a training_task view via the
+    # resolver. That keeps the inspector useful for V3 runs whose log file is
+    # keyed by a different id than run.id.
     training_task_payload: dict[str, Any] | None = None
     logs_payload: list[dict[str, Any]] = []
+    resolved_log_task_id: str | None = None
+
     if domain_task_id:
         tt = (
             await db.execute(select(TrainingTask).where(TrainingTask.id == domain_task_id))
@@ -174,6 +183,96 @@ async def inspect_run(
             logs = list(log_rows.scalars().all())
             logs.reverse()  # UI wants oldest-first
             logs_payload = [_serialize_log(lg) for lg in logs]
+            resolved_log_task_id = tt.id
+
+    # ---- Fallback path: no TrainingTask row (V3-native or purged) ----------
+    # Walk the id-candidate chain (run.id → run.task_id → payload_ref legacy id)
+    # and probe each for TrainingLog rows or a {id}.log file on disk. First hit
+    # wins; synthesize a training_task facade from the resolver output.
+    if not logs_payload or training_task_payload is None:
+        from app.services.resolver import resolve_legacy_id_candidates, resolve_task_and_dataset
+
+        candidates = await resolve_legacy_id_candidates(run_id, db)
+
+        # DB-log search across the candidate chain
+        if not logs_payload:
+            for cid in candidates:
+                log_rows = await db.execute(
+                    select(TrainingLog)
+                    .where(TrainingLog.task_id == cid)
+                    .order_by(TrainingLog.created_at.desc())
+                    .limit(log_limit)
+                )
+                logs = list(log_rows.scalars().all())
+                if logs:
+                    logs.reverse()
+                    logs_payload = [_serialize_log(lg) for lg in logs]
+                    resolved_log_task_id = cid
+                    break
+
+        # On-disk log fallback — `storage/logs/{id}.log` for purged / V3-native runs
+        if not logs_payload:
+            from app.config import get_settings
+            settings = get_settings()
+            for cid in candidates:
+                log_path = settings.storage_logs / f"{cid}.log"
+                if not log_path.exists():
+                    continue
+                try:
+                    lines = log_path.read_text(errors="ignore").splitlines()[-log_limit:]
+                except Exception:
+                    continue
+                # Parse "LEVEL timestamp | message" style lines — our TrainingLogger
+                # writes plain text, so we do a best-effort split rather than
+                # pretending these are ORM rows.
+                for line in lines:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    level = "INFO"
+                    for candidate_level in ("ERROR", "WARNING", "INFO", "DEBUG"):
+                        if candidate_level in stripped[:40]:
+                            level = candidate_level
+                            break
+                    logs_payload.append({
+                        "level": level,
+                        "message": stripped,
+                        "extra": {},
+                        "created_at": None,
+                    })
+                if logs_payload:
+                    resolved_log_task_id = cid
+                    break
+
+        # Synthesize a training_task view so the context tab has something
+        # human-readable even when the legacy row is gone.
+        if training_task_payload is None:
+            try:
+                facade, dataset = await resolve_task_and_dataset(run_id, db)
+                training_task_payload = {
+                    "id": getattr(facade, "id", run_id),
+                    "name": None,
+                    "model_type": getattr(facade, "model_type", None),
+                    "hyperparameters": {},
+                    "target_column": getattr(facade, "target_column", None),
+                    "test_size": getattr(facade, "test_size", 0.2),
+                    "eval_metrics": [],
+                    "status": getattr(facade, "status", "UNKNOWN"),
+                    "progress": 100,
+                    "model_path": getattr(facade, "model_path", None),
+                    "dataset": {
+                        "id": dataset.id,
+                        "name": dataset.name,
+                        "row_count": dataset.row_count,
+                        "column_count": dataset.column_count,
+                    } if dataset else None,
+                    "task_kind": getattr(facade, "task_kind", None),
+                    "synthesized": True,
+                }
+            except HTTPException:
+                pass  # resolver raised — the run may still be pending
+            except Exception as exc:
+                logger.warning("Inspector training_task synthesis failed for %s: %s", run_id, exc)
 
     # --- 5. Sibling runs (prev/next + rank context)
     siblings: list[dict[str, Any]] = []
@@ -234,6 +333,7 @@ async def inspect_run(
         "platform_task": _serialize_platform_task(platform_task) if platform_task else None,
         "training_task": training_task_payload,
         "logs": logs_payload,
+        "log_task_id": resolved_log_task_id,
         "siblings": siblings,
         "shap": shap_summary,
     }
