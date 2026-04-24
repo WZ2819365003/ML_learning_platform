@@ -27,10 +27,18 @@ import {
   LineChartOutlined,
   ReloadOutlined,
   RiseOutlined,
+  SlidersOutlined,
 } from '@ant-design/icons';
 import * as echarts from 'echarts';
 import { modelApi, vizApi } from '../services/api';
 import { formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
+import ShapView from '../components/viz/ShapView';
+import TrainingHistoryChart from '../components/viz/TrainingHistoryChart';
+import PerClassMetricsTable from '../components/viz/PerClassMetricsTable';
+import PRCurveChart from '../components/viz/PRCurveChart';
+import CalibrationCurveChart from '../components/viz/CalibrationCurveChart';
+import PredictionDistributionChart from '../components/viz/PredictionDistributionChart';
+import ThresholdTuningTable from '../components/viz/ThresholdTuningTable';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -195,23 +203,24 @@ function ResultListView({ navigate }) {
 }
 
 // ─── Detail view ──────────────────────────────────────────────────────────────
+// Four tabs, each driven off an independent Promise.allSettled slot so a
+// single endpoint 500 never blanks the page.
 function ResultDetailView({ taskId, navigate }) {
   const [models, setModels] = useState([]);
   const [detail, setDetail] = useState(null);
   const [vizState, setVizState] = useState({
+    // classification core
     confusionMatrix: null, rocCurve: null,
-    featureImportance: null, learningCurve: null,
+    // regression core
     residualPlot: null, predictedVsActual: null,
+    // shared
+    featureImportance: null, learningCurve: null,
+    // v3.2 professional set
+    perClass: null, prCurve: null, calibration: null,
+    threshold: null, distribution: null, shap: null,
     taskKind: 'classification',
   });
-  // Per-chart error string (null = ok / not-yet-loaded). Lets one chart fail
-  // without blanking the whole page (previously Promise.all bubbled a single
-  // 500 into an all-or-nothing fallback).
-  const [vizErrors, setVizErrors] = useState({
-    detail: null, confusionMatrix: null, rocCurve: null,
-    featureImportance: null, learningCurve: null,
-    residualPlot: null, predictedVsActual: null,
-  });
+  const [vizErrors, setVizErrors] = useState({});
   const [loading, setLoading] = useState(true);
   const [vizLoading, setVizLoading] = useState(false);
 
@@ -251,31 +260,38 @@ function ResultDetailView({ taskId, navigate }) {
     }
 
     const metrics = detailPayload?.result_metrics ?? fallbackModel?.result_metrics ?? {};
-    const taskKind = inferTaskKind(detailPayload?.model_type ?? fallbackModel?.model_type, metrics);
-    const chartRequests = [
+    const taskKind = inferTaskKind(
+      detailPayload?.model_type ?? fallbackModel?.model_type,
+      metrics,
+    );
+
+    // Build the fetcher list dynamically by task kind so we don't spam the
+    // backend with endpoints that will cleanly 400 with task-kind guards.
+    const baseRequests = [
       ['featureImportance', () => vizApi.getFeatureImportance(taskId)],
       ['learningCurve', () => vizApi.getLearningCurve(taskId)],
-      ...(taskKind === 'regression'
-        ? [
-            ['residualPlot', () => vizApi.getResidualPlot(taskId)],
-            ['predictedVsActual', () => vizApi.getPredictedVsActual(taskId)],
-          ]
-        : [
-            ['confusionMatrix', () => vizApi.getConfusionMatrix(taskId)],
-            ['rocCurve', () => vizApi.getRocCurve(taskId)],
-          ]),
+      ['distribution', () => vizApi.getDistribution(taskId)],
+      ['shap', () => vizApi.getShapSummary(taskId)],
+    ];
+    const classificationRequests = [
+      ['confusionMatrix', () => vizApi.getConfusionMatrix(taskId)],
+      ['rocCurve', () => vizApi.getRocCurve(taskId)],
+      ['perClass', () => vizApi.getPerClass(taskId)],
+      ['prCurve', () => vizApi.getPrCurve(taskId)],
+      ['calibration', () => vizApi.getCalibration(taskId)],
+      ['threshold', () => vizApi.getThreshold(taskId)],
+    ];
+    const regressionRequests = [
+      ['residualPlot', () => vizApi.getResidualPlot(taskId)],
+      ['predictedVsActual', () => vizApi.getPredictedVsActual(taskId)],
+    ];
+    const chartRequests = [
+      ...baseRequests,
+      ...(taskKind === 'regression' ? regressionRequests : classificationRequests),
     ];
 
     const results = await Promise.allSettled(chartRequests.map(([, fn]) => fn()));
-    const nextErrors = {
-      detail: detailError,
-      confusionMatrix: null,
-      rocCurve: null,
-      featureImportance: null,
-      learningCurve: null,
-      residualPlot: null,
-      predictedVsActual: null,
-    };
+    const nextErrors = { detail: detailError };
     const payloads = {};
     results.forEach((r, idx) => {
       const k = chartRequests[idx][0];
@@ -288,17 +304,24 @@ function ResultDetailView({ taskId, navigate }) {
       }
     });
     setVizErrors(nextErrors);
-    setVizState({
+    setVizState(prev => ({
+      ...prev,
       confusionMatrix: payloads.confusionMatrix ?? null,
       rocCurve: payloads.rocCurve ?? null,
       featureImportance: payloads.featureImportance ?? null,
       learningCurve: payloads.learningCurve ?? null,
       residualPlot: payloads.residualPlot ?? null,
       predictedVsActual: payloads.predictedVsActual ?? null,
+      perClass: payloads.perClass ?? null,
+      prCurve: payloads.prCurve ?? null,
+      calibration: payloads.calibration ?? null,
+      threshold: payloads.threshold ?? null,
+      distribution: payloads.distribution ?? null,
+      shap: payloads.shap ?? null,
       taskKind,
-    });
+    }));
     // Only surface a toast if every single endpoint failed; otherwise the
-    // per-chart inline error is enough (no 4× popup spam).
+    // per-chart inline error is enough (no N-popup spam).
     const chartKeys = chartRequests.map(([k]) => k);
     const allFailed = chartKeys.every(k => nextErrors[k]);
     if (allFailed) message.error('加载可视化详情失败');
@@ -331,7 +354,7 @@ function ResultDetailView({ taskId, navigate }) {
 
   const selectedModel = useMemo(
     () => models.find(m => m.task_id === taskId) ?? null,
-    [models, taskId]
+    [models, taskId],
   );
 
   const chartOptions = useMemo(() => {
@@ -484,6 +507,122 @@ function ResultDetailView({ taskId, navigate }) {
     .map(k => [k, resultMetrics?.[k]])
     .filter(([, v]) => typeof v === 'number' && !Number.isNaN(v));
 
+  // ─── Tab content builders ─────────────────────────────────────────────────
+
+  const performanceTab = (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Row gutter={[16, 16]}>
+        {taskKind === 'regression' ? (
+          <>
+            <Col xs={24} xl={12}>
+              <Card title={<Space><BarChartOutlined />预测值 vs 真实值</Space>} variant="borderless">
+                <ChartSlot errorKey="predictedVsActual" hasData={!!vizState.predictedVsActual} emptyText="暂无预测-真实值数据">
+                  <div ref={predictedVsActualRef} style={{ width: '100%', height: 360 }} />
+                </ChartSlot>
+              </Card>
+            </Col>
+            <Col xs={24} xl={12}>
+              <Card title={<Space><LineChartOutlined />残差散点</Space>} variant="borderless">
+                <ChartSlot errorKey="residualPlot" hasData={!!vizState.residualPlot} emptyText="暂无残差数据">
+                  <div ref={residualPlotRef} style={{ width: '100%', height: 360 }} />
+                </ChartSlot>
+              </Card>
+            </Col>
+          </>
+        ) : (
+          <>
+            <Col xs={24} xl={12}>
+              <Card title={<Space><HeatMapOutlined />混淆矩阵</Space>} variant="borderless">
+                <ChartSlot errorKey="confusionMatrix" hasData={!!vizState.confusionMatrix} emptyText="暂无混淆矩阵数据">
+                  <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
+                </ChartSlot>
+              </Card>
+            </Col>
+            <Col xs={24} xl={12}>
+              <Card title={<Space><LineChartOutlined />ROC 曲线</Space>} variant="borderless">
+                <ChartSlot errorKey="rocCurve" hasData={!!vizState.rocCurve} emptyText="暂无 ROC 曲线数据">
+                  <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
+                </ChartSlot>
+              </Card>
+            </Col>
+            <Col xs={24} xl={12}>
+              <Card title={<Space><LineChartOutlined />Precision-Recall 曲线</Space>} variant="borderless">
+                <ChartSlot errorKey="prCurve" hasData={!!vizState.prCurve} emptyText="暂无 PR 曲线数据">
+                  <PRCurveChart payload={vizState.prCurve} height={340} />
+                </ChartSlot>
+              </Card>
+            </Col>
+            <Col xs={24} xl={12}>
+              <Card title={<Space><LineChartOutlined />校准曲线</Space>} variant="borderless">
+                <ChartSlot errorKey="calibration" hasData={!!vizState.calibration} emptyText="暂无校准曲线数据（需要二分类 + predict_proba）">
+                  <CalibrationCurveChart payload={vizState.calibration} height={340} />
+                </ChartSlot>
+              </Card>
+            </Col>
+            <Col xs={24}>
+              <Card title={<Space><BarChartOutlined />逐类指标</Space>} variant="borderless">
+                <ChartSlot errorKey="perClass" hasData={!!vizState.perClass} emptyText="暂无逐类指标">
+                  <PerClassMetricsTable payload={vizState.perClass} />
+                </ChartSlot>
+              </Card>
+            </Col>
+          </>
+        )}
+      </Row>
+    </Space>
+  );
+
+  const trainingTab = (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card title={<Space><RiseOutlined />交叉验证曲线</Space>} variant="borderless">
+        <ChartSlot errorKey="learningCurve" hasData={!!vizState.learningCurve} emptyText="暂无 CV 数据（仅 K-Fold 训练任务可用）">
+          <div ref={learningCurveRef} style={{ width: '100%', height: 360 }} />
+        </ChartSlot>
+      </Card>
+      {resultMetrics?.history && (
+        <Card title={<Space><RiseOutlined />Epoch 训练历史</Space>} variant="borderless">
+          <TrainingHistoryChart
+            history={resultMetrics.history}
+            taskType={taskKind}
+            height={360}
+          />
+        </Card>
+      )}
+    </Space>
+  );
+
+  const explanationTab = (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card title={<Space><BulbOutlined />SHAP / 特征解释</Space>} variant="borderless">
+        <ChartSlot errorKey="shap" hasData={!!vizState.shap} emptyText="暂无 SHAP 解释数据">
+          <ShapView payload={vizState.shap} />
+        </ChartSlot>
+      </Card>
+      <Card title={<Space><BarChartOutlined />模型原生特征重要性 (Top 10)</Space>} variant="borderless">
+        <ChartSlot errorKey="featureImportance" hasData={!!vizState.featureImportance} emptyText="该模型不支持 feature_importances_（仅树模型可用）">
+          <div ref={featureImportanceRef} style={{ width: '100%', height: 360 }} />
+        </ChartSlot>
+      </Card>
+    </Space>
+  );
+
+  const thresholdTab = (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {taskKind !== 'regression' && (
+        <Card title={<Space><SlidersOutlined />阈值敏感度分析</Space>} variant="borderless">
+          <ChartSlot errorKey="threshold" hasData={!!vizState.threshold} emptyText="暂无阈值分析（需要二分类 + predict_proba）">
+            <ThresholdTuningTable payload={vizState.threshold} />
+          </ChartSlot>
+        </Card>
+      )}
+      <Card title={<Space><BarChartOutlined />预测分布</Space>} variant="borderless">
+        <ChartSlot errorKey="distribution" hasData={!!vizState.distribution} emptyText="暂无预测分布数据">
+          <PredictionDistributionChart payload={vizState.distribution} height={340} />
+        </ChartSlot>
+      </Card>
+    </Space>
+  );
+
   return (
     <div>
       <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 24 }}>
@@ -526,7 +665,12 @@ function ResultDetailView({ taskId, navigate }) {
               <Descriptions.Item label="目标列">{detail?.target_column ?? selectedModel?.target_column ?? '-'}</Descriptions.Item>
               <Descriptions.Item label="完成时间">{formatDateTime(detail?.finished_at ?? selectedModel?.finished_at)}</Descriptions.Item>
               <Descriptions.Item label="测试集比例">{formatMetric(detail?.test_size ?? 0.2, { digits: 2 })}</Descriptions.Item>
-              <Descriptions.Item label="任务 ID"><Text code>{taskId}</Text></Descriptions.Item>
+              <Descriptions.Item label="任务类型">
+                <Tag color={taskKind === 'regression' ? 'purple' : 'blue'}>
+                  {taskKind === 'regression' ? '回归' : '分类'}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="任务 ID" span={2}><Text code>{taskId}</Text></Descriptions.Item>
             </Descriptions>
             {vizLoading && <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>正在加载图表数据…</Text>}
           </Card>
@@ -549,108 +693,23 @@ function ResultDetailView({ taskId, navigate }) {
               items={[
                 {
                   key: 'performance',
-                  label: <Space><HeatMapOutlined />性能图表</Space>,
-                  children: (
-                    <Row gutter={[16, 16]}>
-                      {taskKind === 'regression' ? (
-                        <>
-                          <Col xs={24} xl={12}>
-                            <Card title={<Space><BarChartOutlined /> 预测值 vs 真实值</Space>} variant="borderless">
-                              <ChartSlot
-                                errorKey="predictedVsActual"
-                                hasData={!!vizState.predictedVsActual}
-                                emptyText="暂无预测-真实值数据"
-                              >
-                                <div ref={predictedVsActualRef} style={{ width: '100%', height: 360 }} />
-                              </ChartSlot>
-                            </Card>
-                          </Col>
-                          <Col xs={24} xl={12}>
-                            <Card title={<Space><LineChartOutlined /> 残差分布</Space>} variant="borderless">
-                              <ChartSlot
-                                errorKey="residualPlot"
-                                hasData={!!vizState.residualPlot}
-                                emptyText="暂无残差数据"
-                              >
-                                <div ref={residualPlotRef} style={{ width: '100%', height: 360 }} />
-                              </ChartSlot>
-                            </Card>
-                          </Col>
-                        </>
-                      ) : (
-                        <>
-                          <Col xs={24} xl={12}>
-                            <Card
-                              title={<Space><HeatMapOutlined /> 混淆矩阵</Space>}
-                              variant="borderless"
-                            >
-                              <ChartSlot
-                                errorKey="confusionMatrix"
-                                hasData={!!vizState.confusionMatrix}
-                                emptyText="暂无混淆矩阵数据"
-                              >
-                                <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
-                              </ChartSlot>
-                            </Card>
-                          </Col>
-                          <Col xs={24} xl={12}>
-                            <Card
-                              title={<Space><LineChartOutlined /> ROC 曲线</Space>}
-                              variant="borderless"
-                            >
-                              <ChartSlot
-                                errorKey="rocCurve"
-                                hasData={!!vizState.rocCurve}
-                                emptyText="暂无 ROC 曲线数据（仅分类任务）"
-                              >
-                                <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
-                              </ChartSlot>
-                            </Card>
-                          </Col>
-                        </>
-                      )}
-                    </Row>
-                  ),
+                  label: <Space><HeatMapOutlined />性能</Space>,
+                  children: performanceTab,
+                },
+                {
+                  key: 'training',
+                  label: <Space><RiseOutlined />训练过程</Space>,
+                  children: trainingTab,
                 },
                 {
                   key: 'explain',
-                  label: <Space><BulbOutlined />模型解释</Space>,
-                  children: (
-                    <div>
-                      <ChartSlot
-                        errorKey="featureImportance"
-                        hasData={!!vizState.featureImportance}
-                        emptyText="暂无特征重要性数据（树模型训练后自动生成）"
-                      >
-                        <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
-                          模型原生特征重要性（基于 sklearn
-                          <Tag style={{ marginLeft: 6, fontSize: 10 }}>feature_importances_</Tag>
-                          属性，前 10 个特征）
-                        </div>
-                        <div ref={featureImportanceRef} style={{ width: '100%', height: 420 }} />
-                      </ChartSlot>
-                      <Alert
-                        type="info"
-                        showIcon
-                        icon={<BulbOutlined />}
-                        style={{ marginTop: 16 }}
-                        message={'如需 SHAP 级别解释，请在「实验管理」中使用 AutoML 训练，并在实验详情页触发 SHAP 分析。'}
-                      />
-                    </div>
-                  ),
+                  label: <Space><BulbOutlined />解释性</Space>,
+                  children: explanationTab,
                 },
                 {
-                  key: 'learning',
-                  label: <Space><RiseOutlined />训练过程</Space>,
-                  children: (
-                    <ChartSlot
-                      errorKey="learningCurve"
-                      hasData={!!vizState.learningCurve}
-                      emptyText="暂无训练过程数据"
-                    >
-                      <div ref={learningCurveRef} style={{ width: '100%', height: 360 }} />
-                    </ChartSlot>
-                  ),
+                  key: 'threshold',
+                  label: <Space><SlidersOutlined />阈值 &amp; 分布</Space>,
+                  children: thresholdTab,
                 },
               ]}
             />

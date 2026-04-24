@@ -12,6 +12,7 @@ import { platformRunsApi } from '../../services/api'
 import LogViewer from './LogViewer'
 import ShapView from './ShapView'
 import TrainingViz from './TrainingViz'
+import TrainingHistoryChart from '../viz/TrainingHistoryChart'
 
 const { Text, Paragraph } = Typography
 
@@ -241,15 +242,39 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
               // curve / feature importance in a tight 2×2 grid.  Driven off
               // the domain TrainingTask id (not the Run id) — the backend
               // viz helpers re-load the model + dataset on demand.
+              //
+              // Prepended: epoch-level TrainingHistoryChart when the Run
+              // carries a `metrics.history` blob (DL runs + any ML run
+              // whose CV history made it into metrics).  Replaces the
+              // previous JSON-dump approach the user complained about.
               {
                 key: 'training_viz',
                 label: <span>训练可视化</span>,
                 children: (
-                  <TrainingViz
-                    trainingTaskId={ttask?.id}
-                    modelType={ttask?.model_type}
-                    taskStatus={run?.status}
-                  />
+                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    {run?.metrics?.history && (
+                      <div>
+                        <Text strong style={{ fontSize: 13 }}>Epoch 训练历史</Text>
+                        <div style={{ marginTop: 6 }}>
+                          <TrainingHistoryChart
+                            history={run.metrics.history}
+                            taskType={
+                              String(ttask?.model_type || '').toLowerCase().includes('regress')
+                                ? 'regression'
+                                : 'classification'
+                            }
+                            height={280}
+                          />
+                        </div>
+                        <Divider style={{ margin: '12px 0' }} />
+                      </div>
+                    )}
+                    <TrainingViz
+                      trainingTaskId={ttask?.id}
+                      modelType={ttask?.model_type}
+                      taskStatus={run?.status}
+                    />
+                  </Space>
                 ),
               },
 
