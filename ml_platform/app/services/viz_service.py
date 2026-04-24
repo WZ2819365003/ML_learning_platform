@@ -15,7 +15,18 @@ from typing import Any
 
 import numpy as np
 from fastapi import HTTPException
-from sklearn.metrics import auc, confusion_matrix, roc_curve
+from sklearn.calibration import calibration_curve
+from sklearn.metrics import (
+    auc,
+    brier_score_loss,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    precision_recall_curve,
+    precision_score,
+    recall_score,
+    roc_curve,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -249,4 +260,323 @@ async def get_predicted_vs_actual(task_id: str, db: AsyncSession) -> dict:
         "task_id": task_id,
         "actual": [round(float(v), 4) for v in y_test.tolist()],
         "predicted": [round(float(v), 4) for v in y_pred.tolist()],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Advanced viz endpoints — per-class metrics, PR curve, calibration,
+# threshold tuning, prediction distribution.  These back the new
+# "professional" tabs in Results.jsx and RunInspector.
+# ---------------------------------------------------------------------------
+
+
+def _guard_classification(model_type: str | None, endpoint: str) -> None:
+    if is_regressor(model_type):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{endpoint} 仅适用于分类任务，当前任务为回归。",
+        )
+
+
+async def get_per_class_metrics(task_id: str, db: AsyncSession) -> dict:
+    """Return sklearn.classification_report as a structured dict.
+
+    Each class gets precision / recall / f1 / support; macro + weighted
+    averages are included.  The frontend table can render one row per
+    class with the last two rows pinned as aggregate.
+    """
+    task, dataset = await resolve_task_and_dataset(task_id, db)
+    _guard_classification(task.model_type, "per_class metrics")
+    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
+        dataset.file_path, task.target_column, task.test_size
+    )
+    model = load_model(task.model_path)
+    y_pred = model.predict(X_test)
+
+    report = classification_report(
+        y_test, y_pred, target_names=class_labels, output_dict=True, zero_division=0
+    )
+
+    rows: list[dict[str, Any]] = []
+    aggregate_keys = {"accuracy", "macro avg", "weighted avg"}
+    for label, vals in report.items():
+        if label in aggregate_keys or not isinstance(vals, dict):
+            continue
+        rows.append({
+            "label": label,
+            "precision": round(float(vals.get("precision", 0.0)), 4),
+            "recall": round(float(vals.get("recall", 0.0)), 4),
+            "f1": round(float(vals.get("f1-score", 0.0)), 4),
+            "support": int(vals.get("support", 0)),
+        })
+
+    def _agg(key: str) -> dict[str, Any] | None:
+        v = report.get(key)
+        if not isinstance(v, dict):
+            return None
+        return {
+            "label": key,
+            "precision": round(float(v.get("precision", 0.0)), 4),
+            "recall": round(float(v.get("recall", 0.0)), 4),
+            "f1": round(float(v.get("f1-score", 0.0)), 4),
+            "support": int(v.get("support", 0)),
+        }
+
+    return {
+        "task_id": task_id,
+        "rows": rows,
+        "macro_avg": _agg("macro avg"),
+        "weighted_avg": _agg("weighted avg"),
+        "accuracy": round(float(report.get("accuracy", 0.0)), 4),
+    }
+
+
+async def get_pr_curve(task_id: str, db: AsyncSession) -> dict:
+    """Precision-Recall curve + Average Precision + best-F1 threshold.
+
+    For binary tasks, returns the full (precision, recall, thresholds)
+    arrays; the frontend plots PR + vertical line at best_threshold.
+    Multiclass is one-vs-rest per class.
+    """
+    task, dataset = await resolve_task_and_dataset(task_id, db)
+    _guard_classification(task.model_type, "PR curve")
+    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
+        dataset.file_path, task.target_column, task.test_size
+    )
+    model = load_model(task.model_path)
+    if not hasattr(model, "predict_proba"):
+        raise HTTPException(
+            status_code=400,
+            detail="该模型不支持 predict_proba，无法绘制 PR 曲线。",
+        )
+
+    y_proba = model.predict_proba(X_test)
+    classes = np.asarray(model.classes_) if hasattr(model, "classes_") else np.unique(y_test)
+
+    if y_proba.shape[1] == 2:
+        positive = classes[1]
+        y_true_bin = (np.asarray(y_test) == positive).astype(int)
+        precision, recall, thresholds = precision_recall_curve(y_true_bin, y_proba[:, 1])
+        ap = float(auc(recall, precision))
+        # Best F1 threshold: walk the curve, handle length-mismatch (precision
+        # has one more point than thresholds by sklearn convention).
+        f1_scores = np.asarray([
+            (2 * p * r / (p + r)) if (p + r) > 0 else 0.0
+            for p, r in zip(precision[:-1], recall[:-1])
+        ])
+        best_idx = int(np.argmax(f1_scores)) if f1_scores.size else 0
+        return {
+            "task_id": task_id,
+            "multiclass": False,
+            "positive_label": str(positive),
+            "precision": [round(float(x), 4) for x in precision],
+            "recall": [round(float(x), 4) for x in recall],
+            "thresholds": [round(float(x), 4) for x in thresholds],
+            "average_precision": round(ap, 4),
+            "best_threshold": round(float(thresholds[best_idx]) if thresholds.size else 0.5, 4),
+            "best_f1": round(float(f1_scores[best_idx]) if f1_scores.size else 0.0, 4),
+        }
+
+    # Multiclass: one-vs-rest per class.
+    from sklearn.preprocessing import label_binarize
+    y_true_bin = label_binarize(y_test, classes=classes)
+    curves = []
+    for i, cls in enumerate(classes):
+        precision_i, recall_i, _ = precision_recall_curve(y_true_bin[:, i], y_proba[:, i])
+        ap_i = float(auc(recall_i, precision_i))
+        curves.append({
+            "class": class_labels[i] if i < len(class_labels) else str(cls),
+            "precision": [round(float(x), 4) for x in precision_i],
+            "recall": [round(float(x), 4) for x in recall_i],
+            "average_precision": round(ap_i, 4),
+        })
+    return {"task_id": task_id, "multiclass": True, "curves": curves}
+
+
+async def get_calibration_curve(task_id: str, db: AsyncSession, n_bins: int = 10) -> dict:
+    """Calibration (reliability) curve + Expected Calibration Error + Brier score.
+
+    Binary-only.  ECE is the mean of |prob_pred - prob_true| weighted by
+    per-bin count.  Good calibration means the curve hugs the diagonal.
+    """
+    task, dataset = await resolve_task_and_dataset(task_id, db)
+    _guard_classification(task.model_type, "calibration curve")
+    _, X_test, _, y_test, _, _ = load_and_split_data_stratified(
+        dataset.file_path, task.target_column, task.test_size
+    )
+    model = load_model(task.model_path)
+    if not hasattr(model, "predict_proba"):
+        raise HTTPException(
+            status_code=400,
+            detail="该模型不支持 predict_proba，无法绘制校准曲线。",
+        )
+
+    y_proba = model.predict_proba(X_test)
+    classes = np.asarray(model.classes_) if hasattr(model, "classes_") else np.unique(y_test)
+    if y_proba.shape[1] != 2:
+        raise HTTPException(
+            status_code=400,
+            detail="校准曲线目前仅支持二分类任务。",
+        )
+
+    positive = classes[1]
+    y_true = (np.asarray(y_test) == positive).astype(int)
+    scores = y_proba[:, 1]
+
+    prob_true, prob_pred = calibration_curve(y_true, scores, n_bins=n_bins, strategy="uniform")
+
+    # ECE: per-bin weighted |gap|
+    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    bin_idx = np.digitize(scores, bin_edges[1:-1], right=False)
+    ece = 0.0
+    total = len(scores)
+    for b in range(n_bins):
+        mask = bin_idx == b
+        if not mask.any():
+            continue
+        avg_conf = float(np.mean(scores[mask]))
+        avg_acc = float(np.mean(y_true[mask]))
+        ece += (mask.sum() / total) * abs(avg_conf - avg_acc)
+
+    brier = float(brier_score_loss(y_true, scores))
+
+    return {
+        "task_id": task_id,
+        "positive_label": str(positive),
+        "prob_pred": [round(float(x), 4) for x in prob_pred],
+        "prob_true": [round(float(x), 4) for x in prob_true],
+        "n_bins": n_bins,
+        "ece": round(ece, 4),
+        "brier": round(brier, 4),
+    }
+
+
+async def get_threshold_analysis(
+    task_id: str, db: AsyncSession, step: float = 0.05
+) -> dict:
+    """Sweep classification thresholds and return per-threshold metrics.
+
+    Binary classification only.  Produces ~19 rows (0.05 → 0.95, step=0.05
+    by default) with precision / recall / F1 / accuracy.  The UI picks the
+    best-F1 row to highlight.
+    """
+    task, dataset = await resolve_task_and_dataset(task_id, db)
+    _guard_classification(task.model_type, "threshold analysis")
+    _, X_test, _, y_test, _, _ = load_and_split_data_stratified(
+        dataset.file_path, task.target_column, task.test_size
+    )
+    model = load_model(task.model_path)
+    if not hasattr(model, "predict_proba"):
+        raise HTTPException(
+            status_code=400,
+            detail="该模型不支持 predict_proba，无法做阈值分析。",
+        )
+
+    y_proba = model.predict_proba(X_test)
+    classes = np.asarray(model.classes_) if hasattr(model, "classes_") else np.unique(y_test)
+    if y_proba.shape[1] != 2:
+        raise HTTPException(
+            status_code=400,
+            detail="阈值分析目前仅支持二分类任务。",
+        )
+    positive = classes[1]
+    y_true = (np.asarray(y_test) == positive).astype(int)
+    scores = y_proba[:, 1]
+
+    step = max(0.01, min(0.5, float(step)))
+    thresholds = np.arange(step, 1.0, step)
+    rows = []
+    for thr in thresholds:
+        y_pred = (scores >= thr).astype(int)
+        precision = float(precision_score(y_true, y_pred, zero_division=0))
+        recall = float(recall_score(y_true, y_pred, zero_division=0))
+        f1 = float(f1_score(y_true, y_pred, zero_division=0))
+        accuracy = float(np.mean(y_pred == y_true))
+        rows.append({
+            "threshold": round(float(thr), 4),
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
+            "accuracy": round(accuracy, 4),
+        })
+
+    best_row = max(rows, key=lambda r: r["f1"]) if rows else None
+    return {
+        "task_id": task_id,
+        "positive_label": str(positive),
+        "rows": rows,
+        "best_threshold": best_row["threshold"] if best_row else 0.5,
+    }
+
+
+async def get_prediction_distribution(
+    task_id: str, db: AsyncSession, bins: int = 30
+) -> dict:
+    """Prediction distribution for classification (probability histogram)
+    or regression (residual histogram).
+
+    For classification: histogram of positive-class probabilities, split
+    by true class to see separation.  For regression: residual histogram
+    + summary stats.
+    """
+    task, dataset = await resolve_task_and_dataset(task_id, db)
+    bins = max(10, min(100, int(bins)))
+
+    if is_regressor(task.model_type):
+        _, X_test, _, y_test, _ = load_and_split_data_no_stratify(
+            dataset.file_path, task.target_column, task.test_size
+        )
+        model = load_model(task.model_path)
+        y_pred = model.predict(X_test)
+        residuals = np.asarray(y_test) - np.asarray(y_pred)
+        counts, edges = np.histogram(residuals, bins=bins)
+        return {
+            "task_id": task_id,
+            "kind": "regression_residuals",
+            "bin_edges": [round(float(e), 4) for e in edges],
+            "counts": [int(c) for c in counts],
+            "mean": round(float(np.mean(residuals)), 4),
+            "std": round(float(np.std(residuals)), 4),
+            "min": round(float(np.min(residuals)), 4),
+            "max": round(float(np.max(residuals)), 4),
+        }
+
+    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
+        dataset.file_path, task.target_column, task.test_size
+    )
+    model = load_model(task.model_path)
+    if not hasattr(model, "predict_proba"):
+        raise HTTPException(
+            status_code=400,
+            detail="该模型不支持 predict_proba，无法绘制概率分布。",
+        )
+
+    y_proba = model.predict_proba(X_test)
+    classes = np.asarray(model.classes_) if hasattr(model, "classes_") else np.unique(y_test)
+    if y_proba.shape[1] != 2:
+        # Multiclass: histogram of max-probability per sample
+        max_probs = np.max(y_proba, axis=1)
+        counts, edges = np.histogram(max_probs, bins=bins, range=(0.0, 1.0))
+        return {
+            "task_id": task_id,
+            "kind": "classification_confidence_multiclass",
+            "bin_edges": [round(float(e), 4) for e in edges],
+            "counts": [int(c) for c in counts],
+            "n_classes": int(y_proba.shape[1]),
+        }
+
+    positive = classes[1]
+    positive_scores = y_proba[:, 1]
+    y_true = np.asarray(y_test) == positive
+
+    pos_counts, edges = np.histogram(positive_scores[y_true], bins=bins, range=(0.0, 1.0))
+    neg_counts, _ = np.histogram(positive_scores[~y_true], bins=bins, range=(0.0, 1.0))
+
+    return {
+        "task_id": task_id,
+        "kind": "classification_binary_proba",
+        "positive_label": str(positive),
+        "bin_edges": [round(float(e), 4) for e in edges],
+        "positive_counts": [int(c) for c in pos_counts],
+        "negative_counts": [int(c) for c in neg_counts],
     }

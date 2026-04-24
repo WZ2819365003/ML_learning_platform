@@ -5,13 +5,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_db
 from app.services.viz_service import (
+    get_calibration_curve,
     get_confusion_matrix,
     get_feature_importance,
     get_learning_curve,
+    get_per_class_metrics,
+    get_pr_curve,
+    get_prediction_distribution,
     get_predicted_vs_actual,
     get_residual_plot,
     get_roc_curve,
     get_shap_summary,
+    get_threshold_analysis,
 )
 
 router = APIRouter(prefix="/viz", tags=["Visualization"])
@@ -80,3 +85,58 @@ async def predicted_vs_actual_route(
 ):
     """Return predicted vs actual scatter data for regression tasks."""
     return await get_predicted_vs_actual(task_id, db)
+
+
+# ---------------------------------------------------------------------------
+# Advanced classification viz — per-class metrics, PR curve, calibration,
+# threshold tuning, prediction distribution.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{task_id}/per_class")
+async def per_class_route(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-class precision / recall / F1 / support (classification only)."""
+    return await get_per_class_metrics(task_id, db)
+
+
+@router.get("/{task_id}/pr_curve")
+async def pr_curve_route(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Precision-Recall curve + Average Precision + best-F1 threshold."""
+    return await get_pr_curve(task_id, db)
+
+
+@router.get("/{task_id}/calibration")
+async def calibration_route(
+    task_id: str,
+    n_bins: int = Query(10, ge=3, le=50),
+    db: AsyncSession = Depends(get_db),
+):
+    """Calibration (reliability) curve + ECE + Brier score (binary only)."""
+    return await get_calibration_curve(task_id, db, n_bins=n_bins)
+
+
+@router.get("/{task_id}/threshold")
+async def threshold_route(
+    task_id: str,
+    step: float = Query(0.05, ge=0.01, le=0.5),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sweep binary classification thresholds; returns P/R/F1/accuracy per step."""
+    return await get_threshold_analysis(task_id, db, step=step)
+
+
+@router.get("/{task_id}/distribution")
+async def distribution_route(
+    task_id: str,
+    bins: int = Query(30, ge=10, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Prediction distribution — probability histogram (classification)
+    or residual histogram (regression)."""
+    return await get_prediction_distribution(task_id, db, bins=bins)
