@@ -14,6 +14,7 @@ import ExperimentBatchModal from '../components/workbench/ExperimentBatchModal'
 import RunInspector from '../components/workbench/RunInspector'
 import TrainingPlanSnapshotView from '../components/workbench/TrainingPlanSnapshotView'
 import ProgressTree from '../components/workbench/ProgressTree'
+import StrategyCompareTab from '../components/workbench/StrategyCompareTab'
 
 const { Text, Paragraph } = Typography
 
@@ -508,6 +509,12 @@ export default function ModelingTaskDetail() {
             { key: 'overview',    label: <span><ExperimentOutlined /> 任务概览</span>, children: overviewTab },
             { key: 'experiments', label: <span><NodeIndexOutlined /> 实验编排 ({experiments.length})</span>, children: experimentsTab },
             { key: 'runs',        label: <span><LineChartOutlined /> Run 对比 ({runStats.total || 0})</span>, children: runsTab },
+            { key: 'strategy-compare', label: <span><TrophyOutlined /> 策略对比</span>, children: (
+              <StrategyCompareTab
+                taskId={taskId}
+                onInspect={(rid) => { setInspectorRunId(rid); setInspectorTab('shap') }}
+              />
+            )},
           ]}
         />
       </Card>

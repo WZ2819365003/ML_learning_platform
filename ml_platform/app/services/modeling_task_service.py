@@ -593,6 +593,154 @@ async def task_runs(
     return {"items": items, "total": len(items)}
 
 
+# ---------------------------------------------------------------------------
+# Strategy comparison — baseline vs grid_search vs bayesian_search
+# ---------------------------------------------------------------------------
+
+
+def _quartiles(values: list[float]) -> dict[str, float] | None:
+    """Return {min, q1, median, q3, max} using linear interpolation.
+
+    Avoids pulling in numpy for a five-number summary — tiny helper so the
+    aggregation endpoint stays hot-reload-friendly and doesn't shell out to
+    heavy deps.  Returns None for empty input.
+    """
+    if not values:
+        return None
+    xs = sorted(values)
+    n = len(xs)
+
+    def _pct(p: float) -> float:
+        if n == 1:
+            return xs[0]
+        rank = p * (n - 1)
+        lo = int(rank)
+        hi = min(lo + 1, n - 1)
+        frac = rank - lo
+        return xs[lo] + (xs[hi] - xs[lo]) * frac
+
+    return {
+        "min": float(xs[0]),
+        "q1": float(_pct(0.25)),
+        "median": float(_pct(0.50)),
+        "q3": float(_pct(0.75)),
+        "max": float(xs[-1]),
+    }
+
+
+async def strategy_comparison(db: AsyncSession, task_id: str) -> dict[str, Any]:
+    """Compare baseline vs grid_search vs bayesian_search for this task.
+
+    For each strategy:
+      - run_count (SUCCESS only for stats; full_count for book-keeping)
+      - five-number summary of the objective metric
+      - best_run (the top run by direction)
+    Also returns `raw_points` — one row per SUCCESS run — so the UI can
+    render a box plot, strip plot, or table without a second round-trip.
+    """
+    task = await _get_task_or_404(db, task_id)
+    metric_name = task.objective_metric or "accuracy"
+    reverse = (task.objective_direction or "max") == "max"
+
+    exp_rows = await db.execute(
+        select(
+            PlatformExperiment.id,
+            PlatformExperiment.name,
+            PlatformExperiment.strategy_type,
+        ).where(PlatformExperiment.modeling_task_id == task_id)
+    )
+    experiments = exp_rows.all()
+    if not experiments:
+        return {
+            "task_id": task_id,
+            "metric_name": metric_name,
+            "objective_direction": task.objective_direction or "max",
+            "strategies": [],
+            "raw_points": [],
+        }
+
+    exp_index = {
+        eid: {"name": name, "strategy_type": strategy}
+        for eid, name, strategy in experiments
+    }
+
+    run_rows = await db.execute(
+        select(ExperimentRun).where(
+            ExperimentRun.experiment_id.in_(exp_index.keys())
+        )
+    )
+    runs = list(run_rows.scalars().all())
+
+    # Bucket runs by strategy_type — fall back to run.source_experiment_type
+    # when the exp no longer carries a label (legacy data).
+    buckets: dict[str, list[tuple[ExperimentRun, float]]] = {}
+    full_counts: dict[str, int] = {}
+    raw_points: list[dict[str, Any]] = []
+    for run in runs:
+        strategy = (
+            exp_index.get(run.experiment_id, {}).get("strategy_type")
+            or run.source_experiment_type
+            or "unknown"
+        )
+        full_counts[strategy] = full_counts.get(strategy, 0) + 1
+        if run.status != "SUCCESS":
+            continue
+        value = _pick_metric(run.metrics or {}, metric_name)
+        if value is None:
+            continue
+        buckets.setdefault(strategy, []).append((run, value))
+        raw_points.append({
+            "strategy_type": strategy,
+            "run_id": run.id,
+            "experiment_id": run.experiment_id,
+            "trial_no": run.trial_no,
+            "value": value,
+            "model_type": (run.params or {}).get("model_type")
+                or (run.search_meta or {}).get("model_type"),
+        })
+
+    strategies: list[dict[str, Any]] = []
+    # Stable ordering: canonical strategies first, then anything else alphabetically.
+    canonical = ["baseline", "grid_search", "bayesian_search"]
+    ordered_keys = [s for s in canonical if s in full_counts] + sorted(
+        k for k in full_counts if k not in canonical
+    )
+    for strategy in ordered_keys:
+        items = buckets.get(strategy, [])
+        values = [v for _, v in items]
+        stats = _quartiles(values)
+        best_run: dict[str, Any] | None = None
+        if items:
+            best_tuple = max(items, key=lambda t: t[1]) if reverse else min(items, key=lambda t: t[1])
+            run, value = best_tuple
+            best_run = {
+                "run_id": run.id,
+                "experiment_id": run.experiment_id,
+                "trial_no": run.trial_no,
+                "objective_value": value,
+                "params": run.params or {},
+                "metrics": run.metrics or {},
+                "model_type": (run.params or {}).get("model_type")
+                    or (run.search_meta or {}).get("model_type"),
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            }
+        strategies.append({
+            "strategy_type": strategy,
+            "run_count": len(items),          # SUCCESS-only, used for stats
+            "full_run_count": full_counts.get(strategy, 0),
+            "stats": stats,
+            "best_run": best_run,
+        })
+
+    return {
+        "task_id": task_id,
+        "metric_name": metric_name,
+        "objective_direction": task.objective_direction or "max",
+        "strategies": strategies,
+        "raw_points": raw_points,
+    }
+
+
 async def refresh_task_summary(db: AsyncSession, task_id: str) -> None:
     """
     Recompute ``best_experiment_id`` / ``best_run_id`` / ``summary_snapshot``

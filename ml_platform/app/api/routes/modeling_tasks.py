@@ -222,6 +222,23 @@ async def task_leaderboard(
     return await modeling_task_service.task_leaderboard(db, task_id, top_k=top_k)
 
 
+@router.get(
+    "/{task_id}/strategy-comparison",
+    summary="Compare baseline / grid_search / bayesian_search for this task",
+)
+async def task_strategy_comparison(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Per-strategy five-number summary + best run + raw points.
+
+    Powers the 策略对比 tab on ModelingTaskDetail: the UI renders three
+    cards (baseline / grid / bayesian best value), a box plot from the
+    per-strategy stats, and a ranking table driven by raw_points.
+    """
+    return await modeling_task_service.strategy_comparison(db, task_id)
+
+
 @router.get("/{task_id}/runs", summary="All runs with scheduler progress")
 async def task_runs(
     task_id: str,

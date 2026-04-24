@@ -297,6 +297,8 @@ export const modelingTaskApi = {
     api.post(`/v3/tasks/${taskId}/experiments/bulk`, data),
   tuningSpaces: (taskType) => api.get(`/v3/tasks/tuning-spaces/${taskType}`),
   progressTree: (taskId) => api.get(`/v3/tasks/${taskId}/progress-tree`),
+  strategyComparison: (taskId) =>
+    api.get(`/v3/tasks/${taskId}/strategy-comparison`),
 };
 
 export const platformRunsApi = {
