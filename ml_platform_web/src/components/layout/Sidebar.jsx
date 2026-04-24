@@ -116,6 +116,7 @@ const Sidebar = () => {
         { key: 'training-plans', label: <Link to="/v3/training-plans">训练方案</Link> },
         { key: 'tasks',       label: <Link to="/tasks">任务中心</Link> },
         { key: 'experiments', label: <Link to="/experiments">实验管理</Link> },
+        { key: 'v3-runs',     label: <Link to="/v3/runs">Run 诊断中心</Link> },
       ],
     }] : []),
     {
@@ -139,6 +140,7 @@ const Sidebar = () => {
     if (path === '/v3/tasks' || path.startsWith('/v3/tasks/')) return 'v3-tasks'
     if (path.startsWith('/v3/training-plans')) return 'training-plans'
     if (path === '/experiments' || path.startsWith('/experiments/')) return 'experiments'
+    if (path === '/v3/runs' || path.startsWith('/v3/runs/')) return 'v3-runs'
     if (path === '/dl/config') return 'dl-config'
     if (path === '/dl/monitor') return 'dl-monitor'
     if (path === '/dl/results') return 'dl-results'

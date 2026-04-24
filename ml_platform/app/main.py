@@ -21,6 +21,7 @@ from app.api.routes.platform_tasks import router as platform_tasks_router
 from app.api.routes.platform_experiments import router as platform_experiments_router
 from app.api.routes.modeling_tasks import router as modeling_tasks_router
 from app.api.routes.platform_runs import router as platform_runs_router
+from app.api.routes.v3_runs import router as v3_runs_router
 from app.api.routes.training_plans import router as training_plans_router
 from app.api.websocket import router as ws_router
 from app.services.timeseries_service import resume_unfinished_ts_tasks
@@ -200,6 +201,7 @@ def create_app() -> FastAPI:
     app.include_router(platform_tasks_router, prefix="/api")        # → /api/platform/tasks
     app.include_router(platform_experiments_router, prefix="/api")  # → /api/platform/experiments
     app.include_router(modeling_tasks_router, prefix="/api")        # → /api/v3/tasks
+    app.include_router(v3_runs_router,        prefix="/api")        # → /api/v3/runs  (flat cross-task list)
     app.include_router(platform_runs_router, prefix="/api")         # → /api/platform/runs/{run_id}/inspector
     app.include_router(training_plans_router, prefix="/api")        # → /api/platform/training-plans
     app.include_router(ws_router)

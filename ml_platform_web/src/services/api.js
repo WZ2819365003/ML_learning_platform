@@ -306,6 +306,14 @@ export const platformRunsApi = {
   shap: (runId) => api.get(`/platform/runs/${runId}/shap`),
 };
 
+// ── V3 cross-task Run list (powers 「Run 诊断中心」 page) ────────────────────
+export const v3RunsApi = {
+  // Flat list of every ExperimentRun joined with its parent ModelingTask
+  // so the UI can filter/sort in a single table. See ml_platform/app/
+  // api/routes/v3_runs.py for query params.
+  list: (params = {}) => api.get('/v3/runs/', { params }),
+};
+
 // ── Training Plans (reusable templates) ──────────────────────────────────────
 
 export const trainingPlansApi = {

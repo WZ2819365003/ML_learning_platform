@@ -594,6 +594,99 @@ async def task_runs(
 
 
 # ---------------------------------------------------------------------------
+# Cross-task run list — powers the V3 "Run 诊断中心" nav page so users don't
+# have to drill into each modeling task to see its runs. Intentionally a
+# flattened view rather than nested: one row per ExperimentRun with the
+# parent task name already joined in, so the frontend can render a single
+# filterable/sortable table.
+# ---------------------------------------------------------------------------
+
+async def list_all_runs(
+    db: AsyncSession,
+    *,
+    status: str | None = None,
+    strategy_type: str | None = None,
+    task_type: str | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """Return a flat list of every ExperimentRun across every ModelingTask.
+
+    Joined fields (task name, task_type, objective metric/direction,
+    experiment strategy_type) are attached per row so the frontend can
+    filter/sort without chasing foreign keys itself. `objective_value` is
+    resolved against each task's own objective_metric — mixing classification
+    and regression rows in one table still makes sense because the column
+    label reflects the per-row metric.
+    """
+    # 1. All modeling tasks (index for name / metric / direction)
+    task_rows = await db.execute(select(ModelingTask))
+    task_by_id = {t.id: t for t in task_rows.scalars().all()}
+    if not task_by_id:
+        return {"items": [], "total": 0}
+
+    # 2. All experiments (index for strategy_type + parent task)
+    exp_rows = await db.execute(select(PlatformExperiment))
+    exp_by_id = {e.id: e for e in exp_rows.scalars().all()}
+    if not exp_by_id:
+        return {"items": [], "total": 0}
+
+    # 3. Filter tasks by task_type (applied at the run level since runs
+    #    don't carry task_type themselves).
+    if task_type:
+        allowed_tasks = {tid for tid, t in task_by_id.items() if t.task_type == task_type}
+        if not allowed_tasks:
+            return {"items": [], "total": 0}
+        allowed_exps = {eid for eid, e in exp_by_id.items() if e.modeling_task_id in allowed_tasks}
+    else:
+        allowed_exps = set(exp_by_id.keys())
+
+    # 4. Runs
+    stmt = select(ExperimentRun).where(ExperimentRun.experiment_id.in_(allowed_exps))
+    if status:
+        stmt = stmt.where(ExperimentRun.status == status.upper())
+    if strategy_type:
+        allowed_exps_by_strategy = {
+            eid for eid, e in exp_by_id.items()
+            if eid in allowed_exps and e.strategy_type == strategy_type
+        }
+        stmt = stmt.where(ExperimentRun.experiment_id.in_(allowed_exps_by_strategy))
+
+    stmt = stmt.order_by(ExperimentRun.created_at.desc()).limit(limit)
+    run_rows = await db.execute(stmt)
+    runs = list(run_rows.scalars().all())
+
+    items: list[dict[str, Any]] = []
+    for run in runs:
+        exp = exp_by_id.get(run.experiment_id)
+        task = task_by_id.get(exp.modeling_task_id) if exp else None
+        if task is None:
+            continue  # orphaned run — skip
+        metric_name = task.objective_metric or "accuracy"
+        metric_val = _pick_metric(run.metrics or {}, metric_name)
+        model_type = (run.params or {}).get("model_type") if isinstance(run.params, dict) else None
+        items.append({
+            "run_id": run.id,
+            "experiment_id": run.experiment_id,
+            "experiment_name": exp.name if exp else None,
+            "strategy_type": exp.strategy_type if exp else run.source_experiment_type,
+            "task_id": task.id,
+            "task_name": task.name,
+            "task_type": task.task_type,
+            "objective_metric": metric_name,
+            "objective_direction": task.objective_direction or "max",
+            "objective_value": metric_val,
+            "trial_no": run.trial_no,
+            "rank": run.rank,
+            "status": run.status,
+            "model_type": model_type,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        })
+
+    return {"items": items, "total": len(items)}
+
+
+# ---------------------------------------------------------------------------
 # Strategy comparison — baseline vs grid_search vs bayesian_search
 # ---------------------------------------------------------------------------
 

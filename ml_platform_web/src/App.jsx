@@ -23,6 +23,8 @@ import ExperimentRedirect from './pages/ExperimentRedirect'
 import ModelingTasks from './pages/ModelingTasks'
 import ModelingTaskDetail from './pages/ModelingTaskDetail'
 import TrainingPlans from './pages/TrainingPlans'
+import V3Runs from './pages/V3Runs'
+import ErrorBoundary from './components/ErrorBoundary'
 
 const { Content } = Layout
 
@@ -100,8 +102,15 @@ function App() {
 
               {/* V3 Modeling Workbench — new task-centric workflow */}
               <Route path="/v3/tasks" element={<ModelingTasks />} />
-              <Route path="/v3/tasks/:taskId" element={<ModelingTaskDetail />} />
+              {/* ErrorBoundary: detail page has many sub-tabs that can throw
+                  during data fetch; isolate so one tab crash doesn't white-screen. */}
+              <Route path="/v3/tasks/:taskId" element={
+                <ErrorBoundary scope="建模任务详情" homeTo="/v3/tasks">
+                  <ModelingTaskDetail />
+                </ErrorBoundary>
+              } />
               <Route path="/v3/training-plans" element={<TrainingPlans />} />
+              <Route path="/v3/runs" element={<V3Runs />} />
               <Route path="/v3" element={<Navigate to="/v3/tasks" replace />} />
             </Routes>
           </Content>
