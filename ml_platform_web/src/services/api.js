@@ -146,6 +146,21 @@ export const vizApi = {
   getPredictedVsActual(taskId) {
     return api.get(`/viz/${taskId}/predicted_vs_actual`);
   },
+  getPerClass(taskId) {
+    return api.get(`/viz/${taskId}/per_class`);
+  },
+  getPrCurve(taskId) {
+    return api.get(`/viz/${taskId}/pr_curve`);
+  },
+  getCalibration(taskId, params) {
+    return api.get(`/viz/${taskId}/calibration`, { params });
+  },
+  getThreshold(taskId, params) {
+    return api.get(`/viz/${taskId}/threshold`, { params });
+  },
+  getDistribution(taskId, params) {
+    return api.get(`/viz/${taskId}/distribution`, { params });
+  },
 };
 
 export const dataEnhancedApi = {
