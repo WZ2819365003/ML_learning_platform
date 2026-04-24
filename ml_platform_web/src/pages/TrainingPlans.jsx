@@ -281,7 +281,50 @@ export default function TrainingPlans() {
   const formSelected   = Form.useWatch('selected_models', form) || []
   const formDlConfig   = Form.useWatch('dl_config',    form) || {}
   const formSearchSpace = Form.useWatch('search_space', form) || {}
+  const formBudget      = Form.useWatch('budget_config', form) || {}
   const availableModels = tuningSpaces[formTaskType] || {}
+
+  // Run count estimator — shown as a chip next to the submit button so the
+  // user sees how expensive their plan will be before clicking 创建.
+  // Formula per strategy:
+  //   baseline        : N_models × 1
+  //   grid_search     : Σ_models Π_params len(values[param])
+  //   bayesian_search : N_models × max_trials
+  const planEstimate = useMemo(() => {
+    const nModels = formSelected.length
+    if (nModels === 0) return { runs: 0, label: '请先选择模型', tone: 'default' }
+
+    if (formStrategyType === 'baseline') {
+      return { runs: nModels, label: `${nModels} 个 run`, tone: 'default' }
+    }
+    if (formStrategyType === 'grid_search') {
+      let total = 0
+      for (const m of formSelected) {
+        const space = formSearchSpace?.[m] || {}
+        // each value must be an array; product of lengths
+        const lens = Object.values(space)
+          .map(v => (Array.isArray(v) ? v.length : 1))
+          .filter(n => n > 0)
+        const combos = lens.length ? lens.reduce((a, b) => a * b, 1) : 1
+        total += combos
+      }
+      return {
+        runs: total,
+        label: `约 ${total} 个 run (${nModels} 个模型的网格组合)`,
+        tone: total > 50 ? 'danger' : total > 20 ? 'warning' : 'default',
+      }
+    }
+    if (formStrategyType === 'bayesian_search') {
+      const trials = Number(formBudget?.max_trials) || 20
+      const total = nModels * trials
+      return {
+        runs: total,
+        label: `约 ${total} 个 run (${nModels} 模型 × ${trials} trials)`,
+        tone: total > 100 ? 'danger' : total > 50 ? 'warning' : 'default',
+      }
+    }
+    return { runs: 0, label: '', tone: 'default' }
+  }, [formStrategyType, formSelected, formSearchSpace, formBudget])
 
   // DL models filtered by current task_type — index by id for quick lookup.
   const dlModelsForTask = useMemo(
@@ -657,23 +700,45 @@ export default function TrainingPlans() {
         centered
         maskClosable={false}
         footer={
-          <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-            <Button onClick={() => setDrawerOpen(false)}>取消</Button>
-            <Button
-              onClick={async () => {
-                try {
-                  await form.validateFields()
-                  message.success('当前参数已应用（尚未提交到服务器）')
-                } catch {
-                  /* antd renders errors inline */
-                }
-              }}
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Tooltip
+              title={
+                formStrategyType === 'grid_search'
+                  ? '网格搜索按每个模型的参数笛卡尔积累加。>50 会被标红，建议缩小搜索空间。'
+                  : formStrategyType === 'bayesian_search'
+                  ? 'Optuna 按 max_trials × 模型数采样。'
+                  : 'baseline 对每个选中的模型跑一次默认超参。'
+              }
             >
-              保存模型表单
-            </Button>
-            <Button type="primary" loading={saving} onClick={handleSubmit}>
-              {editingId ? '保存' : '创建'}
-            </Button>
+              <Tag
+                color={
+                  planEstimate.tone === 'danger' ? 'red'
+                    : planEstimate.tone === 'warning' ? 'orange'
+                    : 'blue'
+                }
+                style={{ fontSize: 12, padding: '2px 10px' }}
+              >
+                预估：{planEstimate.label}
+              </Tag>
+            </Tooltip>
+            <Space>
+              <Button onClick={() => setDrawerOpen(false)}>取消</Button>
+              <Button
+                onClick={async () => {
+                  try {
+                    await form.validateFields()
+                    message.success('当前参数已应用（尚未提交到服务器）')
+                  } catch {
+                    /* antd renders errors inline */
+                  }
+                }}
+              >
+                保存模型表单
+              </Button>
+              <Button type="primary" loading={saving} onClick={handleSubmit}>
+                {editingId ? '保存' : '创建'}
+              </Button>
+            </Space>
           </Space>
         }
       >
