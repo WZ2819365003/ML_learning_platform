@@ -99,6 +99,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
   const shap = data?.shap
   const siblings = data?.siblings || []
   const logs = data?.logs || []
+  const diagnosis = data?.diagnosis
 
   return (
     <Drawer
@@ -291,6 +292,31 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                 label: '上下文',
                 children: (
                   <Space direction="vertical" size={14} style={{ width: '100%' }}>
+                    {/* Auto-diagnosis narrative: overfit verdict + peer rank
+                        + param impact + failure attribution in one sentence.
+                        Hidden if the backend didn't return a diagnosis. */}
+                    {diagnosis?.narrative && (
+                      <Alert
+                        type={
+                          diagnosis.failure_reason
+                            ? 'error'
+                            : diagnosis.overfit?.verdict === 'overfit'
+                              ? 'warning'
+                              : diagnosis.overfit?.verdict === 'underfit'
+                                ? 'warning'
+                                : 'info'
+                        }
+                        showIcon
+                        message="自动诊断"
+                        description={
+                          <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+                            {diagnosis.narrative.split('\n').map((line, i) => (
+                              <div key={i}>{line}</div>
+                            ))}
+                          </div>
+                        }
+                      />
+                    )}
                     <div>
                       <Text strong><DatabaseOutlined /> 数据集</Text>
                       {ds ? (

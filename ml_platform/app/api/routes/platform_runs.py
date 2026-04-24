@@ -293,6 +293,7 @@ async def inspect_run(
                 "rank": r.rank,
                 "status": r.status,
                 "metrics": r.metrics or {},
+                "params": r.params or {},  # needed for param-impact correlation
                 "source_experiment_type": r.source_experiment_type,
             }
             for r in sib_rows.scalars().all()
@@ -319,23 +320,39 @@ async def inspect_run(
     else:
         shap_summary = {"has_explanation": False}
 
+    # --- 7. Auto-diagnosis narrative (overfit / failure / param impact / peer rank)
+    experiment_payload = {
+        "id": exp.id,
+        "name": exp.name,
+        "strategy_type": exp.strategy_type,
+        "objective_metric": exp.objective_metric,
+        "objective_direction": exp.objective_direction,
+        "modeling_task_id": exp.modeling_task_id,
+        "status": exp.status,
+    } if exp else None
+
+    try:
+        from app.services.run_diagnosis_service import diagnose_run
+        diagnosis = diagnose_run(
+            run=_serialize_run(run),
+            experiment=experiment_payload,
+            siblings=siblings,
+            logs=logs_payload,
+        )
+    except Exception as exc:  # pragma: no cover — diagnosis is best-effort
+        logger.warning("Run diagnosis failed for %s: %s", run_id, exc)
+        diagnosis = None
+
     return {
         "run": _serialize_run(run),
-        "experiment": {
-            "id": exp.id,
-            "name": exp.name,
-            "strategy_type": exp.strategy_type,
-            "objective_metric": exp.objective_metric,
-            "objective_direction": exp.objective_direction,
-            "modeling_task_id": exp.modeling_task_id,
-            "status": exp.status,
-        } if exp else None,
+        "experiment": experiment_payload,
         "platform_task": _serialize_platform_task(platform_task) if platform_task else None,
         "training_task": training_task_payload,
         "logs": logs_payload,
         "log_task_id": resolved_log_task_id,
         "siblings": siblings,
         "shap": shap_summary,
+        "diagnosis": diagnosis,
     }
 
 
