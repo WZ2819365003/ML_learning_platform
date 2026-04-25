@@ -323,7 +323,7 @@ async def create_training_task_record(db: AsyncSession, candidate: dict) -> Trai
 
     candidate keys (all optional except dataset_id, model_type, target_column):
       dataset_id, model_type, target_column, hyperparameters, test_size,
-      eval_metrics, cross_validation, class_weight
+      eval_metrics, cv_folds, cross_validation, class_weight
     """
     import uuid as _uuid_mod
 
@@ -342,6 +342,7 @@ async def create_training_task_record(db: AsyncSession, candidate: dict) -> Trai
         )
 
     cv_config = candidate.get("cross_validation") or {}
+    cv_folds = int(candidate.get("cv_folds") or cv_config.get("folds") or 5)
     short_id = str(_uuid_mod.uuid4())[:8]
     task = TrainingTask(
         dataset_id=dataset_id,
@@ -350,6 +351,7 @@ async def create_training_task_record(db: AsyncSession, candidate: dict) -> Trai
         hyperparameters=candidate.get("hyperparameters", {}),
         target_column=candidate["target_column"],
         test_size=candidate.get("test_size", 0.2),
+        cv_folds=cv_folds,
         eval_metrics=candidate.get("eval_metrics", ["accuracy"]),
         status="PENDING",
     )
@@ -389,8 +391,7 @@ async def _run_training_sync_by_id(
         hyperparams   = task.hyperparameters or {}
         test_size     = task.test_size or 0.2
         eval_metrics  = task.eval_metrics or ["accuracy"]
-        # cv_folds isn't persisted on TrainingTask, default to 5
-        cv_folds      = 5
+        cv_folds      = int(getattr(task, "cv_folds", None) or 5)
 
     # Mark domain task RUNNING
     async with async_session_factory() as db:
@@ -459,6 +460,7 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
 
     # Create domain task record
     cv_config = request_data.get("cross_validation") or {}
+    cv_folds = cv_config.get("folds", 5) if cv_config.get("enabled", True) else 3
     import uuid as _uuid_mod
     short_id = str(_uuid_mod.uuid4())[:8]
     task = TrainingTask(
@@ -468,6 +470,7 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
         hyperparameters=request_data.get("hyperparameters", {}),
         target_column=request_data["target_column"],
         test_size=request_data.get("test_size", 0.2),
+        cv_folds=cv_folds,
         eval_metrics=request_data.get("eval_metrics", ["accuracy"]),
         status="PENDING",
     )
@@ -499,7 +502,7 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
         hyperparameters=request_data.get("hyperparameters", {}),
         test_size=request_data.get("test_size", 0.2),
         eval_metrics=request_data.get("eval_metrics", ["accuracy"]),
-        cv_folds=cv_config.get("folds", 5) if cv_config.get("enabled", True) else 3,
+        cv_folds=cv_folds,
         model_save_dir=str(settings.storage_models),
         class_weight=request_data.get("class_weight"),
     ))

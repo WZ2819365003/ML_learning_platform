@@ -133,6 +133,7 @@ class TrainingTask(Base):
     hyperparameters: Mapped[dict | None] = mapped_column(JSON, default=dict)
     target_column: Mapped[str] = mapped_column(String(255), nullable=False)
     test_size: Mapped[float] = mapped_column(Float, default=0.2)
+    cv_folds: Mapped[int] = mapped_column(Integer, default=5)
     eval_metrics: Mapped[list | None] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(32), default="PENDING", nullable=False)
     celery_task_id: Mapped[str | None] = mapped_column(String(255), default=None)

@@ -218,6 +218,7 @@ async def dispatch_experiment_batch(
     selected_models: list[str],
     search_space: dict[str, Any],
     budget_config: dict[str, Any],
+    eval_metrics: list[str] | None = None,
     description: str | None = None,
     model_family: str | None = None,
     dl_config: dict[str, Any] | None = None,
@@ -234,10 +235,8 @@ async def dispatch_experiment_batch(
     ``selected_models`` may contain both ML and DL tokens.  Each token is
     resolved against the model registries; unknown tokens raise 422.
     DL tokens are dispatched as ``PlatformTask(kind='dl_train')`` and executed
-    by ``dl_service._run_dl_training_by_id``.  For DL models, grid/bayesian
-    strategies are **downgraded to baseline** in Phase 1 (Optuna for PyTorch
-    is a separate future work item).  ML models continue to support all three
-    strategies in the same batch.
+    by ``dl_service._run_dl_training_by_id``.  DL models are baseline-only in
+    Phase 1; grid/bayesian requests that include DL tokens fail fast with 422.
     """
     task = await _get_task_or_404(db, modeling_task_id)
     if not task.dataset_id or not task.target_column:
@@ -252,7 +251,7 @@ async def dispatch_experiment_batch(
     # -----------------------------------------------------------------------
     # V3 Phase 2 — snapshot-first defaulting
     # If the caller omitted selected_models / search_space / dl_config /
-    # budget_config, fall back to the plan snapshot frozen at task creation.
+    # budget_config / eval_metrics, fall back to the plan snapshot frozen at task creation.
     # Snapshot is authoritative; editing the live plan after bind does NOT
     # change what the task runs (reproducibility).
     # -----------------------------------------------------------------------
@@ -267,6 +266,8 @@ async def dispatch_experiment_batch(
         search_space = dict(snapshot_payload["search_space"])
     if (not budget_config) and snapshot_payload.get("budget_config"):
         budget_config = dict(snapshot_payload["budget_config"])
+    if (not eval_metrics) and snapshot_payload.get("eval_metrics"):
+        eval_metrics = list(snapshot_payload["eval_metrics"])
     if dl_config is None and snapshot_payload.get("dl_config"):
         dl_config = dict(snapshot_payload["dl_config"])
     if model_family is None and snapshot_payload.get("model_family"):
@@ -308,15 +309,11 @@ async def dispatch_experiment_batch(
             ),
         )
 
-    dl_models = [
-        model for model in selected_models
-        if (tuning_defaults.get(model) or {}).get("family", "ml") == "dl"
-    ]
     if strategy_type != "baseline" and dl_models:
         raise HTTPException(
             status_code=422,
             detail=(
-                "Deep-learning models are currently supported in baseline batches only. "
+            "Deep-learning models are currently supported in baseline batches only. "
                 f"Remove from {strategy_type}: {dl_models}"
             ),
         )
@@ -353,19 +350,13 @@ async def dispatch_experiment_batch(
         await db.flush()
 
     # Expand trials → list of concrete hyperparameter dicts per model.
-    eval_metrics = _default_eval_metrics(task_type, task.objective_metric)
+    eval_metrics = list(eval_metrics or _default_eval_metrics(task_type, task.objective_metric))
     max_trials = budget_config.get("max_trials") if budget_config else None
     test_size = float((budget_config or {}).get("test_size") or 0.2)
+    cv_folds = int((budget_config or {}).get("cv_folds") or 5)
 
-    # DL trials are always baseline in Phase 1.  If the caller picked
-    # grid/bayesian but selected DL models, we run those DL models as baseline
-    # and log a downgrade warning.  ML models continue to honour the strategy.
-    if dl_models and strategy_type in ("grid_search", "bayesian_search"):
-        logger.warning(
-            "Downgrading %d DL model(s) to baseline for experiment %s "
-            "(strategy=%s; DL search is not supported in Phase 1): %s",
-            len(dl_models), exp.id, strategy_type, dl_models,
-        )
+    # DL trials are always baseline in Phase 1; non-baseline strategies with DL
+    # tokens have already failed fast above.
     dl_trials = _expand_dl_baseline(dl_models, dl_config or {}, task_type)
 
     if strategy_type == "baseline":
@@ -380,7 +371,7 @@ async def dispatch_experiment_batch(
         total_trials = len(trials)
         if total_trials == 0:
             raise HTTPException(status_code=422, detail="Baseline produced no trials — check selected_models")
-        await _persist_trials(db, exp, task, trials, eval_metrics, test_size=test_size)
+        await _persist_trials(db, exp, task, trials, eval_metrics, test_size=test_size, cv_folds=cv_folds)
         await db.commit()
         _launch_concurrent(exp.id, modeling_task_id)
     elif strategy_type == "grid_search":
@@ -392,13 +383,13 @@ async def dispatch_experiment_batch(
                 status_code=422,
                 detail="Grid search produced no trials — provide search_space or pick models with grid_values defined",
             )
-        await _persist_trials(db, exp, task, trials, eval_metrics, test_size=test_size)
+        await _persist_trials(db, exp, task, trials, eval_metrics, test_size=test_size, cv_folds=cv_folds)
         await db.commit()
         _launch_concurrent(exp.id, modeling_task_id)
     elif strategy_type == "bayesian_search":
         # ML part runs bayesian; DL part runs baseline concurrently (persisted now).
         if dl_trials:
-            await _persist_trials(db, exp, task, dl_trials, eval_metrics, test_size=test_size)
+            await _persist_trials(db, exp, task, dl_trials, eval_metrics, test_size=test_size, cv_folds=cv_folds)
         total_trials = _count_bayesian_trials(ml_models, budget_config, max_trials) + len(dl_trials)
         await db.commit()
         if dl_trials:
@@ -413,6 +404,7 @@ async def dispatch_experiment_batch(
                 budget_config=budget_config,
                 eval_metrics=eval_metrics,
                 test_size=test_size,
+                cv_folds=cv_folds,
             )
     else:
         raise HTTPException(status_code=422, detail=f"Unsupported strategy_type: {strategy_type!r}")
@@ -466,6 +458,7 @@ async def dispatch_experiment_bundle(
             selected_models=selected_models,
             search_space=spec.get("search_space") or {},
             budget_config=spec.get("budget_config") or {},
+            eval_metrics=spec.get("eval_metrics"),
             description=spec.get("description") or description,
         )
         submitted.append(result)
@@ -645,6 +638,7 @@ async def _persist_trials(
     eval_metrics: list[str],
     *,
     test_size: float = 0.2,
+    cv_folds: int = 5,
 ) -> None:
     """Create domain task + ExperimentRun + PlatformTask for each trial.
 
@@ -680,6 +674,7 @@ async def _persist_trials(
                     "target_column": task.target_column,
                     "hyperparameters": trial["hyperparameters"],
                     "test_size": test_size,
+                    "cv_folds": cv_folds,
                     "eval_metrics": eval_metrics,
                 },
             )
@@ -1054,6 +1049,7 @@ def _launch_bayesian(
     budget_config: dict[str, Any] | None,
     eval_metrics: list[str],
     test_size: float = 0.2,
+    cv_folds: int = 5,
 ) -> None:
     asyncio.create_task(
         _run_bayesian_search(
@@ -1065,6 +1061,7 @@ def _launch_bayesian(
             budget_config=budget_config or {},
             eval_metrics=eval_metrics,
             test_size=test_size,
+            cv_folds=cv_folds,
         )
     )
 
@@ -1079,6 +1076,7 @@ async def _run_bayesian_search(
     budget_config: dict[str, Any],
     eval_metrics: list[str],
     test_size: float = 0.2,
+    cv_folds: int = 5,
 ) -> None:
     """
     Run one Optuna study *per model*, sequentially.
@@ -1139,6 +1137,7 @@ async def _run_bayesian_search(
                     task_type=task_type,
                     eval_metrics=eval_metrics,
                     test_size=test_size,
+                    cv_folds=cv_folds,
                 )
 
                 outcome = await _execute_single_trial(
@@ -1212,6 +1211,7 @@ async def _persist_single_bayesian_trial(
     task_type: str,
     eval_metrics: list[str],
     test_size: float = 0.2,
+    cv_folds: int = 5,
 ) -> tuple[str, str, str]:
     """Persist one Optuna trial to DB → return (run_id, platform_task_id, domain_task_id)."""
     async with async_session_factory() as db:
@@ -1223,6 +1223,7 @@ async def _persist_single_bayesian_trial(
                 "target_column": target_column,
                 "hyperparameters": hyperparameters,
                 "test_size": test_size,
+                "cv_folds": cv_folds,
                 "eval_metrics": eval_metrics,
             },
         )

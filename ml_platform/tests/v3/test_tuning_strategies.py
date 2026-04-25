@@ -10,8 +10,34 @@ from __future__ import annotations
 
 import pytest
 from fastapi import HTTPException
+from httpx import ASGITransport, AsyncClient
 
+from app.main import create_app
+from app.models.database import get_db
 from app.services.tuning_service import _validate_search_space
+
+
+@pytest.fixture
+def app_with_db(session_factory, monkeypatch):
+    """FastAPI app wired to the in-memory V3 test database."""
+    from app.services import tuning_service as svc
+
+    monkeypatch.setattr(svc, "_launch_concurrent", lambda *args, **kwargs: None)
+    monkeypatch.setattr(svc, "_launch_bayesian", lambda *args, **kwargs: None)
+
+    app = create_app()
+
+    async def _override_get_db():
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[get_db] = _override_get_db
+    return app
 
 
 # ---------------------------------------------------------------------------
@@ -247,3 +273,78 @@ async def test_dispatch_rejects_bayesian_missing_type(db):
             budget_config={"n_trials_per_model": 3},
         )
     assert exc.value.status_code == 422
+
+
+async def test_route_allows_grid_search_to_use_registry_defaults(db, app_with_db):
+    """A grid-search request may omit search_space and use tuning_spaces.yaml defaults."""
+    from app.models.database import Dataset, ModelingTask
+
+    ds = Dataset(name="x", file_path="/tmp/x", file_size=1, row_count=10)
+    db.add(ds)
+    await db.flush()
+    task = ModelingTask(
+        name="t",
+        dataset_id=ds.id,
+        dataset_name=ds.name,
+        target_column="y",
+        task_type="classification",
+        objective_metric="accuracy",
+        objective_direction="max",
+    )
+    db.add(task)
+    await db.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app_with_db), base_url="http://test") as client:
+        resp = await client.post(
+            f"/api/v3/tasks/{task.id}/experiments",
+            json={
+                "name": "default-grid",
+                "strategy_type": "grid_search",
+                "selected_models": ["logistic_regression"],
+                "budget_config": {"max_trials": 2},
+            },
+        )
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["strategy_type"] == "grid_search"
+    assert data["trials_planned"] == 2
+
+
+async def test_route_persists_requested_eval_metrics(db, app_with_db):
+    """Saved plan metrics submitted through the batch route must reach TrainingTask."""
+    from sqlalchemy import select
+    from app.models.database import Dataset, ModelingTask, TrainingTask
+
+    ds = Dataset(name="x", file_path="/tmp/x", file_size=1, row_count=10)
+    db.add(ds)
+    await db.flush()
+    task = ModelingTask(
+        name="t",
+        dataset_id=ds.id,
+        dataset_name=ds.name,
+        target_column="y",
+        task_type="classification",
+        objective_metric="precision",
+        objective_direction="max",
+    )
+    db.add(task)
+    await db.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app_with_db), base_url="http://test") as client:
+        resp = await client.post(
+            f"/api/v3/tasks/{task.id}/experiments",
+            json={
+                "name": "metric-batch",
+                "strategy_type": "baseline",
+                "selected_models": ["logistic_regression"],
+                "search_space": {},
+                "budget_config": {"cv_folds": 3},
+                "eval_metrics": ["accuracy", "precision"],
+            },
+        )
+
+    assert resp.status_code == 201, resp.text
+    rows = await db.execute(select(TrainingTask).where(TrainingTask.dataset_id == ds.id))
+    training_task = rows.scalar_one()
+    assert training_task.eval_metrics == ["accuracy", "precision"]

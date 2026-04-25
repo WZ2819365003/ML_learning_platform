@@ -289,7 +289,7 @@ export default function TrainingPlans() {
   // Formula per strategy:
   //   baseline        : N_models × 1
   //   grid_search     : Σ_models Π_params len(values[param])
-  //   bayesian_search : N_models × max_trials
+  //   bayesian_search : min(N_models × n_trials_per_model, max_trials)
   const planEstimate = useMemo(() => {
     const nModels = formSelected.length
     if (nModels === 0) return { runs: 0, label: '请先选择模型', tone: 'default' }
@@ -315,11 +315,12 @@ export default function TrainingPlans() {
       }
     }
     if (formStrategyType === 'bayesian_search') {
-      const trials = Number(formBudget?.max_trials) || 20
-      const total = nModels * trials
+      const perModel = Number(formBudget?.n_trials_per_model) || 10
+      const cap = Number(formBudget?.max_trials) || 20
+      const total = Math.min(nModels * perModel, cap)
       return {
         runs: total,
-        label: `约 ${total} 个 run (${nModels} 模型 × ${trials} trials)`,
+        label: `约 ${total} 个 run (${nModels} 模型 × ${perModel} trials，最多 ${cap})`,
         tone: total > 100 ? 'danger' : total > 50 ? 'warning' : 'default',
       }
     }
@@ -454,7 +455,7 @@ export default function TrainingPlans() {
       search_space: {},
       eval_metrics: ['accuracy', 'f1'],
       default_objective_metric: 'accuracy',
-      budget_config: { max_trials: 20, test_size: 0.2 },
+      budget_config: { max_trials: 20, n_trials_per_model: 10, test_size: 0.2 },
     })
     setDrawerOpen(true)
   }
@@ -790,7 +791,7 @@ export default function TrainingPlans() {
           <Form.Item name="model_family" label={
             <Space size={4}>
               <span>模型族</span>
-              <Tooltip title="ML=sklearn/XGB/LGB 等经典模型；DL=基于 PyTorch 的深度模型；混合=同时包含两类。DL 当前仅支持 baseline 策略（grid/bayesian 会自动降级）。">
+              <Tooltip title="ML=sklearn/XGB/LGB 等经典模型；DL=基于 PyTorch 的深度模型；混合=同时包含两类。DL 当前仅支持 baseline 策略。">
                 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
               </Tooltip>
             </Space>
@@ -972,6 +973,14 @@ export default function TrainingPlans() {
                 <InputNumber min={1} max={200} style={{ width: '100%' }} placeholder="20" />
               </Form.Item>
             </Col>
+            {formStrategyType === 'bayesian_search' && (
+              <Col span={8}>
+                <Form.Item name={['budget_config', 'n_trials_per_model']} label="每模型 Trial"
+                  tooltip="贝叶斯搜索中每个模型最多采样的次数，仍受最大 Trial 数限制">
+                  <InputNumber min={1} max={200} style={{ width: '100%' }} placeholder="10" />
+                </Form.Item>
+              </Col>
+            )}
             <Col span={8}>
               <Form.Item name={['budget_config', 'test_size']} label="测试集比例"
                 tooltip="留作 holdout 的数据占比">

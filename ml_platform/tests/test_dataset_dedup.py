@@ -14,7 +14,8 @@ from app.config import Settings
 from app import main as app_main
 from app.main import app
 from app.models.database import Base, Dataset, get_db
-from app.services import data_service
+from app.services import data_service, timeseries_service
+from app.utils import storage_paths
 
 
 @pytest_asyncio.fixture
@@ -53,7 +54,11 @@ def client(test_db, tmp_path, monkeypatch):
     )
     settings.ensure_storage_dirs()
     monkeypatch.setattr(data_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(storage_paths, "get_settings", lambda: settings)
+    monkeypatch.setattr(app_main, "get_settings", lambda: settings)
     monkeypatch.setattr(app_main, "async_engine", test_db[0])
+    monkeypatch.setattr(app_main, "async_session_factory", test_sessionmaker)
+    monkeypatch.setattr(timeseries_service, "async_session_factory", test_sessionmaker)
 
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as test_client:
@@ -114,3 +119,24 @@ def test_upload_stores_project_relative_file_path(client: TestClient, test_db):
     dataset = asyncio.run(_fetch_dataset())
     assert dataset.file_path.startswith("storage/uploads/")
     assert "\\" not in dataset.file_path
+
+
+def test_uploaded_dataset_columns_info_includes_target_selection_stats(client: TestClient):
+    response = client.post(
+        "/api/data/upload",
+        files={"file": ("target-stats.csv", io.BytesIO(_csv_bytes()), "text/csv")},
+    )
+    assert response.status_code == 201
+
+    dataset = response.json()
+    target_info = dataset["columns_info"]["target"]
+    assert target_info["unique_count"] == 2
+    assert target_info["unique_rate"] == 0.6667
+    assert target_info["min_class_count"] == 1
+
+    preview_response = client.get(f"/api/data/{dataset['id']}/preview")
+    assert preview_response.status_code == 200
+    preview_target_info = preview_response.json()["columns_info"]["target"]
+    assert preview_target_info["unique_count"] == 2
+    assert preview_target_info["unique_rate"] == 0.6667
+    assert preview_target_info["min_class_count"] == 1

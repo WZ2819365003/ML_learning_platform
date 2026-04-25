@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _column_exists(conn: Connection, table: str, column: str) -> bool:
+    if conn.dialect.name == "sqlite":
+        rows = conn.execute(text(f"PRAGMA table_info({table})")).mappings().all()
+        return any(row["name"] == column for row in rows)
+
     row = conn.execute(
         text(
             "SELECT 1 FROM information_schema.COLUMNS "
@@ -41,6 +45,10 @@ def _column_exists(conn: Connection, table: str, column: str) -> bool:
 
 
 def _index_exists(conn: Connection, table: str, index: str) -> bool:
+    if conn.dialect.name == "sqlite":
+        rows = conn.execute(text(f"PRAGMA index_list({table})")).mappings().all()
+        return any(row["name"] == index for row in rows)
+
     row = conn.execute(
         text(
             "SELECT 1 FROM information_schema.STATISTICS "
@@ -54,6 +62,13 @@ def _index_exists(conn: Connection, table: str, index: str) -> bool:
 
 
 def _table_exists(conn: Connection, table: str) -> bool:
+    if conn.dialect.name == "sqlite":
+        row = conn.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :table"),
+            {"table": table},
+        ).first()
+        return row is not None
+
     row = conn.execute(
         text(
             "SELECT 1 FROM information_schema.TABLES "
@@ -249,14 +264,26 @@ def _backfill_experiment_runs(conn: Connection) -> None:
     """Fill source_experiment_type on runs from their parent experiment."""
     if not _table_exists(conn, "experiment_runs"):
         return
-    conn.execute(
-        text(
-            "UPDATE experiment_runs r "
-            "  JOIN platform_experiments e ON e.id = r.experiment_id "
-            "   SET r.source_experiment_type = e.strategy_type "
-            " WHERE r.source_experiment_type IS NULL"
+    if conn.dialect.name == "sqlite":
+        conn.execute(
+            text(
+                "UPDATE experiment_runs "
+                "   SET source_experiment_type = ("
+                "       SELECT e.strategy_type FROM platform_experiments e "
+                "        WHERE e.id = experiment_runs.experiment_id"
+                "   ) "
+                " WHERE source_experiment_type IS NULL"
+            )
         )
-    )
+    else:
+        conn.execute(
+            text(
+                "UPDATE experiment_runs r "
+                "  JOIN platform_experiments e ON e.id = r.experiment_id "
+                "   SET r.source_experiment_type = e.strategy_type "
+                " WHERE r.source_experiment_type IS NULL"
+            )
+        )
 
 
 def _migrate_training_plans(conn: Connection) -> None:
@@ -301,6 +328,16 @@ def _migrate_platform_tasks_depends_on(conn: Connection) -> None:
     _add_column_if_missing(conn, "platform_tasks", "depends_on", "JSON NULL")
 
 
+def _migrate_training_tasks_cv_folds(conn: Connection) -> None:
+    """Persist cross-validation folds on concrete classical-ML training tasks."""
+    _add_column_if_missing(
+        conn,
+        "training_tasks",
+        "cv_folds",
+        "INT NOT NULL DEFAULT 5",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
@@ -317,6 +354,7 @@ async def run_startup_migrations(engine: AsyncEngine) -> None:
             await conn.run_sync(_migrate_training_plans_version)
             await conn.run_sync(_migrate_modeling_tasks_plan_binding)
             await conn.run_sync(_migrate_platform_tasks_depends_on)
+            await conn.run_sync(_migrate_training_tasks_cv_folds)
     except Exception as exc:  # noqa: BLE001
         # Startup must never crash because of a migration hiccup; log and move on.
         logger.warning("V3 workbench migrations skipped (%s): %s", type(exc).__name__, exc)

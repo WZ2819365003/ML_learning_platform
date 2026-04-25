@@ -180,6 +180,8 @@ class LightGBMTrainer(BaseTrainer):
             "learning_rate": hyperparameters.get("learning_rate", 0.1),
             "num_leaves": hyperparameters.get("num_leaves", 31),
             "max_depth": hyperparameters.get("max_depth", -1),
+            "min_child_samples": hyperparameters.get("min_child_samples", 20),
+            "colsample_bytree": hyperparameters.get("colsample_bytree", 1.0),
             "reg_alpha": hyperparameters.get("reg_alpha", 0),
             "reg_lambda": hyperparameters.get("reg_lambda", 1),
             "is_unbalance": hyperparameters.get("is_unbalance", False),
@@ -198,6 +200,7 @@ class LogisticRegressionTrainer(BaseTrainer):
         from sklearn.linear_model import LogisticRegression
         params = {
             "C": hyperparameters.get("C", 1.0),
+            "penalty": hyperparameters.get("penalty", "l2"),
             "l1_ratio": hyperparameters.get("l1_ratio", 0),
             "max_iter": hyperparameters.get("max_iter", 1000),
             "solver": hyperparameters.get("solver", "lbfgs"),
@@ -241,6 +244,8 @@ class MLPTrainer(BaseTrainer):
             "learning_rate": hyperparameters.get("learning_rate", "adaptive"),
             "learning_rate_init": hyperparameters.get("learning_rate_init", 0.001),
             "max_iter": hyperparameters.get("max_iter", 500),
+            "alpha": hyperparameters.get("alpha", 0.0001),
+            "early_stopping": hyperparameters.get("early_stopping", False),
             "random_state": hyperparameters.get("random_state", 42),
         }
         self.model = MLPClassifier(**params)

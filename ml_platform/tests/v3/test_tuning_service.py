@@ -23,6 +23,15 @@ from app.services import tuning_service as svc
 from app.services.modeling_task_service import load_tuning_spaces
 
 
+def test_tuning_spaces_cover_all_classical_ml_trainers():
+    """Every classical ML trainer should be selectable by V3 tuning strategies."""
+    from app.core.trainer import list_available_models
+
+    tuning_models = set(load_tuning_spaces("classification")) | set(load_tuning_spaces("regression"))
+
+    assert set(list_available_models()) <= tuning_models
+
+
 # ---------------------------------------------------------------------------
 # grid_search expansion
 # ---------------------------------------------------------------------------
@@ -225,6 +234,80 @@ async def test_dispatch_experiment_bundle_creates_one_batch_per_strategy(db, mon
     ]
     assert experiments[0].selected_models == ["random_forest", "mlp_dl"]
     assert experiments[1].selected_models == ["random_forest"]
+
+
+async def test_dispatch_persists_cv_folds_on_training_tasks(db, monkeypatch):
+    """Budget cv_folds must propagate to the concrete TrainingTask executor."""
+    from app.models.database import Dataset, ModelingTask, TrainingTask
+    from sqlalchemy import select
+
+    monkeypatch.setattr(svc, "_launch_concurrent", lambda *args, **kwargs: None)
+
+    ds = Dataset(name="demo.csv", file_path="/tmp/demo.csv", file_size=1, row_count=20)
+    db.add(ds)
+    await db.flush()
+    task = ModelingTask(
+        name="cv-task",
+        dataset_id=ds.id,
+        dataset_name=ds.name,
+        target_column="Target",
+        task_type="classification",
+        objective_metric="accuracy",
+        objective_direction="max",
+    )
+    db.add(task)
+    await db.flush()
+
+    await svc.dispatch_experiment_batch(
+        db,
+        modeling_task_id=task.id,
+        name="cv-grid",
+        strategy_type="grid_search",
+        selected_models=["logistic_regression"],
+        search_space={"logistic_regression": {"C": [0.1]}},
+        budget_config={"cv_folds": 7, "max_trials": 1},
+    )
+
+    rows = await db.execute(select(TrainingTask).where(TrainingTask.dataset_id == ds.id))
+    training_task = rows.scalar_one()
+    assert training_task.cv_folds == 7
+
+
+async def test_search_strategy_rejects_mixed_dl_models_instead_of_dropping_them(db, monkeypatch):
+    """Grid/Bayesian do not support DL yet, so mixed batches must fail loudly."""
+    from fastapi import HTTPException
+    from app.models.database import Dataset, ModelingTask
+
+    monkeypatch.setattr(svc, "_launch_concurrent", lambda *args, **kwargs: None)
+
+    ds = Dataset(name="demo.csv", file_path="/tmp/demo.csv", file_size=1, row_count=20)
+    db.add(ds)
+    await db.flush()
+    task = ModelingTask(
+        name="mixed-search-task",
+        dataset_id=ds.id,
+        dataset_name=ds.name,
+        target_column="Target",
+        task_type="classification",
+        objective_metric="accuracy",
+        objective_direction="max",
+    )
+    db.add(task)
+    await db.flush()
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.dispatch_experiment_batch(
+            db,
+            modeling_task_id=task.id,
+            name="mixed-grid",
+            strategy_type="grid_search",
+            selected_models=["random_forest", "mlp_dl"],
+            search_space={"random_forest": {"n_estimators": [10]}},
+            budget_config={"max_trials": 1},
+        )
+
+    assert exc.value.status_code == 422
+    assert "Deep-learning models" in exc.value.detail
 
 
 # ---------------------------------------------------------------------------

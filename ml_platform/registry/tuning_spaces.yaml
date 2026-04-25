@@ -241,3 +241,91 @@ regression:
         low: 0.001
         high: 100.0
         log: true
+
+  linear_regression:
+    display_name: "Linear Regression"
+    fixed: {}
+    grid_values:
+      fit_intercept: [true, false]
+    distribution:
+      fit_intercept:
+        type: categorical
+        choices: [true, false]
+
+  lasso:
+    display_name: "Lasso Regression"
+    fixed:
+      max_iter: 3000
+    grid_values:
+      alpha: [0.001, 0.01, 0.1, 1.0, 10.0]
+    distribution:
+      alpha:
+        type: float
+        low: 0.0001
+        high: 100.0
+        log: true
+
+  elasticnet:
+    display_name: "ElasticNet Regression"
+    fixed:
+      max_iter: 3000
+    grid_values:
+      alpha: [0.001, 0.01, 0.1, 1.0]
+      l1_ratio: [0.1, 0.5, 0.9]
+    distribution:
+      alpha:
+        type: float
+        low: 0.0001
+        high: 100.0
+        log: true
+      l1_ratio:
+        type: float
+        low: 0.0
+        high: 1.0
+
+  svr:
+    display_name: "Support Vector Regressor"
+    fixed: {}
+    grid_values:
+      C: [0.1, 1.0, 10.0]
+      kernel: ["rbf", "linear"]
+      epsilon: [0.01, 0.1, 0.5]
+    distribution:
+      C:
+        type: float
+        low: 0.01
+        high: 100.0
+        log: true
+      kernel:
+        type: categorical
+        choices: ["rbf", "linear", "poly"]
+      gamma:
+        type: categorical
+        choices: ["scale", "auto"]
+      epsilon:
+        type: float
+        low: 0.001
+        high: 1.0
+        log: true
+
+  mlp_regressor:
+    display_name: "MLP Regressor"
+    fixed:
+      max_iter: 500
+    grid_values:
+      hidden_layer_sizes: [[64], [128], [128, 64]]
+      learning_rate_init: [0.001, 0.0005]
+    distribution:
+      hidden_layer_sizes:
+        type: categorical
+        choices: [[64], [128], [64, 32], [128, 64]]
+      learning_rate_init:
+        type: float
+        low: 0.0001
+        high: 0.01
+        log: true
+      alpha:
+        type: float
+        low: 0.00001
+        high: 0.01
+        log: true

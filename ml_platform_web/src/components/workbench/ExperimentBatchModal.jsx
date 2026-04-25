@@ -182,6 +182,7 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
   const [modelParams, setModelParams] = useState({})  // nested per-strategy params
   const [plans, setPlans] = useState([])
   const [appliedPlanId, setAppliedPlanId] = useState(null)
+  const [appliedPlanPayload, setAppliedPlanPayload] = useState(null)
 
   // Reset state when modal opens / task changes
   useEffect(() => {
@@ -197,6 +198,8 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
         test_size: 0.2,
       })
       setModelParams({})
+      setAppliedPlanId(null)
+      setAppliedPlanPayload(null)
     }
   }, [open, task, form])
 
@@ -219,14 +222,17 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
       .catch(() => setPlans([]))
   }, [open, task?.task_type])
 
-  // Apply a plan by prefilling the form from its config.  This is best-effort:
-  // search_space overrides aren't re-hydrated into the per-model tuning UI
-  // (that would require replaying every Tab's state), but strategy + models +
-  // budget copy cleanly, which is the 80% benefit.
+  // Apply a plan by prefilling the form from its config, including the per-model
+  // tuning payload.  `modelParams` mirrors the local editor shape, while
+  // appliedPlanPayload carries family/DL config through to submit.
   const applyPlan = (planId) => {
     const plan = plans.find(p => p.id === planId)
     setAppliedPlanId(planId || null)
-    if (!plan) return
+    setAppliedPlanPayload(plan || null)
+    if (!plan) {
+      setModelParams({})
+      return
+    }
     form.setFieldsValue({
       strategy_type: plan.strategy_type,
       selected_models: plan.selected_models || [],
@@ -235,7 +241,14 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
       test_size: plan.budget_config?.test_size ?? 0.2,
       n_trials_per_model: plan.budget_config?.n_trials_per_model ?? 10,
     })
-    setModelParams({})
+    const savedSpace = plan.search_space || {}
+    if (plan.strategy_type === 'grid_search') {
+      setModelParams({ grid: savedSpace })
+    } else if (plan.strategy_type === 'bayesian_search') {
+      setModelParams({ distribution: savedSpace })
+    } else {
+      setModelParams({ overrides: savedSpace })
+    }
     message.success(`已套用方案：${plan.name}`)
     // Fire-and-forget usage bump
     trainingPlansApi.markUsed(planId).catch(() => {})
@@ -316,6 +329,9 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
         selected_models: values.selected_models,
         search_space,
         budget_config,
+        eval_metrics: appliedPlanPayload?.eval_metrics || undefined,
+        model_family: appliedPlanPayload?.model_family,
+        dl_config: appliedPlanPayload?.dl_config || undefined,
       })
       message.success('实验批次已提交，开始训练')
       onSubmitted?.()

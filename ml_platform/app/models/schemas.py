@@ -95,6 +95,7 @@ class TrainingTaskResponse(BaseModel):
     model_type: str
     hyperparameters: dict[str, Any] | None = None
     target_column: str
+    cv_folds: int = 5
     status: str
     progress: float
     result_metrics: dict[str, Any] | None = None
@@ -474,4 +475,3 @@ class DLPredictionResponse(BaseModel):
     rows:          int
     predictions:   list[Any]
     probabilities: list[dict[str, float]] | None = None
-

@@ -48,6 +48,7 @@ async def plan(db):
         "model_family": "ml",
         "selected_models": ["random_forest", "xgboost"],
         "budget_config": {"max_trials": 10},
+        "eval_metrics": ["accuracy", "precision"],
     })
 
 
@@ -187,6 +188,7 @@ async def test_plan_version_bumps_only_on_substantive_edits(db, plan):
 
 async def test_dispatch_falls_back_to_snapshot(db, dataset, plan, session_factory):
     from app.services import tuning_service
+    from app.models.database import TrainingTask
 
     task_payload = await svc.create_modeling_task(
         db,
@@ -222,3 +224,7 @@ async def test_dispatch_falls_back_to_snapshot(db, dataset, plan, session_factor
     # Snapshot-driven expansion yields 2 trials (one per selected model)
     assert captured["out"]["strategy_type"] == "baseline"
     assert captured["out"]["trials_planned"] == 2
+    rows = await db.execute(select(TrainingTask).where(TrainingTask.dataset_id == dataset.id))
+    assert {tuple(t.eval_metrics) for t in rows.scalars().all()} == {
+        ("accuracy", "precision")
+    }

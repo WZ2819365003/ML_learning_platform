@@ -79,17 +79,34 @@ def _read_dataframe(path: Path, ext: str, nrows: int | None = None) -> pd.DataFr
 
 
 def _build_columns_info(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
-    """Build per-column metadata: dtype, missing count, and missing rate."""
+    """Build per-column metadata used by preview and task target selection."""
     info: dict[str, dict[str, Any]] = {}
     total_rows = len(df)
     for col in df.columns:
         missing = int(df[col].isna().sum())
+        unique_count = int(df[col].nunique(dropna=True))
+        value_counts = df[col].value_counts(dropna=True)
         info[str(col)] = {
             "dtype": str(df[col].dtype),
             "missing_count": missing,
             "missing_rate": round(missing / total_rows, 4) if total_rows > 0 else 0.0,
+            "unique_count": unique_count,
+            "unique_rate": round(unique_count / total_rows, 4) if total_rows > 0 else 0.0,
+            "min_class_count": int(value_counts.min()) if unique_count > 0 else 0,
         }
     return info
+
+
+def _merge_columns_info_with_sample(
+    stored_info: dict[str, Any] | None,
+    sample_info: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Return stored metadata with missing preview-only stats filled from a sample."""
+    merged: dict[str, dict[str, Any]] = {}
+    for col, sample_meta in sample_info.items():
+        stored_meta = stored_info.get(col, {}) if isinstance(stored_info, dict) else {}
+        merged[col] = {**sample_meta, **stored_meta}
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +206,8 @@ async def get_dataset_preview(
 
     df = _read_dataframe(file_path, ext, nrows=rows)
 
+    sample_columns_info = _build_columns_info(df)
+
     # -- statistics --
     statistics: dict[str, dict[str, Any]] = {}
     for col in df.columns:
@@ -213,7 +232,7 @@ async def get_dataset_preview(
         "file_size": dataset.file_size,
         "row_count": dataset.row_count,
         "column_count": dataset.column_count,
-        "columns_info": dataset.columns_info,
+        "columns_info": _merge_columns_info_with_sample(dataset.columns_info, sample_columns_info),
         "created_at": dataset.created_at.isoformat() if dataset.created_at else None,
         "rows": df.where(df.notna(), None).to_dict(orient="records"),
         "statistics": statistics,

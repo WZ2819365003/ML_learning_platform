@@ -127,11 +127,18 @@ export default function ModelingTasks() {
     if (!columnInfo) return []
     const entries = Object.entries(columnInfo)
     const isNumeric = (dt) => /int|float|double|number/i.test(String(dt))
+    const toFiniteNumber = (value) => {
+      const n = Number(value)
+      return Number.isFinite(n) ? n : null
+    }
     const isIdLikeClassificationTarget = (meta) => {
-      const uniqueRate = Number(meta.unique_rate ?? 0)
-      const minClassCount = Number(meta.min_class_count ?? 0)
+      const uniqueRate = toFiniteNumber(meta.unique_rate)
+      const uniqueCount = toFiniteNumber(meta.unique_count)
+      const singleClass = uniqueCount != null && uniqueCount <= 1
+      const highCardinality = uniqueRate != null && uniqueCount != null
+        && uniqueRate > 0.9 && uniqueCount > 20
       return taskTypeWatch === 'classification'
-        && (uniqueRate > 0.5 || minClassCount < 2)
+        && (singleClass || highCardinality)
     }
     const filtered = taskTypeWatch === 'regression'
       ? entries.filter(([, m]) => isNumeric(m.dtype))

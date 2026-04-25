@@ -65,6 +65,7 @@ class CreateExperimentBatchRequest(BaseModel):
     selected_models: list[str] = Field(..., min_length=1)
     search_space: dict | None = None
     budget_config: dict | None = None
+    eval_metrics: list[str] | None = None
     description: str | None = None
     model_family: str | None = Field(
         default=None, description="ml | dl | mixed — inferred from selected_models if omitted"
@@ -80,6 +81,7 @@ class ExperimentStrategyRequest(BaseModel):
     selected_models: list[str] = Field(..., min_length=1)
     search_space: dict | None = None
     budget_config: dict | None = None
+    eval_metrics: list[str] | None = None
     name: str | None = None
     description: str | None = None
 
@@ -272,12 +274,6 @@ async def create_experiment_batch(
             status_code=422,
             detail="strategy_type must be baseline|grid_search|bayesian_search",
         )
-    if strategy in ("grid_search", "bayesian_search") and not body.search_space:
-        raise HTTPException(
-            status_code=422,
-            detail=f"{strategy} requires a search_space",
-        )
-
     try:
         return await tuning_service.dispatch_experiment_batch(
             db,
@@ -287,6 +283,7 @@ async def create_experiment_batch(
             selected_models=body.selected_models,
             search_space=body.search_space or {},
             budget_config=body.budget_config or {},
+            eval_metrics=body.eval_metrics,
             description=body.description,
             model_family=body.model_family,
             dl_config=body.dl_config,

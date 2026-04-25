@@ -150,6 +150,8 @@ class LightGBMRegressorTrainer(RegressionMixin, BaseTrainer):
             learning_rate=hyperparameters.get("learning_rate", 0.1),
             num_leaves=hyperparameters.get("num_leaves", 31),
             max_depth=hyperparameters.get("max_depth", -1),
+            min_child_samples=hyperparameters.get("min_child_samples", 20),
+            colsample_bytree=hyperparameters.get("colsample_bytree", 1.0),
             random_state=hyperparameters.get("random_state", 42),
             verbose=-1,
         )
@@ -238,6 +240,8 @@ class MLPRegressorTrainer(RegressionMixin, BaseTrainer):
             learning_rate=hyperparameters.get("learning_rate", "adaptive"),
             learning_rate_init=hyperparameters.get("learning_rate_init", 0.001),
             max_iter=hyperparameters.get("max_iter", 500),
+            alpha=hyperparameters.get("alpha", 0.0001),
+            early_stopping=hyperparameters.get("early_stopping", False),
             random_state=hyperparameters.get("random_state", 42),
         )
 
