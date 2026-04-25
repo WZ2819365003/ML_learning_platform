@@ -22,12 +22,15 @@ import {
   ArrowLeftOutlined,
   BarChartOutlined,
   BulbOutlined,
+  DotChartOutlined,
   EyeOutlined,
+  FundOutlined,
   HeatMapOutlined,
   LineChartOutlined,
   ReloadOutlined,
   RiseOutlined,
   SlidersOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import * as echarts from 'echarts';
 import { modelApi, vizApi } from '../services/api';
@@ -63,6 +66,105 @@ function inferTaskKind(modelType, metrics = {}) {
 
 function isPercentMetric(key) {
   return /(accuracy|acc|precision|recall|auc|f1|error)$/i.test(key);
+}
+
+// ─── Regression-error helpers ────────────────────────────────────────────────
+//
+// Acklam's rational approximation of the inverse standard-normal CDF (Φ⁻¹).
+// Accurate to ~1e-9 in the bulk; we only need it for Q-Q plot quantiles so
+// that's plenty.  https://web.archive.org/web/20150910044804/http://home.online.no/~pjacklam/notes/invnorm/
+function normalInv(p) {
+  if (p <= 0 || p >= 1) return p === 0 ? -Infinity : p === 1 ? Infinity : NaN;
+  const a = [-3.969683028665376e+01,  2.209460984245205e+02,
+             -2.759285104469687e+02,  1.383577518672690e+02,
+             -3.066479806614716e+01,  2.506628277459239e+00];
+  const b = [-5.447609879822406e+01,  1.615858368580409e+02,
+             -1.556989798598866e+02,  6.680131188771972e+01,
+             -1.328068155288572e+01];
+  const c = [-7.784894002430293e-03, -3.223964580411365e-01,
+             -2.400758277161838e+00, -2.549732539343734e+00,
+              4.374664141464968e+00,  2.938163982698783e+00];
+  const d = [ 7.784695709041462e-03,  3.224671290700398e-01,
+              2.445134137142996e+00,  3.754408661907416e+00];
+  const pLow = 0.02425;
+  const pHigh = 1 - pLow;
+  let q, r;
+  if (p < pLow) {
+    q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+           ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  if (p <= pHigh) {
+    q = p - 0.5;
+    r = q * q;
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+           (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  }
+  q = Math.sqrt(-2 * Math.log(1 - p));
+  return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+          ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+}
+
+function bin1d(values, binCount = 24) {
+  const finite = values.filter(v => Number.isFinite(v));
+  if (finite.length === 0) return [];
+  const min = Math.min(...finite);
+  const max = Math.max(...finite);
+  if (min === max) return [{ x: min, count: finite.length, label: min.toFixed(3) }];
+  const w = (max - min) / binCount;
+  const bins = Array.from({ length: binCount }, (_, i) => ({
+    x: min + (i + 0.5) * w,
+    label: `${(min + i * w).toFixed(2)} ~ ${(min + (i + 1) * w).toFixed(2)}`,
+    count: 0,
+  }));
+  finite.forEach(v => {
+    let idx = Math.floor((v - min) / w);
+    if (idx >= binCount) idx = binCount - 1;
+    if (idx < 0) idx = 0;
+    bins[idx].count++;
+  });
+  return bins;
+}
+
+function regressionDiagnostics(actual = [], predicted = []) {
+  const n = Math.min(actual.length, predicted.length);
+  if (n === 0) return null;
+  const residuals = [];
+  let sumAbs = 0, sumSq = 0, sumActual = 0, sumPred = 0;
+  let mapeSum = 0, mapeN = 0;
+  for (let i = 0; i < n; i++) {
+    const a = Number(actual[i]);
+    const p = Number(predicted[i]);
+    if (!Number.isFinite(a) || !Number.isFinite(p)) continue;
+    const r = p - a;
+    residuals.push(r);
+    sumAbs += Math.abs(r);
+    sumSq  += r * r;
+    sumActual += a;
+    sumPred += p;
+    if (Math.abs(a) > 1e-9) {
+      mapeSum += Math.abs(r / a);
+      mapeN++;
+    }
+  }
+  const m = residuals.length;
+  if (m === 0) return null;
+  const mean = sumActual / m;
+  let ssTot = 0;
+  for (let i = 0; i < m; i++) {
+    const a = Number(actual[i]);
+    if (Number.isFinite(a)) ssTot += (a - mean) ** 2;
+  }
+  const r2 = ssTot > 0 ? 1 - (sumSq / ssTot) : NaN;
+  const rmse = Math.sqrt(sumSq / m);
+  const mae = sumAbs / m;
+  const mape = mapeN > 0 ? (mapeSum / mapeN) * 100 : NaN;
+  // residual std (with mean=0 assumption, but compute around actual mean to
+  // keep it honest if the model has a systematic bias).
+  const residualMean = residuals.reduce((s, v) => s + v, 0) / m;
+  const residualVar = residuals.reduce((s, v) => s + (v - residualMean) ** 2, 0) / m;
+  const residualStd = Math.sqrt(residualVar);
+  return { residuals, rmse, mae, r2, mape, residualMean, residualStd, n: m };
 }
 
 // ─── URL helper ──────────────────────────────────────────────────────────────
@@ -230,6 +332,8 @@ function ResultDetailView({ taskId, navigate }) {
   const learningCurveRef  = useRef(null);
   const residualPlotRef = useRef(null);
   const predictedVsActualRef = useRef(null);
+  const residualHistogramRef = useRef(null);
+  const qqPlotRef = useRef(null);
 
   useEffect(() => { void loadAll(); }, [taskId]);
 
@@ -450,21 +554,67 @@ function ResultDetailView({ taskId, navigate }) {
         })),
     } : null;
 
-    const predictedVsActual = vizState.predictedVsActual ? {
-      tooltip: { trigger: 'item', formatter: p => `真实值: ${p.value[0]}<br/>预测值: ${p.value[1]}` },
-      grid: { top: 28, left: 70, right: 24, bottom: 56 },
-      xAxis: { type: 'value', name: '真实值' },
-      yAxis: { type: 'value', name: '预测值' },
-      series: [
-        {
-          name: '样本',
-          type: 'scatter',
-          symbolSize: 6,
-          data: vizState.predictedVsActual.actual.map((v, i) => [v, vizState.predictedVsActual.predicted[i]]),
-          itemStyle: { color: '#2563eb', opacity: 0.7 },
-        },
-      ],
-    } : null;
+    const predictedVsActual = vizState.predictedVsActual ? (() => {
+      const acts = vizState.predictedVsActual.actual ?? [];
+      const preds = vizState.predictedVsActual.predicted ?? [];
+      const flat = [...acts, ...preds].filter(Number.isFinite);
+      const lo = flat.length ? Math.min(...flat) : 0;
+      const hi = flat.length ? Math.max(...flat) : 1;
+      const pad = (hi - lo) * 0.04 || 1;
+      const axisMin = lo - pad;
+      const axisMax = hi + pad;
+      // ±1σ error band — gives a quick visual feel for how wide the
+      // residual cloud is at any given true value. Computed from
+      // residuals so it's actually meaningful (not a guess).
+      const diag = regressionDiagnostics(acts, preds);
+      const sigma = diag?.residualStd ?? 0;
+      return {
+        tooltip: { trigger: 'item', formatter: p => {
+          if (p.seriesType === 'line') return p.seriesName;
+          return `真实值: ${p.value[0]?.toFixed?.(4) ?? p.value[0]}<br/>预测值: ${p.value[1]?.toFixed?.(4) ?? p.value[1]}`;
+        } },
+        legend: { bottom: 0, data: ['样本', 'y = x （理想）', '±1σ 误差带'] },
+        grid: { top: 28, left: 70, right: 24, bottom: 56 },
+        xAxis: { type: 'value', name: '真实值', min: axisMin, max: axisMax },
+        yAxis: { type: 'value', name: '预测值', min: axisMin, max: axisMax },
+        series: [
+          {
+            name: '样本',
+            type: 'scatter',
+            symbolSize: 6,
+            data: acts.map((v, i) => [v, preds[i]]),
+            itemStyle: { color: '#2563eb', opacity: 0.6 },
+            z: 3,
+          },
+          {
+            name: 'y = x （理想）',
+            type: 'line',
+            data: [[axisMin, axisMin], [axisMax, axisMax]],
+            symbol: 'none',
+            lineStyle: { color: '#10b981', width: 2 },
+            z: 2,
+          },
+          ...(sigma > 0 ? [
+            {
+              name: '±1σ 误差带',
+              type: 'line',
+              data: [[axisMin, axisMin + sigma], [axisMax, axisMax + sigma]],
+              symbol: 'none',
+              lineStyle: { color: '#f59e0b', width: 1, type: 'dashed', opacity: 0.7 },
+              z: 1,
+            },
+            {
+              name: '±1σ 误差带',
+              type: 'line',
+              data: [[axisMin, axisMin - sigma], [axisMax, axisMax - sigma]],
+              symbol: 'none',
+              lineStyle: { color: '#f59e0b', width: 1, type: 'dashed', opacity: 0.7 },
+              z: 1,
+            },
+          ] : []),
+        ],
+      };
+    })() : null;
 
     const residualPlot = vizState.residualPlot ? {
       tooltip: { trigger: 'item', formatter: p => `预测值: ${p.value[0]}<br/>残差: ${p.value[1]}` },
@@ -485,7 +635,82 @@ function ResultDetailView({ taskId, navigate }) {
       }],
     } : null;
 
-    return { confusionMatrix, rocCurve, featureImportance, learningCurve, predictedVsActual, residualPlot };
+    // ── Regression-only error diagnostics (residual histogram + Q-Q) ──
+    // Both derive from the residual array, which we recompute here from the
+    // (actual, predicted) pair so they stay in sync with predictedVsActual.
+    let residualHistogram = null;
+    let qqPlot = null;
+    if (vizState.taskKind === 'regression' && vizState.predictedVsActual) {
+      const diag = regressionDiagnostics(
+        vizState.predictedVsActual.actual ?? [],
+        vizState.predictedVsActual.predicted ?? [],
+      );
+      if (diag?.residuals?.length) {
+        // Histogram
+        const bins = bin1d(diag.residuals, 24);
+        residualHistogram = {
+          tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+            formatter: ps => {
+              const b = bins[ps[0].dataIndex];
+              return `区间 <code>${b.label}</code><br/>样本数: <b>${b.count}</b>`;
+            },
+          },
+          grid: { top: 36, left: 56, right: 24, bottom: 50 },
+          xAxis: { type: 'category', data: bins.map(b => b.x.toFixed(2)),
+            name: '残差', axisLabel: { rotate: 30, fontSize: 10 } },
+          yAxis: { type: 'value', name: '样本数' },
+          series: [{
+            name: '残差分布',
+            type: 'bar',
+            data: bins.map(b => b.count),
+            itemStyle: {
+              color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+                colorStops: [{ offset: 0, color: '#7c3aed' }, { offset: 1, color: '#a78bfa' }] },
+            },
+            markLine: {
+              symbol: 'none',
+              lineStyle: { color: '#10b981', type: 'dashed' },
+              label: { show: false },
+              data: [{ xAxis: bins.findIndex(b => b.x >= 0) }],
+            },
+          }],
+        };
+        // Q-Q plot — sample quantiles vs theoretical normal quantiles
+        // Standardise residuals so the reference line is just y = x.
+        const std = diag.residualStd > 0 ? diag.residualStd : 1;
+        const standardized = diag.residuals
+          .map(r => (r - diag.residualMean) / std)
+          .sort((a, b) => a - b);
+        const qq = standardized.map((s, i) => {
+          const p = (i + 0.5) / standardized.length;
+          return [normalInv(p), s];
+        });
+        const qqXs = qq.map(p => p[0]).filter(Number.isFinite);
+        const qqMin = qqXs.length ? Math.min(...qqXs) : -3;
+        const qqMax = qqXs.length ? Math.max(...qqXs) : 3;
+        qqPlot = {
+          tooltip: { trigger: 'item', formatter: p => {
+            if (p.seriesType === 'line') return p.seriesName;
+            return `理论分位: ${p.value[0]?.toFixed(3)}<br/>样本分位: ${p.value[1]?.toFixed(3)}`;
+          } },
+          legend: { bottom: 0 },
+          grid: { top: 28, left: 56, right: 24, bottom: 56 },
+          xAxis: { type: 'value', name: '理论正态分位', min: qqMin - 0.3, max: qqMax + 0.3 },
+          yAxis: { type: 'value', name: '残差分位（标准化）' },
+          series: [
+            { name: '样本', type: 'scatter', data: qq, symbolSize: 5,
+              itemStyle: { color: '#0ea5e9', opacity: 0.75 } },
+            { name: '正态参考线 y = x', type: 'line',
+              data: [[qqMin, qqMin], [qqMax, qqMax]],
+              symbol: 'none',
+              lineStyle: { color: '#10b981', width: 2 } },
+          ],
+        };
+      }
+    }
+
+    return { confusionMatrix, rocCurve, featureImportance, learningCurve,
+             predictedVsActual, residualPlot, residualHistogram, qqPlot };
   }, [vizState]);
 
   useChart(confusionMatrixRef, chartOptions.confusionMatrix);
@@ -494,6 +719,8 @@ function ResultDetailView({ taskId, navigate }) {
   useChart(learningCurveRef, chartOptions.learningCurve);
   useChart(predictedVsActualRef, chartOptions.predictedVsActual);
   useChart(residualPlotRef, chartOptions.residualPlot);
+  useChart(residualHistogramRef, chartOptions.residualHistogram);
+  useChart(qqPlotRef, chartOptions.qqPlot);
 
   const resultMetrics = detail?.result_metrics ?? selectedModel?.result_metrics ?? {};
   const taskKind = vizState.taskKind ?? inferTaskKind(detail?.model_type ?? selectedModel?.model_type, resultMetrics);
@@ -508,79 +735,92 @@ function ResultDetailView({ taskId, navigate }) {
     .filter(([, v]) => typeof v === 'number' && !Number.isNaN(v));
 
   // ─── Tab content builders ─────────────────────────────────────────────────
+  // Two completely independent tab rosters so the user never sees a card
+  // that doesn't fit their task type (e.g. ROC on a regression task).
 
-  const performanceTab = (
+  // Shared CSS-in-JS for tab card visual rhythm — consistent margins,
+  // shadow, and a bordered header so the page no longer reads as a wall
+  // of look-alike rectangles.
+  const cardProps = (accent = '#2563eb') => ({
+    variant: 'borderless',
+    styles: {
+      header: {
+        borderBottom: `1px solid ${accent}1f`,
+        background: `linear-gradient(90deg, ${accent}08 0%, transparent 100%)`,
+        fontSize: 14,
+      },
+      body: { padding: 16 },
+    },
+    style: { boxShadow: '0 1px 3px rgba(15, 23, 42, 0.05)', borderRadius: 12 },
+  });
+
+  // ── CLASSIFICATION TABS ───────────────────────────────────────────────
+  const classificationPerformanceTab = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Row gutter={[16, 16]}>
-        {taskKind === 'regression' ? (
-          <>
-            <Col xs={24} xl={12}>
-              <Card title={<Space><BarChartOutlined />预测值 vs 真实值</Space>} variant="borderless">
-                <ChartSlot errorKey="predictedVsActual" hasData={!!vizState.predictedVsActual} emptyText="暂无预测-真实值数据">
-                  <div ref={predictedVsActualRef} style={{ width: '100%', height: 360 }} />
-                </ChartSlot>
-              </Card>
-            </Col>
-            <Col xs={24} xl={12}>
-              <Card title={<Space><LineChartOutlined />残差散点</Space>} variant="borderless">
-                <ChartSlot errorKey="residualPlot" hasData={!!vizState.residualPlot} emptyText="暂无残差数据">
-                  <div ref={residualPlotRef} style={{ width: '100%', height: 360 }} />
-                </ChartSlot>
-              </Card>
-            </Col>
-          </>
-        ) : (
-          <>
-            <Col xs={24} xl={12}>
-              <Card title={<Space><HeatMapOutlined />混淆矩阵</Space>} variant="borderless">
-                <ChartSlot errorKey="confusionMatrix" hasData={!!vizState.confusionMatrix} emptyText="暂无混淆矩阵数据">
-                  <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
-                </ChartSlot>
-              </Card>
-            </Col>
-            <Col xs={24} xl={12}>
-              <Card title={<Space><LineChartOutlined />ROC 曲线</Space>} variant="borderless">
-                <ChartSlot errorKey="rocCurve" hasData={!!vizState.rocCurve} emptyText="暂无 ROC 曲线数据">
-                  <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
-                </ChartSlot>
-              </Card>
-            </Col>
-            <Col xs={24} xl={12}>
-              <Card title={<Space><LineChartOutlined />Precision-Recall 曲线</Space>} variant="borderless">
-                <ChartSlot errorKey="prCurve" hasData={!!vizState.prCurve} emptyText="暂无 PR 曲线数据">
-                  <PRCurveChart payload={vizState.prCurve} height={340} />
-                </ChartSlot>
-              </Card>
-            </Col>
-            <Col xs={24} xl={12}>
-              <Card title={<Space><LineChartOutlined />校准曲线</Space>} variant="borderless">
-                <ChartSlot errorKey="calibration" hasData={!!vizState.calibration} emptyText="暂无校准曲线数据（需要二分类 + predict_proba）">
-                  <CalibrationCurveChart payload={vizState.calibration} height={340} />
-                </ChartSlot>
-              </Card>
-            </Col>
-            <Col xs={24}>
-              <Card title={<Space><BarChartOutlined />逐类指标</Space>} variant="borderless">
-                <ChartSlot errorKey="perClass" hasData={!!vizState.perClass} emptyText="暂无逐类指标">
-                  <PerClassMetricsTable payload={vizState.perClass} />
-                </ChartSlot>
-              </Card>
-            </Col>
-          </>
-        )}
+        <Col xs={24} xl={12}>
+          <Card title={<Space><HeatMapOutlined style={{ color: '#2563eb' }} />混淆矩阵</Space>} {...cardProps('#2563eb')}>
+            <ChartSlot errorKey="confusionMatrix" hasData={!!vizState.confusionMatrix} emptyText="暂无混淆矩阵数据">
+              <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
+            </ChartSlot>
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card title={<Space><LineChartOutlined style={{ color: '#7c3aed' }} />ROC 曲线</Space>} {...cardProps('#7c3aed')}>
+            <ChartSlot errorKey="rocCurve" hasData={!!vizState.rocCurve} emptyText="暂无 ROC 曲线数据">
+              <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
+            </ChartSlot>
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card title={<Space><LineChartOutlined style={{ color: '#0ea5e9' }} />Precision-Recall 曲线</Space>} {...cardProps('#0ea5e9')}>
+            <ChartSlot errorKey="prCurve" hasData={!!vizState.prCurve} emptyText="暂无 PR 曲线数据">
+              <PRCurveChart payload={vizState.prCurve} height={340} />
+            </ChartSlot>
+          </Card>
+        </Col>
+        <Col xs={24}>
+          <Card title={<Space><BarChartOutlined style={{ color: '#10b981' }} />逐类指标</Space>} {...cardProps('#10b981')}>
+            <ChartSlot errorKey="perClass" hasData={!!vizState.perClass} emptyText="暂无逐类指标">
+              <PerClassMetricsTable payload={vizState.perClass} />
+            </ChartSlot>
+          </Card>
+        </Col>
       </Row>
+    </Space>
+  );
+
+  // ── REGRESSION TABS ───────────────────────────────────────────────────
+  const regressionComparisonTab = (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card
+        title={<Space><DotChartOutlined style={{ color: '#2563eb' }} />预测 vs 实际（含 y = x 理想线 + ±1σ 误差带）</Space>}
+        {...cardProps('#2563eb')}
+      >
+        <ChartSlot
+          errorKey="predictedVsActual"
+          hasData={!!vizState.predictedVsActual}
+          emptyText="暂无预测-真实值数据（需要回归任务的测试集预测）"
+        >
+          <div ref={predictedVsActualRef} style={{ width: '100%', height: 420 }} />
+        </ChartSlot>
+        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+          点应密集地落在绿色 <code>y = x</code> 对角线两侧；超出黄色虚线 ±1σ 的样本属于较大误差。
+        </Paragraph>
+      </Card>
     </Space>
   );
 
   const trainingTab = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card title={<Space><RiseOutlined />交叉验证曲线</Space>} variant="borderless">
-        <ChartSlot errorKey="learningCurve" hasData={!!vizState.learningCurve} emptyText="暂无 CV 数据（仅 K-Fold 训练任务可用）">
+      <Card title={<Space><RiseOutlined style={{ color: '#0ea5e9' }} />交叉验证曲线</Space>} {...cardProps('#0ea5e9')}>
+        <ChartSlot errorKey="learningCurve" hasData={!!vizState.learningCurve}
+          emptyText="暂无 CV 数据（仅 K-Fold 训练任务可用）">
           <div ref={learningCurveRef} style={{ width: '100%', height: 360 }} />
         </ChartSlot>
       </Card>
       {resultMetrics?.history && (
-        <Card title={<Space><RiseOutlined />Epoch 训练历史</Space>} variant="borderless">
+        <Card title={<Space><RiseOutlined style={{ color: '#7c3aed' }} />Epoch 训练历史</Space>} {...cardProps('#7c3aed')}>
           <TrainingHistoryChart
             history={resultMetrics.history}
             taskType={taskKind}
@@ -593,35 +833,175 @@ function ResultDetailView({ taskId, navigate }) {
 
   const explanationTab = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card title={<Space><BulbOutlined />SHAP / 特征解释</Space>} variant="borderless">
+      <Card title={<Space><BulbOutlined style={{ color: '#f59e0b' }} />SHAP / 特征解释</Space>} {...cardProps('#f59e0b')}>
         <ChartSlot errorKey="shap" hasData={!!vizState.shap} emptyText="暂无 SHAP 解释数据">
           <ShapView payload={vizState.shap} />
         </ChartSlot>
       </Card>
-      <Card title={<Space><BarChartOutlined />模型原生特征重要性 (Top 10)</Space>} variant="borderless">
-        <ChartSlot errorKey="featureImportance" hasData={!!vizState.featureImportance} emptyText="该模型不支持 feature_importances_（仅树模型可用）">
+      <Card title={<Space><BarChartOutlined style={{ color: '#10b981' }} />模型原生特征重要性 (Top 10)</Space>} {...cardProps('#10b981')}>
+        <ChartSlot errorKey="featureImportance" hasData={!!vizState.featureImportance}
+          emptyText="该模型不支持 feature_importances_（仅树模型可用）">
           <div ref={featureImportanceRef} style={{ width: '100%', height: 360 }} />
         </ChartSlot>
       </Card>
     </Space>
   );
 
-  const thresholdTab = (
+  const classificationThresholdTab = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {taskKind !== 'regression' && (
-        <Card title={<Space><SlidersOutlined />阈值敏感度分析</Space>} variant="borderless">
-          <ChartSlot errorKey="threshold" hasData={!!vizState.threshold} emptyText="暂无阈值分析（需要二分类 + predict_proba）">
-            <ThresholdTuningTable payload={vizState.threshold} />
-          </ChartSlot>
-        </Card>
-      )}
-      <Card title={<Space><BarChartOutlined />预测分布</Space>} variant="borderless">
-        <ChartSlot errorKey="distribution" hasData={!!vizState.distribution} emptyText="暂无预测分布数据">
+      <Card title={<Space><SlidersOutlined style={{ color: '#7c3aed' }} />阈值敏感度分析</Space>} {...cardProps('#7c3aed')}>
+        <ChartSlot errorKey="threshold" hasData={!!vizState.threshold}
+          emptyText="暂无阈值分析（需要二分类 + predict_proba）">
+          <ThresholdTuningTable payload={vizState.threshold} />
+        </ChartSlot>
+      </Card>
+      <Card title={<Space><LineChartOutlined style={{ color: '#0ea5e9' }} />校准曲线</Space>} {...cardProps('#0ea5e9')}>
+        <ChartSlot errorKey="calibration" hasData={!!vizState.calibration}
+          emptyText="暂无校准曲线数据（需要二分类 + predict_proba）">
+          <CalibrationCurveChart payload={vizState.calibration} height={340} />
+        </ChartSlot>
+      </Card>
+      <Card title={<Space><BarChartOutlined style={{ color: '#10b981' }} />预测分布</Space>} {...cardProps('#10b981')}>
+        <ChartSlot errorKey="distribution" hasData={!!vizState.distribution}
+          emptyText="暂无预测分布数据">
           <PredictionDistributionChart payload={vizState.distribution} height={340} />
         </ChartSlot>
       </Card>
     </Space>
   );
+
+  // ── REGRESSION 误差诊断 ─────────────────────────────────────────────────
+  // Built off the (actual, predicted) pair: residual histogram lets you spot
+  // skew/bias, residual-vs-predicted reveals heteroscedasticity, Q-Q plot
+  // checks normality assumption; the metric strip pins the headline numbers.
+  const regressionDiag = useMemo(() => regressionDiagnostics(
+    vizState.predictedVsActual?.actual ?? [],
+    vizState.predictedVsActual?.predicted ?? [],
+  ), [vizState.predictedVsActual]);
+
+  const regressionDiagnosisTab = (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {/* Headline metric strip — recomputed locally so it stays in sync
+          with whatever the model actually predicted on the test set. */}
+      {regressionDiag && (
+        <Row gutter={[12, 12]}>
+          <Col xs={12} md={6}>
+            <Card {...cardProps('#10b981')}>
+              <Statistic title="R²" value={regressionDiag.r2}
+                valueStyle={{ color: regressionDiag.r2 >= 0.8 ? '#10b981' : regressionDiag.r2 >= 0.5 ? '#f59e0b' : '#ef4444' }}
+                precision={4} />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card {...cardProps('#7c3aed')}>
+              <Statistic title="RMSE" value={regressionDiag.rmse} precision={4}
+                valueStyle={{ color: '#7c3aed' }} />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card {...cardProps('#2563eb')}>
+              <Statistic title="MAE" value={regressionDiag.mae} precision={4}
+                valueStyle={{ color: '#2563eb' }} />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card {...cardProps('#f59e0b')}>
+              <Statistic title="MAPE (%)" value={regressionDiag.mape}
+                precision={2} suffix="%" valueStyle={{ color: '#f59e0b' }}
+                formatter={v => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : '—'} />
+            </Card>
+          </Col>
+        </Row>
+      )}
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={12}>
+          <Card title={<Space><BarChartOutlined style={{ color: '#7c3aed' }} />残差直方图</Space>} {...cardProps('#7c3aed')}>
+            <ChartSlot errorKey="predictedVsActual" hasData={!!chartOptions.residualHistogram}
+              emptyText="暂无残差数据">
+              <div ref={residualHistogramRef} style={{ width: '100%', height: 320 }} />
+            </ChartSlot>
+            <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+              理想形态：以 0 为中心、近似正态钟形。明显偏斜或多峰提示模型存在系统性偏差。
+            </Paragraph>
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card title={<Space><LineChartOutlined style={{ color: '#0ea5e9' }} />残差 vs 预测值（异方差检查）</Space>} {...cardProps('#0ea5e9')}>
+            <ChartSlot errorKey="residualPlot" hasData={!!vizState.residualPlot} emptyText="暂无残差数据">
+              <div ref={residualPlotRef} style={{ width: '100%', height: 320 }} />
+            </ChartSlot>
+            <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+              点应在 y = 0 横线上下随机分布。出现喇叭口或曲线模式说明残差方差随预测值变化（异方差）。
+            </Paragraph>
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card title={<Space><DotChartOutlined style={{ color: '#10b981' }} />Q-Q 正态性检验</Space>} {...cardProps('#10b981')}>
+            <ChartSlot errorKey="predictedVsActual" hasData={!!chartOptions.qqPlot}
+              emptyText="暂无残差数据">
+              <div ref={qqPlotRef} style={{ width: '100%', height: 320 }} />
+            </ChartSlot>
+            <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+              点越贴近绿色对角线，残差越接近正态分布。两端翘起表示重尾。
+            </Paragraph>
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card title={<Space><FundOutlined style={{ color: '#f59e0b' }} />预测分布</Space>} {...cardProps('#f59e0b')}>
+            <ChartSlot errorKey="distribution" hasData={!!vizState.distribution} emptyText="暂无预测分布数据">
+              <PredictionDistributionChart payload={vizState.distribution} height={320} />
+            </ChartSlot>
+          </Card>
+        </Col>
+      </Row>
+    </Space>
+  );
+
+  // ── Final tab roster, by task type ─────────────────────────────────────
+  const tabItems = taskKind === 'regression' ? [
+    {
+      key: 'comparison',
+      label: <Space><DotChartOutlined />预测对比</Space>,
+      children: regressionComparisonTab,
+    },
+    {
+      key: 'training',
+      label: <Space><RiseOutlined />训练过程</Space>,
+      children: trainingTab,
+    },
+    {
+      key: 'explain',
+      label: <Space><BulbOutlined />解释性</Space>,
+      children: explanationTab,
+    },
+    {
+      key: 'diagnosis',
+      label: <Space><WarningOutlined />误差诊断</Space>,
+      children: regressionDiagnosisTab,
+    },
+  ] : [
+    {
+      key: 'performance',
+      label: <Space><HeatMapOutlined />性能</Space>,
+      children: classificationPerformanceTab,
+    },
+    {
+      key: 'training',
+      label: <Space><RiseOutlined />训练过程</Space>,
+      children: trainingTab,
+    },
+    {
+      key: 'explain',
+      label: <Space><BulbOutlined />解释性</Space>,
+      children: explanationTab,
+    },
+    {
+      key: 'threshold',
+      label: <Space><SlidersOutlined />阈值与分布</Space>,
+      children: classificationThresholdTab,
+    },
+  ];
 
   return (
     <div>
@@ -689,29 +1069,13 @@ function ResultDetailView({ taskId, navigate }) {
 
           <Card styles={{ body: { padding: '0 24px 24px' } }}>
             <Tabs
-              defaultActiveKey="performance"
-              items={[
-                {
-                  key: 'performance',
-                  label: <Space><HeatMapOutlined />性能</Space>,
-                  children: performanceTab,
-                },
-                {
-                  key: 'training',
-                  label: <Space><RiseOutlined />训练过程</Space>,
-                  children: trainingTab,
-                },
-                {
-                  key: 'explain',
-                  label: <Space><BulbOutlined />解释性</Space>,
-                  children: explanationTab,
-                },
-                {
-                  key: 'threshold',
-                  label: <Space><SlidersOutlined />阈值 &amp; 分布</Space>,
-                  children: thresholdTab,
-                },
-              ]}
+              // Re-keying on taskKind forces ant-design Tabs to forget the
+              // previous taskKind's active key (e.g. 'performance' from a
+              // classification view) when switching to a regression layout
+              // whose roster doesn't include that key.
+              key={taskKind}
+              defaultActiveKey={taskKind === 'regression' ? 'comparison' : 'performance'}
+              items={tabItems}
             />
           </Card>
         </>
