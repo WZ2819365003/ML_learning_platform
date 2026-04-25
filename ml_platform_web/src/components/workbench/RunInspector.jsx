@@ -13,6 +13,7 @@ import LogViewer from './LogViewer'
 import ShapView from './ShapView'
 import TrainingViz from './TrainingViz'
 import TrainingHistoryChart from '../viz/TrainingHistoryChart'
+import CrossValidationView from '../viz/CrossValidationView'
 
 const { Text, Paragraph } = Typography
 
@@ -256,6 +257,9 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                     {run?.metrics?.history && (
                       <div>
                         <Text strong style={{ fontSize: 13 }}>Epoch 训练历史</Text>
+                        <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
+                          损失走左轴、指标走右轴
+                        </Text>
                         <div style={{ marginTop: 6 }}>
                           <TrainingHistoryChart
                             history={run.metrics.history}
@@ -265,6 +269,28 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                                 : 'classification'
                             }
                             height={280}
+                            xAxisName="Epoch"
+                          />
+                        </div>
+                        <Divider style={{ margin: '12px 0' }} />
+                      </div>
+                    )}
+                    {/* For ML runs whose metrics.cv_fold_metrics survived as
+                        a learning_curve-shaped payload, use the same shared
+                        CrossValidationView the Results page uses. The shape
+                        check matches `learning_curve.steps[]`. */}
+                    {Array.isArray(run?.metrics?.cv_fold_metrics) && run.metrics.cv_fold_metrics.length > 0 && (
+                      <div>
+                        <Text strong style={{ fontSize: 13 }}>K-Fold 交叉验证</Text>
+                        <div style={{ marginTop: 6 }}>
+                          <CrossValidationView
+                            payload={{ steps: run.metrics.cv_fold_metrics }}
+                            taskKind={
+                              String(ttask?.model_type || '').toLowerCase().includes('regress')
+                                ? 'regression'
+                                : 'classification'
+                            }
+                            height={260}
                           />
                         </div>
                         <Divider style={{ margin: '12px 0' }} />

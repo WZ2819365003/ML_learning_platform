@@ -33,10 +33,11 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import * as echarts from 'echarts';
-import { modelApi, vizApi } from '../services/api';
+import { dlApi, modelApi, vizApi } from '../services/api';
 import { formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
 import ShapView from '../components/viz/ShapView';
 import TrainingHistoryChart from '../components/viz/TrainingHistoryChart';
+import CrossValidationView from '../components/viz/CrossValidationView';
 import PerClassMetricsTable from '../components/viz/PerClassMetricsTable';
 import PRCurveChart from '../components/viz/PRCurveChart';
 import CalibrationCurveChart from '../components/viz/CalibrationCurveChart';
@@ -62,6 +63,20 @@ function inferTaskKind(modelType, metrics = {}) {
   if (mt.includes('regressor') || mt.includes('regression')) return 'regression';
   if (REGRESSION_METRIC_KEYS.some(k => typeof metrics?.[k] === 'number')) return 'regression';
   return 'classification';
+}
+
+// Heuristic: is this task a deep-learning task (epoch-style training) vs
+// classic ML (K-fold CV). DL model ids in our registry start with `dl_`
+// (mlp_dl, lstm_dl, ...); also fall back to detecting `history` in the
+// metrics dict (already reduced to per-epoch arrays by the trainer).
+function isDLTask(modelType, metrics = {}) {
+  const mt = String(modelType || '').toLowerCase();
+  if (mt.endsWith('_dl') || mt.startsWith('dl_') || mt === 'mlp' || mt === 'lstm' || mt === 'tcn') return true;
+  if (metrics?.history && (
+    Array.isArray(metrics.history?.train_loss) ||
+    Array.isArray(metrics.history?.val_loss)
+  )) return true;
+  return false;
 }
 
 function isPercentMetric(key) {
@@ -320,7 +335,11 @@ function ResultDetailView({ taskId, navigate }) {
     // v3.2 professional set
     perClass: null, prCurve: null, calibration: null,
     threshold: null, distribution: null, shap: null,
+    // v3.2.2 — DL epoch history (fetched separately for legacy DL tasks
+    // that don't surface metrics.history directly)
+    dlEpochs: null,
     taskKind: 'classification',
+    isDL: false,
   });
   const [vizErrors, setVizErrors] = useState({});
   const [loading, setLoading] = useState(true);
@@ -329,7 +348,7 @@ function ResultDetailView({ taskId, navigate }) {
   const confusionMatrixRef = useRef(null);
   const rocCurveRef       = useRef(null);
   const featureImportanceRef = useRef(null);
-  const learningCurveRef  = useRef(null);
+  // learningCurveRef removed in v3.2.2 — CV is rendered by <CrossValidationView/>.
   const residualPlotRef = useRef(null);
   const predictedVsActualRef = useRef(null);
   const residualHistogramRef = useRef(null);
@@ -364,10 +383,9 @@ function ResultDetailView({ taskId, navigate }) {
     }
 
     const metrics = detailPayload?.result_metrics ?? fallbackModel?.result_metrics ?? {};
-    const taskKind = inferTaskKind(
-      detailPayload?.model_type ?? fallbackModel?.model_type,
-      metrics,
-    );
+    const modelType = detailPayload?.model_type ?? fallbackModel?.model_type;
+    const taskKind = inferTaskKind(modelType, metrics);
+    const dlTask = isDLTask(modelType, metrics);
 
     // Build the fetcher list dynamically by task kind so we don't spam the
     // backend with endpoints that will cleanly 400 with task-kind guards.
@@ -377,6 +395,11 @@ function ResultDetailView({ taskId, navigate }) {
       ['distribution', () => vizApi.getDistribution(taskId)],
       ['shap', () => vizApi.getShapSummary(taskId)],
     ];
+    // Only fetch DL epoch table when the heuristic flagged a DL task —
+    // for ML tasks /api/dl/{id}/epochs would 404 without value.
+    if (dlTask) {
+      baseRequests.push(['dlEpochs', () => dlApi.getEpochs(taskId, { page_size: 200 })]);
+    }
     const classificationRequests = [
       ['confusionMatrix', () => vizApi.getConfusionMatrix(taskId)],
       ['rocCurve', () => vizApi.getRocCurve(taskId)],
@@ -422,7 +445,9 @@ function ResultDetailView({ taskId, navigate }) {
       threshold: payloads.threshold ?? null,
       distribution: payloads.distribution ?? null,
       shap: payloads.shap ?? null,
+      dlEpochs: payloads.dlEpochs ?? null,
       taskKind,
+      isDL: dlTask,
     }));
     // Only surface a toast if every single endpoint failed; otherwise the
     // per-chart inline error is enough (no N-popup spam).
@@ -527,32 +552,12 @@ function ResultDetailView({ taskId, navigate }) {
       }],
     } : null;
 
-    const learningCurve = vizState.learningCurve ? {
-      tooltip: { trigger: 'axis' },
-      legend: { bottom: 0 },
-      grid: { top: 24, left: 56, right: 20, bottom: 52 },
-      xAxis: {
-        type: 'category',
-        data: vizState.learningCurve.steps.map(s => `Fold ${s.step}`),
-      },
-      yAxis: {
-        type: 'value',
-        ...(vizState.taskKind === 'classification' ? { min: 0, max: 1 } : {}),
-      },
-      series: [
-        ...(vizState.taskKind === 'regression'
-          ? ['rmse', 'mae', 'mse', 'r2']
-          : ['accuracy', 'f1', 'precision', 'recall', 'roc_auc']),
-        ...Object.keys(vizState.learningCurve.steps[0]?.metrics ?? {}).filter(k => k !== 'fold'),
-      ]
-        .filter((k, idx, arr) => arr.indexOf(k) === idx)
-        .filter(k => vizState.learningCurve.steps.some(s => typeof s.metrics?.[k] === 'number'))
-        .map(k => ({
-          name: metricLabels[k] ?? k,
-          type: 'line', smooth: true,
-          data: vizState.learningCurve.steps.map(s => s.metrics?.[k] ?? null),
-        })),
-    } : null;
+    // NOTE: learningCurve is no longer rendered as an ECharts option here.
+    // The K-Fold CV view is now built by <CrossValidationView/> directly
+    // off the same payload, with mean ± std summary cards + grouped bar
+    // chart + per-fold table. Kept as `null` for shape compatibility with
+    // the chartOptions return below.
+    const learningCurve = null;
 
     const predictedVsActual = vizState.predictedVsActual ? (() => {
       const acts = vizState.predictedVsActual.actual ?? [];
@@ -716,7 +721,7 @@ function ResultDetailView({ taskId, navigate }) {
   useChart(confusionMatrixRef, chartOptions.confusionMatrix);
   useChart(rocCurveRef, chartOptions.rocCurve);
   useChart(featureImportanceRef, chartOptions.featureImportance);
-  useChart(learningCurveRef, chartOptions.learningCurve);
+  // (learningCurve hook removed — CrossValidationView owns the CV chart now.)
   useChart(predictedVsActualRef, chartOptions.predictedVsActual);
   useChart(residualPlotRef, chartOptions.residualPlot);
   useChart(residualHistogramRef, chartOptions.residualHistogram);
@@ -811,23 +816,72 @@ function ResultDetailView({ taskId, navigate }) {
     </Space>
   );
 
+  // ── 训练过程 tab — task-shape-aware ────────────────────────────────────
+  // DL tasks (epoch history available)  → epoch line chart (loss + metric)
+  // ML tasks (K-fold CV)                → per-metric mean ± std + bar + table
+  // Both                                → both cards stacked, DL first
+  // Neither                             → friendly empty state
+  const dlHistory = resultMetrics?.history
+    ?? (Array.isArray(vizState.dlEpochs?.items) ? vizState.dlEpochs.items : null);
+  const hasDLHistory = !!dlHistory && (
+    Array.isArray(dlHistory)
+      ? dlHistory.length > 0
+      : Object.values(dlHistory).some(v => Array.isArray(v) && v.length > 0)
+  );
+  const hasCVData = !!vizState.learningCurve && Array.isArray(vizState.learningCurve.steps)
+    && vizState.learningCurve.steps.length > 0;
+
   const trainingTab = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card title={<Space><RiseOutlined style={{ color: '#0ea5e9' }} />交叉验证曲线</Space>} {...cardProps('#0ea5e9')}>
-        <ChartSlot errorKey="learningCurve" hasData={!!vizState.learningCurve}
-          emptyText="暂无 CV 数据（仅 K-Fold 训练任务可用）">
-          <div ref={learningCurveRef} style={{ width: '100%', height: 360 }} />
-        </ChartSlot>
-      </Card>
-      {resultMetrics?.history && (
-        <Card title={<Space><RiseOutlined style={{ color: '#7c3aed' }} />Epoch 训练历史</Space>} {...cardProps('#7c3aed')}>
+      <Alert
+        type="info"
+        showIcon
+        message="训练过程"
+        description={
+          vizState.isDL
+            ? '深度学习任务以「轮次（epoch）」为单位评估收敛：纵轴左为损失函数，右为验证指标。损失应随 epoch 单调下降并趋于平台期；若验证损失先降后升即过拟合。'
+            : '经典机器学习采用 K 折交叉验证评估稳定性：每折独立训练并验证，「均值 ± 标准差」反映期望与离散度，标准差越小说明模型对数据划分越不敏感。'
+        }
+        style={{ marginBottom: 0 }}
+      />
+
+      {hasDLHistory && (
+        <Card
+          title={<Space><RiseOutlined style={{ color: '#7c3aed' }} />Epoch 训练历史</Space>}
+          {...cardProps('#7c3aed')}
+        >
           <TrainingHistoryChart
-            history={resultMetrics.history}
+            history={dlHistory}
             taskType={taskKind}
             height={360}
+            xAxisName="Epoch"
           />
+          <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+            橙/红线为训练 / 验证损失（左轴），绿/蓝线为指标（右轴）。星标处为该曲线的极值。
+          </Paragraph>
         </Card>
       )}
+
+      <Card
+        title={<Space><RiseOutlined style={{ color: '#0ea5e9' }} />K-Fold 交叉验证稳定性</Space>}
+        {...cardProps('#0ea5e9')}
+      >
+        <ChartSlot
+          errorKey="learningCurve"
+          hasData={hasCVData}
+          emptyText={
+            vizState.isDL
+              ? '该任务为深度学习训练，未运行 K-Fold CV（请查看上方 epoch 训练历史）'
+              : '暂无 CV 数据（仅 K-Fold 训练任务可用）'
+          }
+        >
+          <CrossValidationView
+            payload={vizState.learningCurve}
+            taskKind={taskKind}
+            height={340}
+          />
+        </ChartSlot>
+      </Card>
     </Space>
   );
 
