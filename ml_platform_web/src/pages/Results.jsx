@@ -205,6 +205,34 @@ function useChart(ref, option) {
 // ─── List view ────────────────────────────────────────────────────────────────
 const PAGE_SIZE = 10;
 
+function pickResultListMetrics(record) {
+  const metrics = record?.result_metrics ?? {};
+  const kind = inferTaskKind(record?.model_type, metrics);
+  if (kind === 'regression') {
+    return {
+      kind,
+      primary: ['r2', metrics.r2],
+      secondary: ['rmse', metrics.rmse],
+    };
+  }
+  return {
+    kind,
+    primary: ['accuracy', metrics.accuracy],
+    secondary: ['f1', metrics.f1 ?? metrics.f1_macro],
+  };
+}
+
+function renderListMetric(metric) {
+  const [key, value] = metric;
+  if (typeof value !== 'number' || Number.isNaN(value)) return <Text type="secondary">-</Text>;
+  return (
+    <Space size={6}>
+      <Text type="secondary" style={{ fontSize: 12 }}>{metricLabels[key] ?? key}</Text>
+      <Text strong>{formatMetric(value, { percent: key === 'accuracy' })}</Text>
+    </Space>
+  );
+}
+
 function ResultListView({ navigate }) {
   const [models, setModels] = useState([]);
   const [total, setTotal] = useState(0);
@@ -247,16 +275,25 @@ function ResultListView({ navigate }) {
       render: v => <Tag color="blue">{v}</Tag>,
     },
     {
-      title: '准确率',
-      key: 'accuracy',
-      width: 90,
-      render: (_, r) => formatMetric(r.result_metrics?.accuracy, { percent: true }),
+      title: '任务类型',
+      key: 'task_kind',
+      width: 96,
+      render: (_, r) => {
+        const kind = pickResultListMetrics(r).kind;
+        return <Tag color={kind === 'regression' ? 'purple' : 'blue'}>{kind === 'regression' ? '回归' : '分类'}</Tag>;
+      },
     },
     {
-      title: 'F1',
-      key: 'f1',
-      width: 80,
-      render: (_, r) => formatMetric(r.result_metrics?.f1),
+      title: '主指标',
+      key: 'primary_metric',
+      width: 140,
+      render: (_, r) => renderListMetric(pickResultListMetrics(r).primary),
+    },
+    {
+      title: '辅助指标',
+      key: 'secondary_metric',
+      width: 140,
+      render: (_, r) => renderListMetric(pickResultListMetrics(r).secondary),
     },
     {
       title: '完成时间',
@@ -831,16 +868,16 @@ function ResultDetailView({ taskId, navigate }) {
   const hasCVData = !!vizState.learningCurve && Array.isArray(vizState.learningCurve.steps)
     && vizState.learningCurve.steps.length > 0;
 
-  const trainingTab = (
+  const regressionTrainingTab = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Alert
         type="info"
         showIcon
-        message="训练过程"
+        message="回归训练过程"
         description={
-          vizState.isDL
-            ? '深度学习任务以「轮次（epoch）」为单位评估收敛：纵轴左为损失函数，右为验证指标。损失应随 epoch 单调下降并趋于平台期；若验证损失先降后升即过拟合。'
-            : '经典机器学习采用 K 折交叉验证评估稳定性：每折独立训练并验证，「均值 ± 标准差」反映期望与离散度，标准差越小说明模型对数据划分越不敏感。'
+          hasDLHistory
+            ? '回归深度学习任务以 epoch 观察 train/validation loss、RMSE/MAE 等误差指标；验证误差回升通常表示过拟合。'
+            : '回归机器学习任务用 K-Fold 观察 R²、RMSE、MAE 等误差指标的均值与波动；R² 越高越好，RMSE/MAE 越低越好。'
         }
         style={{ marginBottom: 0 }}
       />
@@ -863,21 +900,75 @@ function ResultDetailView({ taskId, navigate }) {
       )}
 
       <Card
-        title={<Space><RiseOutlined style={{ color: '#0ea5e9' }} />K-Fold 交叉验证稳定性</Space>}
+        title={<Space><RiseOutlined style={{ color: '#7c3aed' }} />回归 K-Fold 交叉验证（R² / RMSE / MAE）</Space>}
+        {...cardProps('#7c3aed')}
+      >
+        <ChartSlot
+          errorKey="learningCurve"
+          hasData={hasCVData}
+          emptyText={
+            hasDLHistory
+              ? '该任务为深度学习回归训练，未运行 K-Fold CV（请查看上方 epoch 训练历史）'
+              : '暂无回归 CV 数据（期望 r2 / rmse / mae / mse）'
+          }
+        >
+          <CrossValidationView
+            payload={vizState.learningCurve}
+            taskKind="regression"
+            height={340}
+          />
+        </ChartSlot>
+      </Card>
+    </Space>
+  );
+
+  const classificationTrainingTab = (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="分类训练过程"
+        description={
+          hasDLHistory
+            ? '分类深度学习任务以 epoch 观察 train/validation loss、Accuracy、F1 等指标；验证损失回升或指标停滞通常表示过拟合。'
+            : '分类机器学习任务用 K-Fold 观察 Accuracy、F1、ROC-AUC 等指标的均值与波动；均值越高且标准差越小，模型越稳定。'
+        }
+        style={{ marginBottom: 0 }}
+      />
+
+      {hasDLHistory && (
+        <Card
+          title={<Space><RiseOutlined style={{ color: '#7c3aed' }} />Epoch 训练历史</Space>}
+          {...cardProps('#7c3aed')}
+        >
+          <TrainingHistoryChart
+            history={dlHistory}
+            taskType={taskKind}
+            height={360}
+            xAxisName="Epoch"
+          />
+          <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+            橙/红线为训练 / 验证损失（左轴），绿/蓝线为分类指标（右轴）。星标处为该曲线的极值。
+          </Paragraph>
+        </Card>
+      )}
+
+      <Card
+        title={<Space><RiseOutlined style={{ color: '#0ea5e9' }} />分类 K-Fold 交叉验证（Accuracy / F1 / ROC-AUC）</Space>}
         {...cardProps('#0ea5e9')}
       >
         <ChartSlot
           errorKey="learningCurve"
           hasData={hasCVData}
           emptyText={
-            vizState.isDL
-              ? '该任务为深度学习训练，未运行 K-Fold CV（请查看上方 epoch 训练历史）'
-              : '暂无 CV 数据（仅 K-Fold 训练任务可用）'
+            hasDLHistory
+              ? '该任务为深度学习分类训练，未运行 K-Fold CV（请查看上方 epoch 训练历史）'
+              : '暂无分类 CV 数据（期望 accuracy / f1 / roc_auc）'
           }
         >
           <CrossValidationView
             payload={vizState.learningCurve}
-            taskKind={taskKind}
+            taskKind="classification"
             height={340}
           />
         </ChartSlot>
@@ -1022,7 +1113,7 @@ function ResultDetailView({ taskId, navigate }) {
     {
       key: 'training',
       label: <Space><RiseOutlined />训练过程</Space>,
-      children: trainingTab,
+      children: regressionTrainingTab,
     },
     {
       key: 'explain',
@@ -1043,7 +1134,7 @@ function ResultDetailView({ taskId, navigate }) {
     {
       key: 'training',
       label: <Space><RiseOutlined />训练过程</Space>,
-      children: trainingTab,
+      children: classificationTrainingTab,
     },
     {
       key: 'explain',

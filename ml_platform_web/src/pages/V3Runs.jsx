@@ -303,8 +303,8 @@ export default function V3Runs() {
   return (
     <div style={{ padding: '20px 0' }}>
       <Card
-        bordered={false}
-        bodyStyle={{ padding: 20 }}
+        variant="borderless"
+        styles={{ body: { padding: 20 } }}
         style={{ borderRadius: 12, boxShadow: '0 1px 3px rgba(15, 23, 42, 0.06)' }}
       >
         {/* Header */}

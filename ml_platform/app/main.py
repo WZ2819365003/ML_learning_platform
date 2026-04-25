@@ -173,7 +173,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="ML Training Platform",
-        version="3.2.0",
+        version="3.2.3",
         lifespan=lifespan,
     )
 
@@ -210,7 +210,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["Health"])
     async def health_check():
-        return {"status": "ok", "version": "3.2.0"}
+        return {"status": "ok", "version": "3.2.3"}
 
     return app
 

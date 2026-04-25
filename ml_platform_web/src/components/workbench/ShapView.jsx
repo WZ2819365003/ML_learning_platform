@@ -46,6 +46,56 @@ function minMax(arr) {
   return [lo, hi]
 }
 
+function normaliseShapPayload(payload) {
+  if (!payload || payload.status === 'pending') {
+    return {
+      method: payload?.explanation_method || payload?.method || 'shap',
+      featureImportances: null,
+      featureNames: [],
+      samples: null,
+      sampleSize: payload?.sample_size ?? payload?.sample_count,
+      featureCount: payload?.feature_count ?? 0,
+    }
+  }
+
+  const topFeatures = Array.isArray(payload.top_features) ? payload.top_features : []
+  const topFeatureImportances = Object.fromEntries(
+    topFeatures
+      .map((item) => {
+        if (Array.isArray(item)) return [item[0], item[1]]
+        const name = item?.feature || item?.name || item?.key
+        const value = item?.importance ?? item?.mean_abs_shap ?? item?.value
+        return [name, value]
+      })
+      .filter(([name]) => name != null)
+      .map(([name, value]) => [String(name), Number(value) || 0]),
+  )
+
+  const featureImportances = payload.feature_importances
+    || (Object.keys(topFeatureImportances).length ? topFeatureImportances : null)
+  const featureNames = Array.isArray(payload.feature_names) && payload.feature_names.length
+    ? payload.feature_names
+    : Object.keys(featureImportances || {})
+  const topLevelSamples = payload.shap_values && payload.feature_values
+    ? { shap_values: payload.shap_values, feature_values: payload.feature_values }
+    : null
+  const samples = payload.samples || topLevelSamples
+
+  return {
+    method: payload.explanation_method || payload.method || 'shap',
+    featureImportances,
+    featureNames,
+    samples,
+    sampleSize: payload.sample_size ?? payload.sample_count,
+    featureCount: payload.feature_count ?? featureNames.length,
+  }
+}
+
+function isTrueShapMethod(method) {
+  const m = String(method || '').toLowerCase()
+  return m.includes('shap') && !m.includes('feature_importance')
+}
+
 // ── Chart options ────────────────────────────────────────────────────────
 
 function buildBarOption(importances) {
@@ -285,10 +335,15 @@ export default function ShapView({ runId, initialSummary, experimentId, runStatu
     }
   }
 
-  const importances = payload?.feature_importances || null
-  const featureNames = payload?.feature_names || (importances ? Object.keys(importances) : [])
-  const samples = payload?.samples || null
+  const shapPayload = useMemo(() => normaliseShapPayload(payload), [payload])
+  const importances = shapPayload.featureImportances
+  const featureNames = shapPayload.featureNames
+  const samples = shapPayload.samples
   const hasSamples = !!(samples && samples.shap_values && samples.feature_values)
+  const method = shapPayload.method
+  const methodIsShap = isTrueShapMethod(method)
+  const sampleSize = shapPayload.sampleSize
+  const featureCount = shapPayload.featureCount
 
   // Preselect top-1 feature for dependence view once payload arrives.
   useEffect(() => {
@@ -312,6 +367,36 @@ export default function ShapView({ runId, initialSummary, experimentId, runStatu
       : null),
     [samples, featureNames, importances, depFeature, hasSamples],
   )
+
+  // Narrative summary: synthesises a short Chinese paragraph interpreting the
+  // top-3 features. It must run before any conditional return; otherwise React
+  // sees a different hook order when the payload changes from loading/pending
+  // to ready.
+  const narrative = useMemo(() => {
+    const top3 = toTopN(importances, 3)
+    if (top3.length === 0) return null
+    const parts = top3.map(([feature, absImp], rank) => {
+      let direction = null
+      if (hasSamples) {
+        const fi = featureNames.indexOf(feature)
+        if (fi >= 0 && samples?.shap_values) {
+          let sum = 0, n = 0
+          for (const row of samples.shap_values) {
+            const v = row[fi]
+            if (typeof v === 'number' && !Number.isNaN(v)) { sum += v; n += 1 }
+          }
+          if (n > 0) {
+            const mean = sum / n
+            if (Math.abs(mean) > 1e-6) direction = mean > 0 ? '推高' : '拉低'
+          }
+        }
+      }
+      return {
+        feature, absImp, direction, rank: rank + 1,
+      }
+    })
+    return parts
+  }, [importances, hasSamples, samples, featureNames])
 
   if (loading) return <Skeleton active paragraph={{ rows: 6 }} />
 
@@ -356,46 +441,10 @@ export default function ShapView({ runId, initialSummary, experimentId, runStatu
     )
   }
 
-  const method = payload.explanation_method || 'shap'
-  const sampleSize = payload.sample_size
-  const featureCount = payload.feature_count ?? featureNames.length
-
-  // Narrative summary: synthesises a short Chinese paragraph interpreting the
-  // top-3 features. We can only determine direction (推高/拉低) from per-sample
-  // SHAP values (where `hasSamples`); otherwise we fall back to magnitude-only
-  // language. This addresses the v3.1.2 UX complaint that SHAP only showed a
-  // chart without any explanatory text.
-  const narrative = useMemo(() => {
-    const top3 = toTopN(importances, 3)
-    if (top3.length === 0) return null
-    const parts = top3.map(([feature, absImp], rank) => {
-      let direction = null
-      if (hasSamples) {
-        const fi = featureNames.indexOf(feature)
-        if (fi >= 0 && samples?.shap_values) {
-          // Average signed SHAP for this feature across samples.
-          let sum = 0, n = 0
-          for (const row of samples.shap_values) {
-            const v = row[fi]
-            if (typeof v === 'number' && !Number.isNaN(v)) { sum += v; n += 1 }
-          }
-          if (n > 0) {
-            const mean = sum / n
-            if (Math.abs(mean) > 1e-6) direction = mean > 0 ? '推高' : '拉低'
-          }
-        }
-      }
-      return {
-        feature, absImp, direction, rank: rank + 1,
-      }
-    })
-    return parts
-  }, [importances, hasSamples, samples, featureNames])
-
   return (
     <div>
       <Space wrap style={{ marginBottom: 12 }}>
-        <Tag color={method === 'shap' ? 'blue' : 'orange'}>
+        <Tag color={methodIsShap ? 'blue' : 'orange'}>
           method: <code>{method}</code>
         </Tag>
         <Tag>{featureCount} 特征</Tag>
@@ -407,6 +456,16 @@ export default function ShapView({ runId, initialSummary, experimentId, runStatu
           <Tag color="warning">仅聚合重要度（无 per-sample，Beeswarm/依赖不可用）</Tag>
         )}
       </Space>
+
+      {!methodIsShap && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="当前使用回退解释方法"
+          description="该 Run 没有完整逐样本 SHAP 明细，页面展示模型原生特征重要度或服务端回退解释结果；可用于判断特征贡献排序，但不能展示 Beeswarm/依赖散点。"
+        />
+      )}
 
       {narrative && narrative.length > 0 && (
         <Alert
