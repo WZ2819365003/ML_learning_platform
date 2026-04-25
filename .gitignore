@@ -58,3 +58,6 @@ docker/runtime/
 # Old docker release packages
 docker/*.zip
 docker/ML_platform_release/
+docker/minio_seed/
+docker/mysql_init/01_data.sql
+docker/runtime_data/

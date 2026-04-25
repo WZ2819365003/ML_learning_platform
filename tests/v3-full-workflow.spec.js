@@ -34,8 +34,10 @@
 
 const { test, expect } = require('@playwright/test');
 
-const BASE_UI  = 'http://127.0.0.1:3000';
-const BASE_API = 'http://127.0.0.1:8000/api';
+// In Docker stacks the SPA lives behind nginx at :80 (see docker/README.md).
+// Override either when running against a dev server (e.g. BASE_UI=http://127.0.0.1:3000).
+const BASE_UI  = process.env.BASE_UI  || 'http://127.0.0.1:3000';
+const BASE_API = process.env.BASE_API || 'http://127.0.0.1:8000/api';
 
 // Tests mutate shared DB state → run in order, one worker.
 test.describe.configure({ mode: 'serial' });
@@ -76,6 +78,26 @@ async function createModelingTask(request, overrides = {}) {
   const res = await request.post(`${BASE_API}/v3/tasks/`, { data: payload });
   expect(res.ok(), `POST task failed: ${res.status()} ${await res.text()}`).toBeTruthy();
   return await res.json();
+}
+
+// Pick a column safe to use as a classification target: skip ID-like columns
+// (high unique-rate is rejected by the V3 target guard), prefer columns named
+// Target/Label/Failure or ones with a tiny cardinality.
+function pickClassificationTarget(dataset) {
+  const cols = dataset?.columns_info || {};
+  const names = Object.keys(cols);
+  if (names.length === 0) return null;
+  const preferred = ['Target', 'target', 'label', 'Label', 'Failure Type', 'Outcome', 'outcome', 'class', 'y'];
+  for (const p of preferred) if (cols[p]) return p;
+  // Otherwise: smallest unique-count column that isn't trivially constant.
+  const ranked = names
+    .map((n) => ({ n, info: cols[n] || {} }))
+    .filter((x) => {
+      const u = x.info.unique_count ?? x.info.nunique ?? null;
+      return u !== null && u >= 2 && u <= Math.max(20, Math.floor((dataset.row_count || 0) / 10));
+    })
+    .sort((a, b) => (a.info.unique_count || 0) - (b.info.unique_count || 0));
+  return ranked[0]?.n || null;
 }
 
 async function findAnyPlatformTask(request) {
@@ -247,7 +269,7 @@ test.describe('Phase 4 — ProgressTree appears on the detail page', () => {
 
     // Pick a target column — first numeric/integer column works for classification.
     // The examples in this repo (iris, churn…) all have simple structures.
-    const targetColumn = Object.keys(dataset.columns_info || {})[0];
+    const targetColumn = pickClassificationTarget(dataset);
     test.skip(!targetColumn, 'dataset has no columns');
 
     const task = await createModelingTask(request, {
@@ -325,7 +347,7 @@ test.describe('Phase 5 — Scheduler path surfaces in TaskCenter tree view', () 
     const datasets = await listDatasets(request);
     const dataset = datasets[0];
     test.skip(!dataset, 'need a dataset for baseline');
-    const targetColumn = Object.keys(dataset.columns_info || {})[0];
+    const targetColumn = pickClassificationTarget(dataset);
     test.skip(!targetColumn, 'no columns');
 
     const task = await createModelingTask(request, {

@@ -1,13 +1,14 @@
 import axios from 'axios';
 
+// Use relative path for API to work in both dev and Docker environments
 const api = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api',
+  baseURL: '/api',
   timeout: 30000,
 });
 
 // Second axios instance for inference routes (no /api prefix)
 const inferenceApi = axios.create({
-  baseURL: 'http://127.0.0.1:8000',
+  baseURL: '/',
   timeout: 30000,
 });
 inferenceApi.interceptors.response.use(

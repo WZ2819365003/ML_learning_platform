@@ -211,12 +211,13 @@ export default function ModelingTasks() {
 
   // ── Header stats (computed from current page; for MVP)
   const stats = (() => {
-    const byStatus = data.items.reduce((acc, t) => {
+    const items = Array.isArray(data?.items) ? data.items : []
+    const byStatus = items.reduce((acc, t) => {
       acc[t.status] = (acc[t.status] || 0) + 1
       return acc
     }, {})
     return {
-      total: data.total,
+      total: data?.total ?? items.length,
       running: byStatus.RUNNING || 0,
       completed: byStatus.COMPLETED || 0,
       failed: byStatus.FAILED || 0,
@@ -359,7 +360,7 @@ export default function ModelingTasks() {
           rowKey="id"
           size="middle"
           columns={columns}
-          dataSource={data.items}
+          dataSource={Array.isArray(data?.items) ? data.items : []}
           loading={loading}
           scroll={{ x: 1080 }}
           locale={{
@@ -372,7 +373,7 @@ export default function ModelingTasks() {
           pagination={{
             current: pagination.page,
             pageSize: pagination.pageSize,
-            total: data.total,
+            total: data?.total ?? 0,
             showSizeChanger: true,
             showQuickJumper: true,
             pageSizeOptions: ['10', '20', '50'],
