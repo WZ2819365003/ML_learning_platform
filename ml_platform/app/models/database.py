@@ -53,13 +53,20 @@ async_session_factory = async_sessionmaker(
     expire_on_commit=False,
 )
 
+def _to_sync_database_url(database_url: str) -> str:
+    """Convert an async SQLAlchemy URL to the matching sync driver URL."""
+    return (
+        database_url
+        .replace("mysql+aiomysql://", "mysql+pymysql://")
+        .replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+        .replace("sqlite+aiosqlite://", "sqlite://")
+    )
+
+
 # Sync engine — only for code paths that run inside a ThreadPoolExecutor
 # (e.g. classical-ML training in `_run_training_sync`) where awaiting the
-# async engine would require bouncing back to the event loop per row. The
-# URL swaps the aiomysql driver for pymysql.
-SYNC_DATABASE_URL: str = DATABASE_URL.replace(
-    "mysql+aiomysql://", "mysql+pymysql://"
-).replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+# async engine would require bouncing back to the event loop per row.
+SYNC_DATABASE_URL: str = _to_sync_database_url(DATABASE_URL)
 
 sync_engine = create_engine(
     SYNC_DATABASE_URL,
