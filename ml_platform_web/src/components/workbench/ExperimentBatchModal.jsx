@@ -208,7 +208,7 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
     if (!open || !task?.task_type) return
     setLoading(true)
     modelingTaskApi.tuningSpaces(task.task_type)
-      .then(resp => setTuningSpaces(resp || {}))
+      .then(resp => setTuningSpaces(resp?.models || resp || {}))
       .catch(err => message.error('加载调参空间失败：' + (err?.response?.data?.detail || err.message)))
       .finally(() => setLoading(false))
   }, [open, task?.task_type])
