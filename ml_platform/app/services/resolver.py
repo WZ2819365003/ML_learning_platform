@@ -67,19 +67,30 @@ LEGACY_REGRESSOR_MODEL_TYPES: set[str] = {
     "tcn_regressor",
 }
 
+# Classifier tokens whose names collide with the `_regression` suffix heuristic.
+# Without this override `logistic_regression` (a classifier) would be flagged as
+# a regressor and downstream classification-only viz endpoints (per_class /
+# pr_curve / calibration / threshold / confusion_matrix) would 400-error.
+CLASSIFIER_NAME_OVERRIDES: set[str] = {
+    "logistic_regression",
+}
+
 
 def is_regressor(model_type: str | None) -> bool:
     """Decide if a trained model is a regressor based on its `model_type` string.
 
-    Uses an explicit allow-list plus conventional suffix heuristics
-    (`_regressor`, `_regression`). Used by the resolver to set
-    `TaskFacade.task_kind`, which drives metric/chart branching everywhere else.
+    Order:
+      1. explicit regressor allow-list
+      2. classifier override list (defeats the suffix trap)
+      3. conventional `_regressor` / `_regression` suffix heuristic
     """
     if not model_type:
         return False
     lower = model_type.lower()
     if lower in LEGACY_REGRESSOR_MODEL_TYPES:
         return True
+    if lower in CLASSIFIER_NAME_OVERRIDES:
+        return False
     return lower.endswith("_regressor") or lower.endswith("_regression")
 
 

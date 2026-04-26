@@ -57,11 +57,14 @@ jobs:
             sleep 5
           done
 
-      - name: Run V3 strict release gate (08)
+      - name: Run V3 strict release gates (08 e2e + 11 pro-viz)
         working-directory: playwright_test
-        run: npx playwright test --config=playwright.config.js test/08-v3-end-to-end.spec.js
+        run: |
+          npx playwright test --config=playwright.config.js \
+            test/08-v3-end-to-end.spec.js \
+            test/11-v3-pro-viz.spec.js
 
-      - name: Run full milestone suite
+      - name: Run full milestone suite (smoke + navigation + ws)
         working-directory: playwright_test
         run: npx playwright test --config=playwright.config.js
 
