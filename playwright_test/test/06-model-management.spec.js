@@ -37,12 +37,11 @@ test.describe('06 模型管理与部署', () => {
     expect(body && body.length > 0).toBeTruthy();
   });
 
-  test('6.5 GET /api/models/tags 标签库', async ({ request }) => {
+  test('6.5 GET /api/models/tags 标签库（dict shape）', async ({ request }) => {
+    // V1 探针错把响应当数组判 length undefined。实际形态是 {tags: [...], grouped: {...}}。
     const r = await getJson(request, '/models/tags');
-    test.info().annotations.push({
-      type: 'tags',
-      description: r.status === 200 ? `count=${(r.body || []).length}` : `status=${r.status}`,
-    });
-    expect([200, 404]).toContain(r.status);
+    expect(r.ok, `models/tags failed: ${r.status} ${r.raw?.slice(0, 200)}`).toBeTruthy();
+    expect(Array.isArray(r.body?.tags), `tags missing/not-array: ${JSON.stringify(r.body).slice(0, 200)}`).toBe(true);
+    expect(typeof r.body?.grouped, 'grouped should be object').toBe('object');
   });
 });

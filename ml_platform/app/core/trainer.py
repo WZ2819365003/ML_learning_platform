@@ -198,15 +198,20 @@ class LogisticRegressionTrainer(BaseTrainer):
 
     def configure(self, hyperparameters: dict):
         from sklearn.linear_model import LogisticRegression
+        penalty = hyperparameters.get("penalty", "l2")
         params = {
             "C": hyperparameters.get("C", 1.0),
-            "penalty": hyperparameters.get("penalty", "l2"),
-            "l1_ratio": hyperparameters.get("l1_ratio", 0),
+            "penalty": penalty,
             "max_iter": hyperparameters.get("max_iter", 1000),
             "solver": hyperparameters.get("solver", "lbfgs"),
             "class_weight": hyperparameters.get("class_weight", None),
             "random_state": hyperparameters.get("random_state", 42),
         }
+        # `l1_ratio` is only valid when penalty='elasticnet'; passing it under
+        # other penalties triggers sklearn's UserWarning on every fit. Only
+        # forward the user-supplied value when it actually applies.
+        if penalty == "elasticnet":
+            params["l1_ratio"] = hyperparameters.get("l1_ratio", 0.5)
         self.model = LogisticRegression(**params)
 
 

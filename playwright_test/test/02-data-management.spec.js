@@ -24,14 +24,15 @@ test.describe('02 数据管理', () => {
     expect(r.body).toBeTruthy();
   });
 
-  test('2.3 GET /api/data/{id}/columns 返回列元数据', async ({ request }) => {
+  test('2.3 数据集列元数据通过 columns_info 暴露（非独立路由）', async ({ request }) => {
+    // 历史 V1 报告里探过 `/data/{id}/columns` 路由，确认前端不调用、
+    // 后端不存在；列元数据直接挂在 /data/list 的每条记录的 columns_info 字段。
     const items = await listDatasets(request);
     if (items.length === 0) test.skip();
-    const id = items[0].id;
-    const r = await getJson(request, `/data/${id}/columns`);
-    test.info().annotations.push({ type: 'columns-status', description: String(r.status) });
-    // 不强制 200 — 路由可能不存在；记录状态码即可
-    expect([200, 404, 405]).toContain(r.status);
+    const ds = items[0];
+    expect(ds?.columns_info, `dataset.columns_info missing on ${ds?.id}`).toBeTruthy();
+    expect(typeof ds.columns_info).toBe('object');
+    expect(Object.keys(ds.columns_info).length).toBeGreaterThan(0);
   });
 
   test('2.4 /data 页面渲染并加载列表', async ({ page }) => {

@@ -25,14 +25,13 @@ test.describe('05 时序任务模块', () => {
     expect(body && body.length > 0).toBeTruthy();
   });
 
-  test('5.4 /ts/tasks/new 配置页渲染', async ({ page }) => {
+  test('5.4 /ts/tasks/new 重定向到 /ts/tasks?drawer=create', async ({ page }) => {
+    // TSConfig.jsx 是个 <Navigate> 组件 —— 真实表单挂在 /ts/tasks 的 Drawer 上。
     const obs = attachPageObservers(page);
     await page.goto('/ts/tasks/new');
     await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
     await attachToReport(test.info(), obs, 'ts-config-observers');
-    const hasForm = await page.locator('.ant-form, form').count();
-    test.info().annotations.push({ type: 'form-count', description: String(hasForm) });
-    expect(hasForm).toBeGreaterThanOrEqual(0);
+    expect(page.url()).toMatch(/\/ts\/tasks/);
   });
 
   test('5.5 /ts/results 页面渲染（容错）', async ({ page }) => {

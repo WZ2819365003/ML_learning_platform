@@ -12,18 +12,12 @@ test.describe('03 机器学习模块', () => {
     expect([200, 404]).toContain(r.status);
   });
 
-  test('3.2 ML 模型注册表（如果暴露）', async ({ request }) => {
-    // 尝试常见路径
-    const paths = ['/models/registry', '/models/list', '/v3/registry/models'];
-    let found = null;
-    for (const p of paths) {
-      const r = await getJson(request, p);
-      if (r.status === 200) { found = { path: p, body: r.body }; break; }
-    }
-    test.info().annotations.push({
-      type: 'registry-probe',
-      description: found ? `${found.path} ok` : 'no registry endpoint matched',
-    });
+  test('3.2 ML 模型注册表 = /api/models/list', async ({ request }) => {
+    // V1 报告里探过 `/models/registry` 405 —— 前端从未调用，真实路径是 /models/list。
+    const r = await getJson(request, '/models/list?page=1&page_size=5');
+    expect(r.ok, `models/list failed: ${r.status} ${r.raw?.slice(0, 200)}`).toBeTruthy();
+    const items = r.body?.items || r.body?.models || [];
+    expect(Array.isArray(items)).toBe(true);
   });
 
   test('3.3 POST /api/training/start (logistic_regression) 后台启动', async ({ request }) => {
