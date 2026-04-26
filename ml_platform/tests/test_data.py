@@ -3,6 +3,7 @@
 import asyncio
 import os
 import tempfile
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -24,7 +25,12 @@ test_sessionmaker = async_sessionmaker(test_engine, class_=AsyncSession, expire_
 async def override_get_db() -> AsyncSession:
     """覆盖数据库依赖"""
     async with test_sessionmaker() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -48,8 +54,9 @@ def client():
 @pytest.fixture
 def test_csv_data():
     """创建测试CSV数据"""
+    offset = time.time_ns() % 1_000_000
     df = pd.DataFrame({
-        "feature1": [1, 2, 3, 4, 5],
+        "feature1": [offset + 1, offset + 2, offset + 3, offset + 4, offset + 5],
         "feature2": [6, 7, 8, 9, 10],
         "target": [0, 1, 0, 1, 0]
     })
@@ -67,7 +74,7 @@ async def test_upload_dataset(client, test_csv_data):
     assert response.status_code == 201
     data = response.json()
     assert "id" in data
-    assert "file_name" in data
+    assert "name" in data
     assert "created_at" in data
 
 
@@ -100,7 +107,7 @@ async def test_preview_dataset(client, test_csv_data):
     response = client.get(f"/api/data/{dataset_id}/preview")
     assert response.status_code == 200
     data = response.json()
-    assert "columns" in data
+    assert "columns_info" in data
     assert "rows" in data
     assert len(data["rows"]) <= 100
 

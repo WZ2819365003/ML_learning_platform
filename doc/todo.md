@@ -1,73 +1,48 @@
-# ML Training Platform — TODO
+# ML Training Platform — Roadmap / TODO
 
-## Phase 1: 后端核心 (第1周) — 已完成
+> 这份 TODO 以当前 V3 平台为基线，不再保留早期"前端待开始 / SHAP 待开始"式计划。已落地能力见 [功能说明](./功能说明.md) 和 [系统架构](./系统架构.md)。
 
-- [x] Day 1: 项目初始化 — 目录结构、依赖、配置、数据库、FastAPI 骨架
-- [x] Day 2: 数据上传模块 — upload/preview/list/delete 4个API
-- [x] Day 3: 训练任务框架 — asyncio + ThreadPool 异步训练、BaseTrainer、RandomForest
-- [x] Day 4: 多模型支持 — 6种模型训练器 (RF/XGB/LGBM/LR/SVM/MLP) + 工厂模式
-- [x] Day 5: WebSocket 实时推送 — EventBus 内存 pub/sub + /ws/training/{id} + /ws/logs/{id}
-- [x] Day 6: 训练日志系统 — per-task 文件日志 + JSON metrics + 查询/导出 API
-- [x] Day 7: MLflow 集成 — SQLite backend、实验追踪、参数/指标/模型自动记录
+## 当前状态
 
-### 已实现的 API
+- [x] FastAPI + React + V3 工作台主链路已具备：数据集、训练方案、建模任务、实验批次、Run、Inspector、SHAP、模型资产与部署。
+- [x] 训练策略已覆盖 `baseline`、`grid_search`、`bayesian_search`。
+- [x] 模型族已覆盖传统 ML、Tabular DL、Chronos/TS 兼容通道。
+- [x] Docker stack、MySQL、Redis、MinIO、WebSocket、MLflow 运行链路已具备。
 
-| 模块 | 方法 | 路径 | 说明 |
-|------|------|------|------|
-| Health | GET | /health | 健康检查 |
-| Data | POST | /api/data/upload | 上传 CSV/Parquet/Excel |
-| Data | GET | /api/data/{id}/preview | 数据预览 + 统计 |
-| Data | GET | /api/data/list | 数据集列表(分页) |
-| Data | DELETE | /api/data/{id} | 删除数据集 |
-| Training | POST | /api/training/start | 启动训练任务 |
-| Training | GET | /api/training/{id}/status | 查询训练状态 |
-| Training | POST | /api/training/{id}/stop | 终止训练 |
-| Training | GET | /api/training/list | 训练任务列表(分页/筛选) |
-| Training | GET | /api/training/models | 可用模型列表 |
-| Logs | GET | /api/logs/{id} | 训练日志(分页/级别筛选) |
-| Logs | GET | /api/logs/{id}/download | 导出日志(txt/json) |
-| Logs | GET | /api/logs/{id}/metrics | 结构化指标数据 |
-| Experiments | GET | /api/experiments/list | MLflow 实验列表 |
-| Experiments | GET | /api/experiments/runs | MLflow run 列表 |
-| Experiments | GET | /api/experiments/runs/{id} | MLflow run 详情 |
-| WebSocket | WS | /ws/training/{id} | 实时训练指标推送 |
-| WebSocket | WS | /ws/logs/{id} | 实时日志流 |
+## P0 发布门禁
 
----
+- [ ] Docker 镜像版本、`/health.version`、前端 `package.json` 版本、git commit 在测试报告中一致可追溯。
+- [ ] `playwright_test/test/08-v3-end-to-end.spec.js` 必须严格通过：`TrainingPlan -> ModelingTask -> ExperimentBatch -> ExperimentRun -> Inspector -> SHAP`。
+- [ ] 后端核心测试在发布前通过：`cd ml_platform && python -m pytest tests/`。
+- [ ] 全量 Playwright 巡检报告归档：`artifacts/results.json` + HTML report + 后端关键日志。
+- [ ] 发布前确认种子数据集可用，至少包含一个分类数据集和一个回归数据集。
 
-## Phase 2: 后端完善 (第2周) — 待开始
+## P1 模型扩展契约
 
-- [ ] SHAP 可解释性 API (特征重要性、SHAP summary plot 数据)
-- [ ] 模型保存/加载管理 (版本管理、元数据)
-- [ ] 深度学习模型支持 (PyTorch CNN/RNN)
-- [ ] 多实验对比 API
+- [ ] 抽象并文档化模型注册契约：`token`、`family`、`task_type`、默认参数、参数 schema、训练入口、预测入口、可解释性支持级别。
+- [ ] 为每个新增模型添加 registry contract test，确保 V3 modal、后端调度、模型资产页使用同一份 token。
+- [ ] 新模型接入时强制提供最小 E2E：创建任务、跑一次 baseline、产生 metrics、可进入 Inspector。
+- [ ] 把模型能力标签标准化：是否支持 `predict_proba`、是否支持 SHAP tree path、是否支持部署推理、是否支持批量预测。
 
-## Phase 3: 前端开发 (第3-4周) — 待开始
+## P2 策略扩展
 
-- [ ] React + Vite 项目搭建
-- [ ] 数据上传页 (表格预览、统计可视化)
-- [ ] 模型配置页 (模型选择、超参数表单)
-- [ ] 训练监控页 (实时 loss 曲线、进度条)
-- [ ] 结果页 (混淆矩阵、ROC/AUC、SHAP 图)
-- [ ] 模型管理页 (列表、版本对比)
+- [ ] 将调参策略接口固定为 `validate -> plan_trials -> dispatch -> aggregate`，新增策略只实现策略层，不改 ModelingTask 主流程。
+- [ ] 为 `grid_search`、`bayesian_search` 增加边界测试：空 search_space、非法参数、max_trials 截断、失败 run 聚合。
+- [ ] 增加策略级预算控制：全局最大 run 数、单模型最大 trial、超时时间、并发度。
+- [ ] 增加策略对比报告导出：不同策略的 best run、均值/方差、耗时、失败率。
 
-## Phase 4: 模型推理 (第5周) — 待开始
+## P3 可靠性与可观测性
 
-- [ ] 推理服务 API (上传数据 → 加载模型 → 返回预测)
-- [ ] 批量推理
-- [ ] 推理结果可视化
+- [ ] 将 `InProcessScheduler` 的生产替代方案打通：Celery worker、Redis broker、任务重试、取消、恢复。
+- [ ] 为数据库 schema 引入正式 migration 流程，避免运行库和代码模型漂移。
+- [ ] WebSocket 跨实例改为 Redis pub/sub，支持多 backend 实例部署。
+- [ ] 对训练失败补结构化错误分类：数据问题、模型参数问题、依赖问题、资源问题。
+- [ ] 对长任务补资源指标：耗时、CPU/内存、训练数据规模、模型文件大小。
 
----
+## P4 产品与运维
 
-## 技术栈
-
-| 层 | 技术 | 状态 |
-|---|---|---|
-| 后端框架 | FastAPI + asyncio | 已集成 |
-| 数据库 | SQLite (aiosqlite) | 已集成 |
-| 训练引擎 | scikit-learn + XGBoost + LightGBM | 已集成 |
-| 实验追踪 | MLflow (SQLite backend) | 已集成 |
-| 实时通信 | WebSocket + EventBus | 已集成 |
-| 日志系统 | loguru + per-task 文件日志 | 已集成 |
-| 任务队列 | asyncio (Celery 预留) | 已集成 |
-| 前端 | React + ECharts (计划) | 待开始 |
+- [ ] 模型卡片补齐：训练数据、指标、参数、解释性、部署状态、风险说明。
+- [ ] 增加模型漂移 / 数据漂移监控入口，部署模型能看到线上输入分布变化。
+- [ ] 增加权限、审计、项目空间隔离，避免多人共享环境互相覆盖任务。
+- [ ] 生产部署补 HTTPS、密钥管理、备份恢复、对象存储生命周期策略。
+- [ ] 增加版本化发布检查清单，明确 build、test、tag、push、rollback 步骤。

@@ -3,6 +3,7 @@
 import asyncio
 import os
 import tempfile
+import time
 
 import pandas as pd
 import pytest
@@ -22,7 +23,12 @@ test_sessionmaker = async_sessionmaker(test_engine, class_=AsyncSession, expire_
 async def override_get_db() -> AsyncSession:
     """覆盖数据库依赖"""
     async with test_sessionmaker() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -46,8 +52,9 @@ def client():
 @pytest.fixture
 def test_csv_data():
     """创建测试CSV数据"""
+    offset = time.time_ns() % 1_000_000
     df = pd.DataFrame({
-        "feature1": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "feature1": [offset + i for i in range(1, 11)],
         "feature2": [11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
         "target": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1]
     })
@@ -70,15 +77,17 @@ async def test_get_available_models(client):
     """测试获取可用模型列表"""
     response = client.get("/api/training/models")
     assert response.status_code == 200
-    models = response.json()
+    payload = response.json()
+    models = payload["models"] if isinstance(payload, dict) else payload
     assert isinstance(models, list)
     assert len(models) > 0
-    assert "random_forest" in models
-    assert "xgboost" in models
-    assert "lightgbm" in models
-    assert "logistic_regression" in models
-    assert "svm" in models
-    assert "mlp" in models
+    model_ids = {item["id"] if isinstance(item, dict) else item for item in models}
+    assert "random_forest" in model_ids
+    assert "xgboost" in model_ids
+    assert "lightgbm" in model_ids
+    assert "logistic_regression" in model_ids
+    assert "svm" in model_ids
+    assert "mlp" in model_ids
 
 
 @pytest.mark.asyncio
@@ -101,7 +110,7 @@ async def test_start_training(client, uploaded_dataset_id):
     }
     
     response = client.post("/api/training/start", json=training_request)
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
     data = response.json()
     assert "id" in data
     assert data["status"] == "PENDING"
@@ -140,6 +149,7 @@ async def test_get_training_status(client, uploaded_dataset_id):
         "target_column": "target"
     }
     start_response = client.post("/api/training/start", json=training_request)
+    assert start_response.status_code == 201, start_response.text
     task_id = start_response.json()["id"]
     
     # 测试获取训练任务状态

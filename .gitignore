@@ -38,6 +38,7 @@ ml_platform_web/vite.*.log
 test-results/
 playwright-report/
 .pytest_cache/
+playwright_test/artifacts/
 
 # OS
 .DS_Store

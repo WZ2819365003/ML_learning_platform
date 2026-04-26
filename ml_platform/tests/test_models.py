@@ -17,8 +17,8 @@ def test_list_available_models():
     """测试列出可用模型"""
     models = list_available_models()
     assert isinstance(models, list)
-    assert len(models) == 6
     expected_models = ["random_forest", "xgboost", "lightgbm", "logistic_regression", "svm", "mlp"]
+    assert len(models) >= len(expected_models)
     for model in expected_models:
         assert model in models
 

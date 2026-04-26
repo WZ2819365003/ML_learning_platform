@@ -77,6 +77,8 @@ def client(test_db, monkeypatch: pytest.MonkeyPatch):
         }
 
     monkeypatch.setattr(app_main, "async_engine", test_engine)
+    monkeypatch.setattr(app_main, "async_session_factory", test_session_factory)
+    monkeypatch.setattr(app_main, "resume_unfinished_ts_tasks", lambda: asyncio.sleep(0))
     monkeypatch.setattr(timesfm_routes, "is_available", lambda: True)
     monkeypatch.setattr(timeseries_service, "run_forecast_async", fake_forecast)
     monkeypatch.setattr(timeseries_service, "async_session_factory", test_session_factory)
@@ -288,7 +290,7 @@ async def test_create_ts_task_commits_before_background_schedule(
             )
             probe_result["visible"] = row.scalar_one_or_none() is not None
 
-    def fake_schedule(task_id: str) -> None:
+    def fake_schedule(task_id: str, **_: object) -> None:
         asyncio.create_task(probe(task_id))
 
     monkeypatch.setattr(timeseries_service, "_schedule_forecast", fake_schedule)
