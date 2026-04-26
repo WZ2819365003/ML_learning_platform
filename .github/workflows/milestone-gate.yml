@@ -1,0 +1,91 @@
+name: V3 Milestone Gate (Docker + Playwright)
+
+# Heavy end-to-end gate: spins up the full Docker stack (MySQL + Redis + MinIO
+# + backend + frontend + nginx), runs the strict V3 release-gate Playwright
+# spec (test/08-v3-end-to-end.spec.js) plus the full milestone suite.
+#
+# Triggers:
+#   - workflow_dispatch: manual smoke before tagging a release
+#   - push of any v* tag: enforce gate before publishing the release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  milestone-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright dependencies
+        run: |
+          npm ci || npm install
+          npx playwright install --with-deps chromium
+
+      - name: Build & start Docker stack
+        working-directory: docker
+        run: |
+          docker compose up -d --build
+          echo "Waiting for backend health..."
+          for i in {1..60}; do
+            if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+              echo "Backend healthy after ${i}0s"
+              break
+            fi
+            sleep 10
+          done
+          curl -s http://127.0.0.1:8000/health | tee /tmp/health.json
+          test "$(jq -r .status /tmp/health.json)" = "ok"
+
+      - name: Wait for frontend
+        run: |
+          for i in {1..30}; do
+            if curl -sf http://127.0.0.1:3000 > /dev/null; then
+              echo "Frontend healthy"
+              break
+            fi
+            sleep 5
+          done
+
+      - name: Run V3 strict release gate (08)
+        working-directory: playwright_test
+        run: npx playwright test --config=playwright.config.js test/08-v3-end-to-end.spec.js
+
+      - name: Run full milestone suite
+        working-directory: playwright_test
+        run: npx playwright test --config=playwright.config.js
+
+      - name: Capture Docker logs on failure
+        if: failure()
+        run: |
+          mkdir -p docker-logs
+          docker logs ml_platform_backend  > docker-logs/backend.log  2>&1 || true
+          docker logs ml_platform_frontend > docker-logs/frontend.log 2>&1 || true
+          docker logs ml_platform_mysql    > docker-logs/mysql.log    2>&1 || true
+          docker logs ml_platform_redis    > docker-logs/redis.log    2>&1 || true
+          docker logs ml_platform_minio    > docker-logs/minio.log    2>&1 || true
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            playwright_test/artifacts/
+            docker-logs/
+          if-no-files-found: ignore
+
+      - name: Tear down Docker stack
+        if: always()
+        working-directory: docker
+        run: docker compose down -v
