@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import {
   Card, Button, Tabs, Tag, Space, Table, Descriptions, Typography, Empty,
   Row, Col, Spin, Alert, Statistic, Tooltip, Breadcrumb, message, Progress,
+  Select,
 } from 'antd'
 import {
   ArrowLeftOutlined, ReloadOutlined, PlusOutlined, TrophyOutlined,
@@ -56,6 +57,11 @@ export default function ModelingTaskDetail() {
   const [runs, setRuns] = useState([])
   const [runsLoading, setRunsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
+  // Strategy filter for the Run 对比 tab. 'all' = no filter; otherwise a
+  // strategy_type token (baseline / grid_search / bayesian_search). Set
+  // automatically when the user clicks "查看 Run →" on an experiment row,
+  // so the deep-link from 实验编排 → Run 对比 lands on the right slice.
+  const [runStrategyFilter, setRunStrategyFilter] = useState('all')
 
   // Modals
   const [batchOpen, setBatchOpen] = useState(false)
@@ -298,7 +304,13 @@ export default function ModelingTaskDetail() {
       title: '操作', key: 'actions', width: 120,
       render: (_, row) => (
         <Button size="small" type="link"
-          onClick={() => { setActiveTab('runs') }}>查看 Run →</Button>
+          onClick={() => {
+            // Deep-link: jump to Run 对比 with this batch's strategy
+            // pre-selected in the dropdown so the user lands on a slice
+            // that matches the row they clicked.
+            setRunStrategyFilter(row.strategy_type || 'all')
+            setActiveTab('runs')
+          }}>查看 Run →</Button>
       ),
     },
   ]
@@ -333,7 +345,22 @@ export default function ModelingTaskDetail() {
   )
 
   // ── Tab: Runs (full run matrix + leaderboard order) ──────────────────────
-  const runRows = runs.length ? runs : leaderboard
+  const allRunRows = runs.length ? runs : leaderboard
+  // Build the strategy options dynamically from rows actually present, so we
+  // never offer a strategy that has 0 runs.  Always include "all".
+  const runStrategiesPresent = Array.from(new Set(
+    allRunRows.map(r => r.strategy_type).filter(Boolean)
+  ))
+  const runStrategyOptions = [
+    { value: 'all', label: `全部策略 (${allRunRows.length})` },
+    ...runStrategiesPresent.map(s => ({
+      value: s,
+      label: `${s} (${allRunRows.filter(r => r.strategy_type === s).length})`,
+    })),
+  ]
+  const runRows = runStrategyFilter === 'all'
+    ? allRunRows
+    : allRunRows.filter(r => r.strategy_type === runStrategyFilter)
   const leaderboardColumns = [
     {
       title: '全局', key: 'global_rank', width: 72,
@@ -433,10 +460,23 @@ export default function ModelingTaskDetail() {
         display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Space>
           <Text strong>Run 矩阵</Text>
-          <Tag>{runRows.length}</Tag>
+          <Tag>{runRows.length}{runStrategyFilter !== 'all' && ` / ${allRunRows.length}`}</Tag>
           <Text type="secondary" style={{ fontSize: 12 }}>
             按 <code>{task?.objective_metric}</code> ({task?.objective_direction}) 排序
           </Text>
+          <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>策略：</Text>
+          <Select
+            size="small"
+            style={{ minWidth: 180 }}
+            value={runStrategyFilter}
+            onChange={setRunStrategyFilter}
+            options={runStrategyOptions}
+          />
+          {runStrategyFilter !== 'all' && (
+            <Button size="small" type="link" onClick={() => setRunStrategyFilter('all')}>
+              清除筛选
+            </Button>
+          )}
         </Space>
         <Button size="small" icon={<ReloadOutlined />} onClick={refreshAll} loading={lbLoading || runsLoading}>
           刷新

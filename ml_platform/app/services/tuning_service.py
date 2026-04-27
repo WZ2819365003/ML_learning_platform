@@ -1102,8 +1102,11 @@ async def _run_bayesian_search(
         task_type = task.task_type
 
     global_trial_no = 0
+    budget_exhausted = False
 
     for model_type in selected_models:
+        if budget_exhausted:
+            break
         template = tuning_defaults[model_type]
         dist_space = search_space.get(model_type) or (template.get("distribution") or {})
         if not dist_space:
@@ -1118,8 +1121,15 @@ async def _run_bayesian_search(
         )
 
         for trial_idx in range(n_trials_per_model):
+            # `max_trials` (when set) is the GLOBAL budget across all models.
+            # Use `n_trials_per_model` to control per-model trial count.
+            # We must `break` (not `return`) so the function still falls
+            # through to `_finalise_batch` below; otherwise the
+            # PlatformExperiment row is stranded in status=RUNNING even
+            # after every child run has reached SUCCESS/FAILED.
             if max_trials is not None and global_trial_no >= max_trials:
-                return
+                budget_exhausted = True
+                break
             global_trial_no += 1
             try:
                 trial = study.ask()
