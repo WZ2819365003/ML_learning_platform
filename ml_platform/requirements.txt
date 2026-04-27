@@ -1,3 +1,8 @@
+# PyTorch CPU wheels — kept off PyPI to avoid pulling 2GB GPU build by default.
+# Listed here (not in Dockerfile) so `pip install -r requirements.txt` works
+# locally and in CI without extra flags.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.36
@@ -28,3 +33,9 @@ requests==2.32.3
 matplotlib==3.9.2
 seaborn==0.13.2
 numpy==2.0.2
+
+# Deep learning — CPU-only build resolved via --extra-index-url above.
+# 2.6.0+cpu chosen because the +cpu local version naming on the PyTorch
+# CPU wheel index was dropped for 2.4.x/2.5.x and reintroduced at 2.6.0.
+# numpy 2.x compatible (matches our numpy==2.0.2). CPU wheel ~200 MB.
+torch==2.6.0+cpu

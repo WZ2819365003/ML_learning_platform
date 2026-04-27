@@ -82,6 +82,12 @@ async function uploadFreshClassificationDataset(request, targetColumn = DEFAULT_
  * responsible for `test.setTimeout(180_000)` since the run alone can take
  * up to 2 minutes on cold caches.
  */
+// DL tokens that the backend's model registry recognises. Kept tiny here so
+// the helper auto-flips model_family to 'dl' without callers needing to
+// remember (passing modelToken='mlp_dl' but model_family='ml' is rejected
+// by the create-plan endpoint with 422).
+const DL_TOKENS = new Set(['mlp_dl', 'lstm', 'cnn1d', 'transformer']);
+
 async function runBaselineFlow(request, opts = {}) {
   const {
     modelToken = DEFAULT_MODEL_TOKEN,
@@ -89,6 +95,7 @@ async function runBaselineFlow(request, opts = {}) {
     namePrefix = 'e2e',
     evalMetrics = ['accuracy', 'f1', 'roc_auc'],
     budget = { max_trials: 1, cv_folds: 3, test_size: 0.2 },
+    modelFamily = DL_TOKENS.has(modelToken) ? 'dl' : 'ml',
   } = opts;
 
   const dataset = await uploadFreshClassificationDataset(request, targetColumn);
@@ -98,7 +105,7 @@ async function runBaselineFlow(request, opts = {}) {
     description: 'playwright v3 release gate',
     task_type: 'classification',
     strategy_type: 'baseline',
-    model_family: 'ml',
+    model_family: modelFamily,
     selected_models: [modelToken],
     eval_metrics: evalMetrics,
     budget_config: budget,
@@ -126,7 +133,7 @@ async function runBaselineFlow(request, opts = {}) {
     search_space: {},
     budget_config: budget,
     eval_metrics: evalMetrics,
-    model_family: 'ml',
+    model_family: modelFamily,
   });
   expect(launch.ok, `launch failed: ${launch.status} ${launch.raw?.slice(0, 1000)}`).toBeTruthy();
 
