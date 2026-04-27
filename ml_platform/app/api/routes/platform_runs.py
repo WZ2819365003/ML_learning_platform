@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import (
     Dataset,
     ExperimentRun,
+    ExperimentRunLog,
     PlatformExperiment,
     PlatformTask,
     TrainingLog,
@@ -108,7 +109,10 @@ def _serialize_training_task(tt: TrainingTask, dataset: Dataset | None) -> dict[
     }
 
 
-def _serialize_log(log: TrainingLog) -> dict[str, Any]:
+def _serialize_log(log: TrainingLog | ExperimentRunLog) -> dict[str, Any]:
+    """Shape-compatible serializer for both legacy TrainingLog and V3-native
+    ExperimentRunLog rows — both expose level/message/extra/created_at.
+    """
     return {
         "level": log.level,
         "message": log.message,
@@ -163,6 +167,24 @@ async def inspect_run(
     training_task_payload: dict[str, Any] | None = None
     logs_payload: list[dict[str, Any]] = []
     resolved_log_task_id: str | None = None
+
+    # ---- V3 native logs (preferred path, since v3.3.0) --------------------
+    # `experiment_run_logs` is keyed by ExperimentRun.id and survives any
+    # `DELETE FROM training_tasks` (which would CASCADE-kill the legacy
+    # `training_logs` rows for this run).  We read here first; the legacy
+    # chain below stays as a fallback for runs older than v3.3.0 (mirror
+    # only started populating from that release on).
+    v3_log_rows = (
+        await db.execute(
+            select(ExperimentRunLog)
+            .where(ExperimentRunLog.run_id == run_id)
+            .order_by(ExperimentRunLog.created_at.asc())
+            .limit(log_limit)
+        )
+    ).scalars().all()
+    if v3_log_rows:
+        logs_payload = [_serialize_log(lg) for lg in v3_log_rows]
+        resolved_log_task_id = run_id
 
     if domain_task_id:
         tt = (

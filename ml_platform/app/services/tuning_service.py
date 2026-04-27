@@ -52,9 +52,11 @@ from app.core.model_registry import resolve_model_family
 from app.models.database import (
     DLTrainingTask,
     ExperimentRun,
+    ExperimentRunLog,
     ModelingTask,
     PlatformTask,
     PlatformExperiment,
+    TrainingLog,
     async_session_factory,
 )
 from app.scheduler.task_runner import (
@@ -861,6 +863,9 @@ async def _execute_single_trial(
             await update_run_metrics(db, run_id, metrics, status="SUCCESS")
             await db.commit()
         await update_platform_task_status(platform_task_id, "SUCCESS", metrics=metrics)
+        # Mirror legacy → V3 native logs so the Run Inspector keeps working
+        # even if the legacy training_tasks row is later purged (CASCADE).
+        await _mirror_logs_to_v3(domain_task_id=domain_task_id, run_id=run_id)
         return {"run_id": run_id, "status": "SUCCESS", "metrics": metrics}
     except Exception as exc:  # noqa: BLE001
         logger.error("Tuning trial %s failed: %s", run_id, exc, exc_info=True)
@@ -871,7 +876,61 @@ async def _execute_single_trial(
         except Exception:
             pass
         await update_platform_task_status(platform_task_id, "FAILED", error=str(exc))
+        # Even on failure: capture whatever logs the trainer wrote before it
+        # blew up — failure diagnosis is the inspector's primary job.
+        await _mirror_logs_to_v3(domain_task_id=domain_task_id, run_id=run_id)
         return {"run_id": run_id, "status": "FAILED"}
+
+
+async def _mirror_logs_to_v3(*, domain_task_id: str, run_id: str) -> None:
+    """Copy ``training_logs`` rows for a legacy task into ``experiment_run_logs``
+    keyed by V3 ``run_id``.
+
+    Called once per trial after the executor finishes (success or failure).
+    Idempotent: if there's already a row in experiment_run_logs for this
+    run_id, we skip — multiple calls for the same trial (e.g. retries) won't
+    duplicate.
+
+    Failures are swallowed and logged; observability data must never block a
+    successful (or failed) run from being committed.
+    """
+    try:
+        async with async_session_factory() as db:
+            # Skip if already mirrored — keeps this safe to call multiple times.
+            existing = (
+                await db.execute(
+                    select(ExperimentRunLog.id)
+                    .where(ExperimentRunLog.run_id == run_id)
+                    .limit(1)
+                )
+            ).first()
+            if existing is not None:
+                return
+
+            legacy_rows = (
+                await db.execute(
+                    select(TrainingLog)
+                    .where(TrainingLog.task_id == domain_task_id)
+                    .order_by(TrainingLog.created_at)
+                )
+            ).scalars().all()
+            if not legacy_rows:
+                return  # nothing to mirror — trainer wrote no DB logs
+
+            for ll in legacy_rows:
+                db.add(ExperimentRunLog(
+                    run_id=run_id,
+                    level=ll.level,
+                    message=ll.message,
+                    extra=ll.extra,
+                    created_at=ll.created_at,
+                ))
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to mirror logs to experiment_run_logs for run %s "
+            "(domain_task_id=%s): %s", run_id, domain_task_id, exc
+        )
 
 
 def _normalise_run_metrics(metrics: dict[str, Any]) -> dict[str, Any]:

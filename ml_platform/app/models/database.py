@@ -201,6 +201,47 @@ class TrainingLog(Base):
 
 
 # ---------------------------------------------------------------------------
+# ExperimentRunLog (V3 native) — keyed by ExperimentRun.id, not legacy task id.
+#
+# Why this exists in addition to `training_logs`:
+#   v3.2.x stored every V3 run's logs in `training_logs` because V3 reused
+#   the legacy `_run_training_sync` executor.  That created a fragile chain:
+#   inspector → ExperimentRun → PlatformTask.payload_ref="train:<legacy_id>"
+#   → training_tasks → training_logs.  A `DELETE FROM training_tasks` (which
+#   is a perfectly reasonable thing to do for cleanup) CASCADE-killed every
+#   V3 run's logs through the FK, leaving inspector returning logs=[].
+#
+# This table is the V3-native mirror.  After every V3 trial completes,
+# `_execute_single_trial` copies the legacy log rows here keyed by run_id.
+# Inspector now reads V3 native first, falls back to legacy only if empty.
+#
+# FK is to experiment_runs (V3), so deleting an ExperimentRun cascades its
+# logs.  Deleting training_tasks no longer affects V3-visible history.
+# ---------------------------------------------------------------------------
+
+class ExperimentRunLog(Base):
+    __tablename__ = "experiment_run_logs"
+    __table_args__ = (
+        Index("ix_experiment_run_logs_run_id", "run_id"),
+        Index("ix_experiment_run_logs_run_created", "run_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("experiment_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    level: Mapped[str] = mapped_column(String(16), nullable=False, default="INFO")
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    extra: Mapped[dict | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<ExperimentRunLog id={self.id!r} run_id={self.run_id[:8]!r} level={self.level!r}>"
+
+
+# ---------------------------------------------------------------------------
 # ModelDeployment
 # ---------------------------------------------------------------------------
 
