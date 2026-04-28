@@ -46,6 +46,17 @@ async function pickAntSelect(page, openLocator, optionText) {
 test('12.1 在 /training/config 提交 4 个不同 model × dataset 组合', async ({ page, request }) => {
   test.setTimeout(120_000);
 
+  // 自洁：清掉之前其他 spec (08/11/15) 上传的 e2e-predictive-maintenance-*.csv
+  // 残留。dataset Select 没有 showSearch，结果按最近上传排序；残留多了之后
+  // 真正想点的种子数据集 (diabetes.csv) 落在下拉折叠区点不到。这一步保证
+  // spec 12 在脏环境里也能跑过。
+  const allDatasets = await getJson(request, '/data/list?page=1&page_size=50');
+  for (const d of allDatasets.body?.items || []) {
+    if (typeof d.name === 'string' && d.name.startsWith('e2e-predictive-maintenance-')) {
+      await request.delete(`/api/data/${d.id}`).catch(() => {});
+    }
+  }
+
   // 抓初始 count，不假设是 0（后端可能已经有别的 task）
   const before = await getJson(request, '/training/list?page=1&page_size=50');
   const beforeCount = (before.body?.items || []).length;

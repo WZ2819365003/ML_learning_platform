@@ -67,6 +67,34 @@ if [ -z "${BODY:-}" ]; then
   fail "/health never returned 200"
 fi
 
+step "Restoring seeded dataset files (image-baked storage is wiped on rebuild)"
+# /app/storage/uploads lives inside the backend image (no shared volume),
+# so a `--no-cache` rebuild leaves it empty even though MySQL still has
+# Dataset rows pointing at hash-named CSVs.  Startup _seed_example_datasets
+# early-returns when any Dataset row exists, so we put the files back here.
+# No-op if they're already present.
+SEED_FILES=(
+  "0c11479d4a68-predictive_maintenance.csv|examples/data/predictive_maintenance.csv"
+  "518f51347f96-diabetes.csv|examples/data/diabetes.csv"
+  "5a1846755b6f-ETTh1.csv|examples/data/ETTh1.csv"
+)
+cd "$REPO_ROOT"
+for entry in "${SEED_FILES[@]}"; do
+  dest="${entry%%|*}"
+  src="${entry##*|}"
+  # Test whether file is already in the volume — skip the docker cp roundtrip.
+  if docker exec ml_platform_backend test -f "/app/storage/uploads/$dest"; then
+    continue
+  fi
+  if [ ! -f "$src" ]; then
+    warn "missing source $src — skipping"
+    continue
+  fi
+  docker cp "$src" "ml_platform_backend:/app/storage/uploads/$dest"
+  ok "restored $dest"
+done
+cd "$COMPOSE_DIR"
+
 step "Waiting for frontend (max 60s)"
 for i in $(seq 1 30); do
   if curl -sf --max-time 3 http://127.0.0.1:3000 >/dev/null 2>&1; then

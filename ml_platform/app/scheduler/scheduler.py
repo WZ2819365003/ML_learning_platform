@@ -28,6 +28,46 @@ Phase 5 additions
   orphaned.
 * ``get_scheduler()`` chooses Celery vs InProcess based on
   ``settings.scheduler_mode``.  Tests always run InProcess.
+
+⚠ TECH DEBT — Scheduler abstraction is bypassed in production hot paths
+=======================================================================
+As of v3.3.0 the only caller that actually goes through ``get_scheduler()``
+→ ``dispatch_platform_task`` is ``POST /api/platform/tasks/{id}/retry``.
+Every primary submission path takes a shortcut and runs the executor
+inline as ``asyncio.create_task(...)`` inside the FastAPI process:
+
+    Path                                         Where it bypasses the scheduler
+    ------------------------------------------   -------------------------------------
+    POST /api/training/start (legacy ML)         training_service.py — bg_task = asyncio.create_task(_execute_training)
+    POST /api/v3/tasks/{id}/experiments (V3)     tuning_service.py — asyncio.create_task(_run_concurrent_batch)
+    POST /api/dl/train                           dl_service.py — bg = asyncio.create_task(_execute_dl_training)
+    POST /api/platform/tasks (manual create)     asyncio.create_task on accept
+    _schedule_shap_for_top_runs (auto-SHAP)      asyncio.create_task
+
+Consequences:
+  - SCHEDULER_MODE=celery is effectively a no-op for normal use; an attached
+    worker container would only execute tasks submitted via the retry route.
+  - A backend restart kills every in-flight training run.
+  - GPU/CPU-heavy work still blocks the FastAPI event loop for its duration.
+
+The proper fix is non-trivial (estimated 5–8 days, see doc/TECH_DEBT.md):
+  1. Replace each ``asyncio.create_task(executor(...))`` with
+     ``await get_scheduler().submit(platform_task_id)``.
+  2. Make ``_execute_single_trial`` purely orchestrate (no inline ``await
+     executor(...)``); rely on Celery callbacks to update ExperimentRun /
+     PlatformExperiment when each trial finishes.
+  3. Bayesian search uses Optuna's in-memory study which assumes a single
+     process — the study state must be moved to RDBStorage (MySQL) so that
+     trials dispatched to different workers see prior results.
+  4. Update mirror logic in ``tuning_service._mirror_logs_to_v3`` (added in
+     v3.3.0) — currently called inline after ``await executor(...)`` returns;
+     after the refactor it has to fire from a Celery success callback.
+  5. Every Playwright milestone gate spec assumes synchronous in-process
+     completion (4 s baseline turnaround).  After Celery is wired in,
+     specs need polling + longer timeouts.
+
+Until that work is scheduled, do not enable SCHEDULER_MODE=celery in
+production — it adds operational complexity without functional benefit.
 """
 from __future__ import annotations
 
