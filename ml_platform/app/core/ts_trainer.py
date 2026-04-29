@@ -62,3 +62,51 @@ class BaseTSTrainer(ABC):
     @classmethod
     @abstractmethod
     def load(cls, path: Path) -> "BaseTSTrainer": ...
+
+
+import joblib
+
+
+class ARIMATrainer(BaseTSTrainer):
+    name = "arima"
+    supports_intervals = True
+    supports_exogenous = True
+
+    def __init__(self):
+        self._fitted = None
+        self._meta: TSMeta | None = None
+
+    def fit(self, train_df, meta, params):
+        from statsmodels.tsa.arima.model import ARIMA
+        order = (int(params.get("p", 1)), int(params.get("d", 1)), int(params.get("q", 1)))
+        seasonal_p = int(params.get("seasonal_periods", 0))
+        seasonal_order = (1, 1, 1, seasonal_p) if seasonal_p > 0 else (0, 0, 0, 0)
+        y = train_df[meta.target_col].to_numpy()
+        exog = None
+        if meta.exogenous_cols:
+            exog = train_df[meta.exogenous_cols].to_numpy()
+        self._fitted = ARIMA(y, exog=exog, order=order, seasonal_order=seasonal_order).fit()
+        self._meta = meta
+
+    def predict(self, horizon, exog=None):
+        fc = self._fitted.get_forecast(steps=horizon, exog=exog)
+        mean = np.asarray(fc.predicted_mean)
+        intervals: dict[int, tuple] = {}
+        for level in (self._meta.interval_levels if self._meta else [80, 95]):
+            alpha = 1.0 - level / 100.0
+            ci = fc.conf_int(alpha=alpha)
+            arr = ci if hasattr(ci, "shape") else ci.values
+            arr = np.asarray(arr)
+            intervals[level] = (arr[:, 0], arr[:, 1])
+        return ForecastResult(mean=mean, intervals=intervals)
+
+    def save(self, path):
+        joblib.dump({"fitted": self._fitted, "meta": self._meta}, path)
+
+    @classmethod
+    def load(cls, path):
+        data = joblib.load(path)
+        t = cls()
+        t._fitted = data["fitted"]
+        t._meta = data["meta"]
+        return t
