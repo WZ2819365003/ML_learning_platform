@@ -28,6 +28,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import joblib
@@ -138,7 +139,7 @@ class TaskFacade:
 _MODEL_EXTENSIONS = (".joblib", ".pt", ".json")
 
 
-def _find_model_file(models_dir, base_id: str):
+def _find_model_file(models_dir: Path, base_id: str) -> tuple[Path, str] | tuple[None, None]:
     """Search storage/models/ for {base_id}.{joblib,pt,json} — first match wins.
 
     Returns (Path, ext) or (None, None) if no candidate exists.

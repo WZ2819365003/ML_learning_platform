@@ -704,7 +704,8 @@ async def _persist_trials(
     """Create domain task + ExperimentRun + PlatformTask for each trial.
 
     ML trials create a ``TrainingTask`` + ``PlatformTask(kind='train')``;
-    DL trials create a ``DLTrainingTask`` + ``PlatformTask(kind='dl_train')``.
+    DL trials create a ``DLTrainingTask`` + ``PlatformTask(kind='dl_train')``;
+    TS trials reuse the ``TrainingTask`` shape as a stub domain record (no ``TSTrainingTask`` ORM yet, see M6) + ``PlatformTask(kind='ts_train')``.
     The run's ``params['family']`` is set so the concurrent executor can
     dispatch to the right service.
     """
@@ -730,6 +731,12 @@ async def _persist_trials(
             # M2 stub: reuse TrainingTask as domain record; full TSTrainingTask arrives in M6.
             # The ts_train executor (registered by ts_service) receives this payload_ref
             # and will raise NotImplementedError until M6/Task 18 fills in the real impl.
+            # ⚠️ M6 IMPLEMENTER NOTE: create_training_task_record() validates model_type
+            # against trainer.list_available_models(), which knows only ml/dl tokens —
+            # arima/ets/lstm_forecaster/tcn_forecaster/timesfm_1 will hit the 400 guard.
+            # Either bypass with a direct TrainingTask insert, or extend the availability
+            # check to be family-aware. Currently dormant: ts_service.run_ts_executor
+            # raises NotImplementedError before persistence runs in practice.
             domain_task = await create_training_task_record(
                 db,
                 {
