@@ -39,3 +39,4 @@ numpy==2.0.2
 # CPU wheel index was dropped for 2.4.x/2.5.x and reintroduced at 2.6.0.
 # numpy 2.x compatible (matches our numpy==2.0.2). CPU wheel ~200 MB.
 torch==2.6.0+cpu
+statsmodels==0.14.4
