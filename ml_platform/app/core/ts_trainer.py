@@ -39,9 +39,12 @@ class ForecastResult:
 
 
 class BaseTSTrainer(ABC):
-    """Every ts family trainer must satisfy this contract."""
+    """Every ts family trainer must satisfy this contract.
 
-    name: str
+    Subclasses MUST override `name` with the registry token (e.g., "arima").
+    """
+
+    name: str = ""  # subclasses must override with the registry token
     supports_intervals: bool = False
     supports_exogenous: bool = False
 

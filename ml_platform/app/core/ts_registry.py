@@ -138,9 +138,10 @@ def list_available_models() -> list[dict]:
         avail = True
         check = m.get("availability_check")
         if check == "timesfm_env":
-            venv_python = (
-                Path(__file__).parent.parent.parent / "timesfm_env" / "Scripts" / "python.exe"
-            )
+            venv_root = Path(__file__).parent.parent.parent / "timesfm_env"
+            venv_python = venv_root / "Scripts" / "python.exe"  # Windows
+            if not venv_python.exists():
+                venv_python = venv_root / "bin" / "python"       # Linux/macOS
             avail = venv_python.exists()
         out.append({**m, "available": avail})
     return out

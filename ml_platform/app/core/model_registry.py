@@ -12,7 +12,7 @@ No imports from other app modules — pure data.
 from __future__ import annotations
 from typing import Any, Literal
 
-TaskType = Literal["classification", "regression"]
+from app.models.schemas import TaskType  # re-exported for backward compat
 ParamType = Literal["int", "float", "str", "bool", "list"]
 
 
