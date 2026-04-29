@@ -161,3 +161,99 @@ class ETSTrainer(BaseTSTrainer):
         t._fitted = data["fitted"]
         t._meta = data["meta"]
         return t
+
+
+class LSTMForecasterTrainer(BaseTSTrainer):
+    name = "lstm_forecaster"
+    supports_intervals = False
+    supports_exogenous = True
+
+    def __init__(self):
+        self._model = None
+        self._meta: TSMeta | None = None
+        self._x_last: np.ndarray | None = None
+        self._params: dict[str, Any] | None = None
+
+    @staticmethod
+    def _build_windows(values: np.ndarray, lookback: int, horizon: int):
+        """Slide (lookback+horizon) windows; target at column 0."""
+        xs, ys = [], []
+        for i in range(len(values) - lookback - horizon + 1):
+            xs.append(values[i : i + lookback])
+            ys.append(values[i + lookback : i + lookback + horizon, 0])
+        return np.asarray(xs), np.asarray(ys)
+
+    def fit(self, train_df, meta, params):
+        import torch
+        from torch.utils.data import DataLoader, TensorDataset
+        from app.core.dl_models.lstm_forecaster import LSTMForecaster
+
+        cols = [meta.target_col] + meta.exogenous_cols
+        values = train_df[cols].to_numpy(dtype=np.float32)
+        X, Y = self._build_windows(values, meta.lookback, meta.horizon)
+        if len(X) == 0:
+            raise ValueError(
+                f"Not enough rows ({len(values)}) for lookback={meta.lookback}+horizon={meta.horizon}"
+            )
+
+        self._model = LSTMForecaster(
+            input_size=len(cols),
+            hidden_size=int(params["hidden_size"]),
+            num_layers=int(params["num_layers"]),
+            horizon=meta.horizon,
+            dropout=float(params.get("dropout", 0.1)),
+        )
+        opt = torch.optim.Adam(self._model.parameters(), lr=float(params["learning_rate"]))
+        loss_fn = torch.nn.MSELoss()
+        ds = TensorDataset(torch.from_numpy(X), torch.from_numpy(Y))
+        dl = DataLoader(ds, batch_size=int(params["batch_size"]), shuffle=True)
+
+        self._model.train()
+        for _ in range(int(params["epochs"])):
+            for xb, yb in dl:
+                opt.zero_grad()
+                pred = self._model(xb)
+                loss = loss_fn(pred, yb)
+                loss.backward()
+                opt.step()
+
+        self._meta = meta
+        self._params = params
+        self._x_last = values[-meta.lookback:]
+
+    def predict(self, horizon, exog=None):
+        import torch
+        self._model.eval()
+        with torch.no_grad():
+            x = torch.from_numpy(self._x_last).unsqueeze(0)
+            out = self._model(x).cpu().numpy()[0]
+        return ForecastResult(mean=out[:horizon], intervals=None)
+
+    def save(self, path):
+        import torch
+        torch.save({
+            "state_dict": self._model.state_dict(),
+            "meta": self._meta,
+            "params": self._params,
+            "x_last": self._x_last,
+            "input_size": self._model.lstm.input_size,
+        }, path)
+
+    @classmethod
+    def load(cls, path):
+        import torch
+        from app.core.dl_models.lstm_forecaster import LSTMForecaster
+        data = torch.load(path, weights_only=False)
+        t = cls()
+        t._meta = data["meta"]
+        t._params = data["params"]
+        t._x_last = data["x_last"]
+        t._model = LSTMForecaster(
+            input_size=data["input_size"],
+            hidden_size=int(t._params["hidden_size"]),
+            num_layers=int(t._params["num_layers"]),
+            horizon=t._meta.horizon,
+            dropout=float(t._params.get("dropout", 0.1)),
+        )
+        t._model.load_state_dict(data["state_dict"])
+        return t
