@@ -58,6 +58,7 @@ from app.models.database import (
     PlatformTask,
     PlatformExperiment,
     TrainingLog,
+    TrainingTask,
     async_session_factory,
 )
 from app.scheduler.task_runner import (
@@ -728,26 +729,19 @@ async def _persist_trials(
             kind = "dl_train"
             payload_ref = f"dl_train:{domain_task.id}"
         elif family == "ts":
-            # M2 stub: reuse TrainingTask as domain record; full TSTrainingTask arrives in M6.
-            # The ts_train executor (registered by ts_service) receives this payload_ref
-            # and will raise NotImplementedError until M6/Task 18 fills in the real impl.
-            # ⚠️ M6 IMPLEMENTER NOTE: create_training_task_record() validates model_type
-            # against trainer.list_available_models(), which knows only ml/dl tokens —
-            # arima/ets/lstm_forecaster/tcn_forecaster/timesfm_1 will hit the 400 guard.
-            # Either bypass with a direct TrainingTask insert, or extend the availability
-            # check to be family-aware. Currently dormant: ts_service.run_ts_executor
-            # raises NotImplementedError before persistence runs in practice.
-            domain_task = await create_training_task_record(
-                db,
-                {
-                    "dataset_id": task.dataset_id,
-                    "model_type": trial["model_type"],
-                    "target_column": task.target_column,
-                    "hyperparameters": trial["hyperparameters"],
-                    "test_size": test_size,
-                    "cv_folds": cv_folds,
-                    "eval_metrics": eval_metrics,
-                },
+            # M6/Task 18 Option A fix: bypass create_training_task_record() validation
+            # (which only knows ML/DL tokens) by inserting a TrainingTask stub directly.
+            # Now uses _create_ts_training_task_record — symmetric with the DL helper.
+            domain_task = await _create_ts_training_task_record(
+                db=db,
+                dataset_id=task.dataset_id,
+                target_column=task.target_column or "y",
+                task_type=task.task_type,
+                model_type=trial["model_type"],
+                config=trial["hyperparameters"],
+                test_size=test_size,
+                cv_folds=cv_folds,
+                eval_metrics=eval_metrics,
             )
             kind = "ts_train"
             payload_ref = f"ts_train:{domain_task.id}"
@@ -840,6 +834,50 @@ async def _create_dl_training_task_record(
     await db.flush()
     await db.refresh(task)
     return task
+
+
+async def _create_ts_training_task_record(
+    *,
+    db: AsyncSession,
+    dataset_id: str,
+    target_column: str,
+    task_type: str,
+    model_type: str,
+    config: dict[str, Any],
+    test_size: float,
+    cv_folds: int = 5,
+    eval_metrics: list[str] | None = None,
+) -> TrainingTask:
+    """Create a TrainingTask stub row for a ts family trial without validation.
+
+    Mirrors ``_create_dl_training_task_record`` but inserts a ``TrainingTask``
+    row directly (bypassing ``create_training_task_record``'s model-type guard,
+    which only knows ML/DL tokens and would reject arima/ets/etc.).
+
+    The returned row serves as the domain stub referenced by
+    ``PlatformTask.payload_ref = "ts_train:{id}"``.  The ts executor
+    (``ts_service.run_ts_executor``) locates the active ``ExperimentRun`` via
+    ``ExperimentRun.task_id == platform_task_id`` and does not use this stub
+    row directly — it is kept for auditability and symmetry with the ML/DL path.
+    """
+    import uuid as _uuid_mod
+
+    short_id = str(_uuid_mod.uuid4())[:8]
+    stub = TrainingTask(
+        name=f"{model_type}_{short_id}",
+        dataset_id=dataset_id,
+        model_type=model_type,
+        target_column=target_column,
+        hyperparameters=dict(config) if config else {},
+        test_size=float(test_size),
+        cv_folds=int(cv_folds),
+        eval_metrics=list(eval_metrics) if eval_metrics else [],
+        status="PENDING",
+    )
+    db.add(stub)
+    await db.flush()
+    await db.refresh(stub)
+    return stub
 
 
 # ---------------------------------------------------------------------------
