@@ -110,3 +110,52 @@ class ARIMATrainer(BaseTSTrainer):
         t._fitted = data["fitted"]
         t._meta = data["meta"]
         return t
+
+
+class ETSTrainer(BaseTSTrainer):
+    name = "ets"
+    supports_intervals = True
+    supports_exogenous = False
+
+    def __init__(self):
+        self._fitted = None
+        self._meta: TSMeta | None = None
+
+    def fit(self, train_df, meta, params):
+        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+        trend = params.get("trend", "add")
+        seasonal = params.get("seasonal", "none")
+        seasonal_p = int(params.get("seasonal_periods", 0))
+        kwargs = {}
+        if trend != "none":
+            kwargs["trend"] = trend
+        if seasonal != "none" and seasonal_p > 0:
+            kwargs["seasonal"] = seasonal
+            kwargs["seasonal_periods"] = seasonal_p
+        y = train_df[meta.target_col].to_numpy()
+        self._fitted = ExponentialSmoothing(y, **kwargs).fit()
+        self._meta = meta
+
+    def predict(self, horizon, exog=None):
+        from scipy.stats import norm
+        mean = np.asarray(self._fitted.forecast(steps=horizon))
+        # ExponentialSmoothing has no built-in CI; approximate via residual std.
+        resid = self._fitted.resid
+        sigma = float(np.std(resid)) if len(resid) else 0.0
+        intervals: dict[int, tuple] = {}
+        for level in (self._meta.interval_levels if self._meta else [80, 95]):
+            z = norm.ppf(0.5 + level / 200.0)
+            half = z * sigma
+            intervals[level] = (mean - half, mean + half)
+        return ForecastResult(mean=mean, intervals=intervals)
+
+    def save(self, path):
+        joblib.dump({"fitted": self._fitted, "meta": self._meta}, path)
+
+    @classmethod
+    def load(cls, path):
+        data = joblib.load(path)
+        t = cls()
+        t._fitted = data["fitted"]
+        t._meta = data["meta"]
+        return t
