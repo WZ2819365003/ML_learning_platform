@@ -49,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dl_registry import build_default_dl_config, get_dl_model_spec
 from app.core.model_registry import resolve_model_family
+from app.core.ts_registry import get_ts_model_spec
 from app.models.database import (
     DLTrainingTask,
     ExperimentRun,
@@ -286,6 +287,7 @@ async def dispatch_experiment_batch(
     # belongs to neither registry is rejected.
     ml_models: list[str] = []
     dl_models: list[str] = []
+    ts_models: list[str] = []
     unknown_models: list[str] = []
     for token in selected_models:
         family = resolve_model_family(token)
@@ -300,6 +302,12 @@ async def dispatch_experiment_batch(
                 unknown_models.append(token)
             else:
                 dl_models.append(token)
+        elif family == "ts":
+            spec = get_ts_model_spec(token)
+            if spec is None or task_type not in spec.get("task_types", []):
+                unknown_models.append(token)
+            else:
+                ts_models.append(token)
         else:
             unknown_models.append(token)
     if unknown_models:
@@ -317,6 +325,15 @@ async def dispatch_experiment_batch(
             detail=(
             "Deep-learning models are currently supported in baseline batches only. "
                 f"Remove from {strategy_type}: {dl_models}"
+            ),
+        )
+
+    if strategy_type != "baseline" and ts_models:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Time-series models are currently supported in baseline batches only. "
+                f"Remove from {strategy_type}: {ts_models}"
             ),
         )
 
@@ -360,6 +377,9 @@ async def dispatch_experiment_batch(
     # DL trials are always baseline in Phase 1; non-baseline strategies with DL
     # tokens have already failed fast above.
     dl_trials = _expand_dl_baseline(dl_models, dl_config or {}, task_type)
+    # TS trials are likewise baseline-only in Phase 1 (M2); the guard above
+    # ensures non-baseline strategies never reach this point with ts_models.
+    ts_trials = _expand_ts_baseline(ts_models, task_type)
 
     if strategy_type == "baseline":
         # ``_expand_baseline`` is family-aware so a single call covers both
@@ -378,7 +398,9 @@ async def dispatch_experiment_batch(
         _launch_concurrent(exp.id, modeling_task_id)
     elif strategy_type == "grid_search":
         ml_trials = _expand_grid_search(ml_models, tuning_defaults, search_space, max_trials)
-        trials = ml_trials + _renumber_trials(dl_trials, start=len(ml_trials) + 1)
+        dl_numbered = _renumber_trials(dl_trials, start=len(ml_trials) + 1)
+        ts_numbered = _renumber_trials(ts_trials, start=len(ml_trials) + len(dl_numbered) + 1)
+        trials = ml_trials + dl_numbered + ts_numbered
         total_trials = len(trials)
         if total_trials == 0:
             raise HTTPException(
@@ -389,12 +411,13 @@ async def dispatch_experiment_batch(
         await db.commit()
         _launch_concurrent(exp.id, modeling_task_id)
     elif strategy_type == "bayesian_search":
-        # ML part runs bayesian; DL part runs baseline concurrently (persisted now).
-        if dl_trials:
-            await _persist_trials(db, exp, task, dl_trials, eval_metrics, test_size=test_size, cv_folds=cv_folds)
-        total_trials = _count_bayesian_trials(ml_models, budget_config, max_trials) + len(dl_trials)
+        # ML part runs bayesian; DL+TS parts run baseline concurrently (persisted now).
+        non_ml_trials = dl_trials + _renumber_trials(ts_trials, start=len(dl_trials) + 1)
+        if non_ml_trials:
+            await _persist_trials(db, exp, task, non_ml_trials, eval_metrics, test_size=test_size, cv_folds=cv_folds)
+        total_trials = _count_bayesian_trials(ml_models, budget_config, max_trials) + len(non_ml_trials)
         await db.commit()
-        if dl_trials:
+        if non_ml_trials:
             _launch_concurrent(exp.id, modeling_task_id)
         if ml_models:
             _launch_bayesian(
@@ -522,6 +545,20 @@ def _expand_baseline(
                 "search_meta": {"strategy": "baseline", "grid_index": None, "family": "dl"},
             })
             continue
+        elif family == "ts":
+            spec = get_ts_model_spec(model_type) or {}
+            per_model = overrides.get(model_type) or {}
+            # Build default hyperparameters from registry param defaults.
+            defaults = {p["name"]: p["default"] for p in spec.get("params", []) if "default" in p}
+            hyperparameters = {**defaults, **per_model}
+            trials.append({
+                "family": "ts",
+                "model_type": model_type,
+                "hyperparameters": hyperparameters,
+                "trial_no": idx,
+                "search_meta": {"strategy": "baseline", "grid_index": None, "family": "ts"},
+            })
+            continue
 
         template = tuning_defaults.get(model_type) or {}
         params = dict(template.get("fixed") or {})
@@ -550,10 +587,13 @@ def _expand_grid_search(
     trial_no = 0
 
     for model_type in selected_models:
-        template = tuning_defaults[model_type]
-        family = template.get("family", "ml")
+        template = tuning_defaults.get(model_type) or {}
+        family = template.get("family") or resolve_model_family(model_type) or "ml"
         if family == "dl":
             logger.warning("Grid search: DL model %s is baseline-only, skipping", model_type)
+            continue
+        elif family == "ts":
+            logger.warning("Grid search: TS model %s is baseline-only, skipping", model_type)
             continue
         user_grid = search_space.get(model_type) or {}
         # Use user grid if present, otherwise fall back to registry defaults.
@@ -607,6 +647,25 @@ def _expand_dl_baseline(
         overrides=dl_config or {},
     )
     # Tag task_type for downstream DL trainer selection (classification / regression).
+    return [{**t, "_task_type": task_type} for t in trials]
+
+
+def _expand_ts_baseline(
+    ts_models: list[str],
+    task_type: str,
+) -> list[dict[str, Any]]:
+    """One trial per TS model using registry param defaults.
+
+    Mirrors ``_expand_dl_baseline`` — emits trials with ``family='ts'`` so
+    ``_persist_trials`` creates a ``PlatformTask(kind='ts_train')``.
+    Full trainer execution arrives in M6/Task 18.
+    """
+    trials = _expand_baseline(
+        selected_models=list(ts_models),
+        tuning_defaults={},
+        overrides={},
+    )
+    # Tag task_type for downstream TS trainer selection.
     return [{**t, "_task_type": task_type} for t in trials]
 
 
@@ -667,6 +726,24 @@ async def _persist_trials(
             )
             kind = "dl_train"
             payload_ref = f"dl_train:{domain_task.id}"
+        elif family == "ts":
+            # M2 stub: reuse TrainingTask as domain record; full TSTrainingTask arrives in M6.
+            # The ts_train executor (registered by ts_service) receives this payload_ref
+            # and will raise NotImplementedError until M6/Task 18 fills in the real impl.
+            domain_task = await create_training_task_record(
+                db,
+                {
+                    "dataset_id": task.dataset_id,
+                    "model_type": trial["model_type"],
+                    "target_column": task.target_column,
+                    "hyperparameters": trial["hyperparameters"],
+                    "test_size": test_size,
+                    "cv_folds": cv_folds,
+                    "eval_metrics": eval_metrics,
+                },
+            )
+            kind = "ts_train"
+            payload_ref = f"ts_train:{domain_task.id}"
         else:
             domain_task = await create_training_task_record(
                 db,
