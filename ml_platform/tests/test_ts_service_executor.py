@@ -187,6 +187,9 @@ async def test_ts_executor_arima_end_to_end(tmp_path: Path) -> None:
     assert "coverage_80" in m, (
         f"Expected ARIMA interval coverage_80 in metrics, got: {list(m.keys())}"
     )
+    assert 0.0 <= m["coverage_80"] <= 1.0, f"coverage_80={m['coverage_80']} out of [0, 1]"
+    assert "coverage_95" in m
+    assert 0.0 <= m["coverage_95"] <= 1.0, f"coverage_95={m['coverage_95']} out of [0, 1]"
 
     assert "artifacts" in result
     assert "model_path" in result["artifacts"]

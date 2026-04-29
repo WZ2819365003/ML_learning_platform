@@ -84,14 +84,20 @@ def _resolve_extension(token: str) -> str:
 
 
 def _resolve_ts_config(run: ExperimentRun, mtask: ModelingTask | None) -> dict:
-    """
-    Extract the time_series config dict from available sources in priority order:
+    """Resolve the time-series config dict from one of two sources.
 
-    1. run.params["time_series"]  — set by the API / test fixture directly on the run
-    2. mtask.config["time_series"] — set on the ModelingTask at creation time
-    3. mtask.training_plan_snapshot["payload"]["time_series"] — frozen snapshot
+    Resolution order:
+      1. run.params['time_series'] — primary path; populated by tuning_service._persist_trials
+         when family == 'ts'.
+      2. mtask.config['time_series'] — direct read from ModelingTask.config (the canonical
+         per-task forecasting metadata).
 
-    Raises RuntimeError if no config is found.
+    A previous tier reading from `mtask.training_plan_snapshot["payload"]["time_series"]`
+    was removed because TrainingPlan has no `payload` column — the snapshot mirrors the
+    plan row's actual columns (selected_models, search_space, dl_config, budget_config),
+    none of which carry ts metadata.
+
+    Raises RuntimeError if both sources are absent.
     """
     # 1. Directly on run params
     run_params = run.params or {}
@@ -109,17 +115,10 @@ def _resolve_ts_config(run: ExperimentRun, mtask: ModelingTask | None) -> dict:
     if mtask_config.get("time_series"):
         return dict(mtask_config["time_series"])
 
-    # 3. On ModelingTask.training_plan_snapshot
-    snapshot = mtask.training_plan_snapshot or {}
-    snap_payload = snapshot.get("payload") or {}
-    if snap_payload.get("time_series"):
-        return dict(snap_payload["time_series"])
-
     raise RuntimeError(
         f"No time_series config found for ExperimentRun {run.id!r}. "
-        "Expected one of: run.params['time_series'], "
-        "ModelingTask.config['time_series'], or "
-        "ModelingTask.training_plan_snapshot['payload']['time_series']."
+        "Expected one of: run.params['time_series'] or "
+        "ModelingTask.config['time_series']."
     )
 
 
@@ -265,6 +264,8 @@ async def run_ts_executor(domain_id: str, platform_task_id: str) -> dict[str, An
         "rmse":  rmse(y_true, y_pred),
         "mape":  mape(y_true, y_pred),
         "smape": smape(y_true, y_pred),
+        # MASE with season=1 — non-seasonal naive baseline. M6 scope; seasonal MASE
+        # (using freq + seasonal_periods to pick the right season offset) is M7+ work.
         "mase":  mase(y_true, y_pred, train_y, season=1),
     }
 

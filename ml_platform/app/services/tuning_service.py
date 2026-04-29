@@ -40,7 +40,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from itertools import product
 from typing import Any
 
 from fastapi import HTTPException
