@@ -558,15 +558,24 @@ def list_all_models(
             if task_type and task_type not in m["task_types"]:
                 continue
             out.append({**m, "family": "dl"})
+    if family in (None, "ts"):
+        from app.core.ts_registry import TS_MODEL_REGISTRY
+        for m in TS_MODEL_REGISTRY:
+            if task_type and task_type not in m["task_types"]:
+                continue
+            out.append({**m, "family": "ts"})
     return out
 
 
 def resolve_model_family(model_id: str) -> str | None:
-    """Return 'ml', 'dl', or None if the model id is not in either registry."""
+    """Return 'ml', 'dl', 'ts', or None if the model id is not in any registry."""
     from app.core.dl_registry import get_dl_model_spec  # local import
+    from app.core.ts_registry import get_ts_model_spec  # local import
 
     if get_model_spec(model_id) is not None:
         return "ml"
     if get_dl_model_spec(model_id) is not None:
         return "dl"
+    if get_ts_model_spec(model_id) is not None:
+        return "ts"
     return None
