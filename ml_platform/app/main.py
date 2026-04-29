@@ -157,6 +157,7 @@ async def lifespan(app: FastAPI):
     import app.services.training_service  # noqa: F401
     import app.services.dl_service        # noqa: F401
     import app.services.explain_service   # noqa: F401
+    from app.services import ts_service   # noqa: F401  — register_executor side effect
     await _seed_tag_library()
     await _seed_example_datasets()
     await resume_unfinished_ts_tasks()
