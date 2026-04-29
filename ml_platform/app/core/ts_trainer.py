@@ -257,3 +257,95 @@ class LSTMForecasterTrainer(BaseTSTrainer):
         )
         t._model.load_state_dict(data["state_dict"])
         return t
+
+
+class TCNForecasterTrainer(BaseTSTrainer):
+    name = "tcn_forecaster"
+    supports_intervals = False
+    supports_exogenous = True
+
+    def __init__(self):
+        self._model = None
+        self._meta = None
+        self._x_last = None
+        self._params = None
+
+    # Reuse the LSTM trainer's static windowing logic (same direct multi-step shape)
+    _build_windows = staticmethod(LSTMForecasterTrainer._build_windows)
+
+    def fit(self, train_df, meta, params):
+        import torch
+        from torch.utils.data import DataLoader, TensorDataset
+        from app.core.dl_models.tcn_forecaster import TCNForecaster
+
+        cols = [meta.target_col] + meta.exogenous_cols
+        values = train_df[cols].to_numpy(dtype=np.float32)
+        X, Y = self._build_windows(values, meta.lookback, meta.horizon)
+        if len(X) == 0:
+            raise ValueError(
+                f"Not enough rows ({len(values)}) for lookback={meta.lookback}+horizon={meta.horizon}"
+            )
+
+        self._model = TCNForecaster(
+            input_size=len(cols),
+            channels=int(params["channels"]),
+            kernel_size=int(params["kernel_size"]),
+            num_layers=int(params["num_layers"]),
+            horizon=meta.horizon,
+            dropout=float(params.get("dropout", 0.1)),
+        )
+        opt = torch.optim.Adam(self._model.parameters(), lr=float(params["learning_rate"]))
+        loss_fn = torch.nn.MSELoss()
+        ds = TensorDataset(torch.from_numpy(X), torch.from_numpy(Y))
+        dl = DataLoader(ds, batch_size=int(params["batch_size"]), shuffle=True)
+
+        self._model.train()
+        for _ in range(int(params["epochs"])):
+            for xb, yb in dl:
+                opt.zero_grad()
+                pred = self._model(xb)
+                loss = loss_fn(pred, yb)
+                loss.backward()
+                opt.step()
+
+        self._meta = meta
+        self._params = params
+        self._x_last = values[-meta.lookback:]
+
+    def predict(self, horizon, exog=None):
+        import torch
+        self._model.eval()
+        with torch.no_grad():
+            x = torch.from_numpy(self._x_last).unsqueeze(0)
+            out = self._model(x).cpu().numpy()[0]
+        return ForecastResult(mean=out[:horizon], intervals=None)
+
+    def save(self, path):
+        import torch
+        torch.save({
+            "state_dict": self._model.state_dict(),
+            "meta": self._meta,
+            "params": self._params,
+            "x_last": self._x_last,
+            "input_size": self._model.tcn[0].conv1.in_channels,
+        }, path)
+
+    @classmethod
+    def load(cls, path):
+        import torch
+        from app.core.dl_models.tcn_forecaster import TCNForecaster
+        data = torch.load(path, weights_only=False)
+        t = cls()
+        t._meta = data["meta"]
+        t._params = data["params"]
+        t._x_last = data["x_last"]
+        t._model = TCNForecaster(
+            input_size=data["input_size"],
+            channels=int(t._params["channels"]),
+            kernel_size=int(t._params["kernel_size"]),
+            num_layers=int(t._params["num_layers"]),
+            horizon=t._meta.horizon,
+            dropout=float(t._params.get("dropout", 0.1)),
+        )
+        t._model.load_state_dict(data["state_dict"])
+        return t
