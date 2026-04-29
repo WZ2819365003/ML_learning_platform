@@ -223,6 +223,11 @@ class LSTMForecasterTrainer(BaseTSTrainer):
 
     def predict(self, horizon, exog=None):
         import torch
+        if self._meta is not None and horizon > self._meta.horizon:
+            raise ValueError(
+                f"Requested horizon={horizon} exceeds trained horizon={self._meta.horizon}. "
+                "Direct multi-step forecasters cannot extrapolate beyond their trained head."
+            )
         self._model.eval()
         with torch.no_grad():
             x = torch.from_numpy(self._x_last).unsqueeze(0)
@@ -243,6 +248,8 @@ class LSTMForecasterTrainer(BaseTSTrainer):
     def load(cls, path):
         import torch
         from app.core.dl_models.lstm_forecaster import LSTMForecaster
+        # weights_only=False: artifacts are written only by ts_service in this same
+        # process to storage/models/{run_id}.pt — no untrusted input crosses this boundary.
         data = torch.load(path, weights_only=False)
         t = cls()
         t._meta = data["meta"]
@@ -314,6 +321,11 @@ class TCNForecasterTrainer(BaseTSTrainer):
 
     def predict(self, horizon, exog=None):
         import torch
+        if self._meta is not None and horizon > self._meta.horizon:
+            raise ValueError(
+                f"Requested horizon={horizon} exceeds trained horizon={self._meta.horizon}. "
+                "Direct multi-step forecasters cannot extrapolate beyond their trained head."
+            )
         self._model.eval()
         with torch.no_grad():
             x = torch.from_numpy(self._x_last).unsqueeze(0)
@@ -327,13 +339,15 @@ class TCNForecasterTrainer(BaseTSTrainer):
             "meta": self._meta,
             "params": self._params,
             "x_last": self._x_last,
-            "input_size": self._model.tcn[0].conv1.in_channels,
+            "input_size": self._model.input_size,
         }, path)
 
     @classmethod
     def load(cls, path):
         import torch
         from app.core.dl_models.tcn_forecaster import TCNForecaster
+        # weights_only=False: artifacts are written only by ts_service in this same
+        # process to storage/models/{run_id}.pt — no untrusted input crosses this boundary.
         data = torch.load(path, weights_only=False)
         t = cls()
         t._meta = data["meta"]

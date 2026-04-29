@@ -34,6 +34,7 @@ class TCNForecaster(nn.Module):
     def __init__(self, input_size: int, channels: int, kernel_size: int,
                  num_layers: int, horizon: int, dropout: float = 0.1):
         super().__init__()
+        self.input_size = input_size
         layers = []
         prev = input_size
         for i in range(num_layers):
