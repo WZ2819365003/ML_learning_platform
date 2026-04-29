@@ -19,10 +19,19 @@ Executor lookup strategy (ts_service.run_ts_executor):
   2. Resolves ts config from run.params["time_series"].
   3. Resolves dataset_id from run.params["dataset_id"].
   4. Falls back to ExperimentRun.id == domain_id for synthetic test fixtures.
+
+Production propagation path (M6 Batch A fix):
+  tuning_service._persist_trials copies ModelingTask.config["time_series"] →
+  ExperimentRun.params["time_series"] for every ts trial, so the executor's
+  primary resolution path is always populated.  test_ts_executor_arima_end_to_end
+  mirrors both layers (mtask.config AND run.params["time_series"]) for clarity;
+  test_persist_trials_injects_ts_config_from_task exercises the propagation itself.
 """
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -82,11 +91,30 @@ async def test_ts_executor_arima_end_to_end(tmp_path: Path) -> None:
         await session.flush()
 
         # ── 3. ModelingTask ─────────────────────────────────────────────────
+        # In production, _persist_trials copies config["time_series"] into
+        # each ExperimentRun.params["time_series"].  We set both here so the
+        # fixture mirrors the production state after propagation.
+        _ts_config: dict[str, Any] = {
+            "timestamp_col": "ds",
+            "target_col": "y",
+            "series_id_col": None,
+            "exogenous_cols": [],
+            "freq": "D",
+            "horizon": 7,
+            "lookback": 14,
+            "validation": {
+                "method": "holdout",
+                "test_size": 7,
+                "step": 1,
+            },
+            "interval_levels": [80, 95],
+        }
         mtask = ModelingTask(
             name="ts-arima-executor-test-task",
             dataset_id=ds.id,          # plain String column, not FK
             task_type="forecasting",
             training_plan_id=plan.id,
+            config={"time_series": _ts_config},
         )
         session.add(mtask)
         await session.flush()
@@ -112,7 +140,8 @@ async def test_ts_executor_arima_end_to_end(tmp_path: Path) -> None:
 
         # ── 6. ExperimentRun ────────────────────────────────────────────────
         # task_id links to PlatformTask (column name is task_id, not platform_task_id).
-        # ts config lives in params["time_series"]; executor reads it from there.
+        # In production, _persist_trials populates params["time_series"] from
+        # mtask.config["time_series"].  This fixture mirrors that propagated state.
         run = ExperimentRun(
             experiment_id=exp.id,
             task_id=pt.id,
@@ -123,22 +152,8 @@ async def test_ts_executor_arima_end_to_end(tmp_path: Path) -> None:
                 "dataset_id": ds.id,
                 "target_column": "y",
                 "task_type": "forecasting",
-                # ts config so the executor can build TSMeta without TrainingPlan.payload
-                "time_series": {
-                    "timestamp_col": "ds",
-                    "target_col": "y",
-                    "series_id_col": None,
-                    "exogenous_cols": [],
-                    "freq": "D",
-                    "horizon": 7,
-                    "lookback": 14,
-                    "validation": {
-                        "method": "holdout",
-                        "test_size": 7,
-                        "step": 1,
-                    },
-                    "interval_levels": [80, 95],
-                },
+                # Propagated from mtask.config["time_series"] by _persist_trials.
+                "time_series": _ts_config,
             },
             status="QUEUED",
         )
@@ -179,3 +194,171 @@ async def test_ts_executor_arima_end_to_end(tmp_path: Path) -> None:
     # Model file should exist on disk
     model_path = Path(result["artifacts"]["model_path"])
     assert model_path.exists(), f"Model file not found at {model_path}"
+
+
+# ---------------------------------------------------------------------------
+# Unit test: _persist_trials propagates ts config from ModelingTask.config
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_persist_trials_injects_ts_config_from_task_config() -> None:
+    """Verify _persist_trials copies task.config['time_series'] → run.params['time_series'].
+
+    Production gap (M6 Batch A): before the fix, ts trials were dispatched
+    without run.params['time_series'], causing ts_service.run_ts_executor to
+    raise RuntimeError('No ts config found') in production.
+
+    This test patches the DB helpers so it can call _persist_trials directly
+    and inspect the ExperimentRun that gets constructed.
+    """
+    from app.services.tuning_service import _persist_trials
+
+    ts_config: dict[str, Any] = {
+        "timestamp_col": "ds",
+        "target_col": "y",
+        "series_id_col": None,
+        "exogenous_cols": [],
+        "freq": "D",
+        "horizon": 7,
+        "lookback": 14,
+        "validation": {"method": "holdout", "test_size": 7, "step": 1},
+        "interval_levels": [80, 95],
+    }
+
+    # Build a minimal ModelingTask stub (no DB needed).
+    task = MagicMock(spec=ModelingTask)
+    task.dataset_id = "ds-unit-test"
+    task.target_column = "y"
+    task.task_type = "forecasting"
+    task.config = {"time_series": ts_config}
+
+    # Build a minimal PlatformExperiment stub.
+    exp = MagicMock(spec=PlatformExperiment)
+    exp.id = "exp-unit-test"
+    exp.strategy_type = "baseline"
+
+    trial: dict[str, Any] = {
+        "family": "ts",
+        "model_type": "arima",
+        "hyperparameters": {"p": 1, "d": 1, "q": 1, "seasonal_periods": 0},
+        "trial_no": 1,
+        "search_meta": {},
+    }
+
+    # Stub domain task and platform task returned by helpers.
+    stub_domain_task = MagicMock()
+    stub_domain_task.id = "domain-task-unit-test"
+
+    stub_platform_task = MagicMock()
+    stub_platform_task.id = "platform-task-unit-test"
+
+    # Capture the ExperimentRun that gets add()ed to the session.
+    captured_runs: list[Any] = []
+
+    db = AsyncMock()
+
+    async def _fake_flush() -> None:
+        # After the first flush (after db.add(run)), we need run.id to be set.
+        for run in captured_runs:
+            if not hasattr(run, "_id_set"):
+                run.id = "run-unit-test"
+                run._id_set = True  # type: ignore[attr-defined]
+
+    db.flush = _fake_flush
+
+    async def _fake_refresh(obj: Any) -> None:
+        pass
+
+    db.refresh = _fake_refresh
+
+    def _fake_add(obj: Any) -> None:
+        if isinstance(obj, ExperimentRun):
+            captured_runs.append(obj)
+
+    db.add = _fake_add
+
+    with (
+        patch(
+            "app.services.tuning_service._create_ts_training_task_record",
+            new=AsyncMock(return_value=stub_domain_task),
+        ),
+        patch(
+            "app.services.tuning_service.register_domain_task",
+            new=AsyncMock(return_value=stub_platform_task),
+        ),
+    ):
+        await _persist_trials(
+            db=db,
+            exp=exp,
+            task=task,
+            trials=[trial],
+            eval_metrics=["mae", "rmse"],
+        )
+
+    assert len(captured_runs) == 1, "Expected exactly one ExperimentRun to be created"
+    run = captured_runs[0]
+
+    assert "time_series" in run.params, (
+        "_persist_trials must inject time_series into run.params for ts family"
+    )
+    assert run.params["time_series"] == ts_config, (
+        "run.params['time_series'] must equal task.config['time_series']"
+    )
+    assert run.params["family"] == "ts"
+    assert run.params["model_type"] == "arima"
+
+
+@pytest.mark.asyncio
+async def test_persist_trials_raises_422_when_ts_config_missing() -> None:
+    """_persist_trials must raise HTTPException(422) if task.config has no time_series."""
+    from fastapi import HTTPException
+
+    from app.services.tuning_service import _persist_trials
+
+    task = MagicMock(spec=ModelingTask)
+    task.dataset_id = "ds-unit-test"
+    task.target_column = "y"
+    task.task_type = "forecasting"
+    task.config = {}  # no "time_series" key — should trigger 422
+
+    exp = MagicMock(spec=PlatformExperiment)
+    exp.id = "exp-unit-test"
+    exp.strategy_type = "baseline"
+
+    trial: dict[str, Any] = {
+        "family": "ts",
+        "model_type": "arima",
+        "hyperparameters": {"p": 1, "d": 1, "q": 1, "seasonal_periods": 0},
+        "trial_no": 1,
+        "search_meta": {},
+    }
+
+    stub_domain_task = MagicMock()
+    stub_domain_task.id = "domain-task-unit-test"
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.flush = AsyncMock()
+    db.refresh = AsyncMock()
+
+    with (
+        patch(
+            "app.services.tuning_service._create_ts_training_task_record",
+            new=AsyncMock(return_value=stub_domain_task),
+        ),
+        patch(
+            "app.services.tuning_service.register_domain_task",
+            new=AsyncMock(return_value=MagicMock(id="pt-unit-test")),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _persist_trials(
+            db=db,
+            exp=exp,
+            task=task,
+            trials=[trial],
+            eval_metrics=["mae"],
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "time_series" in exc_info.value.detail

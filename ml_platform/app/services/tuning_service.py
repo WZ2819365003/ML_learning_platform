@@ -761,17 +761,38 @@ async def _persist_trials(
             kind = "train"
             payload_ref = f"train:{domain_task.id}"
 
+        # Build base run params shared across all families.
+        run_params: dict[str, Any] = {
+            "family": family,
+            "model_type": trial["model_type"],
+            "hyperparameters": trial["hyperparameters"],
+            "dataset_id": task.dataset_id,
+            "target_column": task.target_column,
+            "task_type": task.task_type,
+            "eval_metrics": eval_metrics,
+        }
+
+        # For ts family, propagate per-task forecasting metadata from
+        # ModelingTask.config["time_series"] into run.params so that
+        # ts_service.run_ts_executor can build TSMeta via its primary path
+        # (run.params["time_series"]) without re-querying the task.
+        if family == "ts":
+            ts_config = (task.config or {}).get("time_series")
+            if ts_config is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "ModelingTask.config['time_series'] is required for ts family "
+                        "experiments. Set timestamp_col, target_col, freq, horizon, "
+                        "lookback, validation, and interval_levels on the ModelingTask "
+                        "before dispatching a ts batch."
+                    ),
+                )
+            run_params["time_series"] = ts_config
+
         run = ExperimentRun(
             experiment_id=exp.id,
-            params={
-                "family": family,
-                "model_type": trial["model_type"],
-                "hyperparameters": trial["hyperparameters"],
-                "dataset_id": task.dataset_id,
-                "target_column": task.target_column,
-                "task_type": task.task_type,
-                "eval_metrics": eval_metrics,
-            },
+            params=run_params,
             status="PENDING",
             trial_no=trial["trial_no"],
             search_meta=trial["search_meta"],
