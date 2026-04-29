@@ -94,8 +94,22 @@ def is_regressor(model_type: str | None) -> bool:
     return lower.endswith("_regressor") or lower.endswith("_regression")
 
 
+FORECASTER_TOKENS: set[str] = {
+    "arima", "ets", "lstm_forecaster", "tcn_forecaster", "timesfm_1",
+}
+
+
+def is_forecaster(model_type: str | None) -> bool:
+    """True if model_type is one of the ts family tokens."""
+    if not model_type:
+        return False
+    return model_type.lower() in FORECASTER_TOKENS
+
+
 def task_kind_for(model_type: str | None) -> str:
-    """Return 'classification' or 'regression' for `model_type`."""
+    """Return 'classification' | 'regression' | 'forecasting'."""
+    if is_forecaster(model_type):
+        return "forecasting"
     return "regression" if is_regressor(model_type) else "classification"
 
 
@@ -120,6 +134,20 @@ class TaskFacade:
 # ---------------------------------------------------------------------------
 # Raw on-disk helpers — reused across resolver + shap_service
 # ---------------------------------------------------------------------------
+
+_MODEL_EXTENSIONS = (".joblib", ".pt", ".json")
+
+
+def _find_model_file(models_dir, base_id: str):
+    """Search storage/models/ for {base_id}.{joblib,pt,json} — first match wins.
+
+    Returns (Path, ext) or (None, None) if no candidate exists.
+    """
+    for ext in _MODEL_EXTENSIONS:
+        candidate = models_dir / f"{base_id}{ext}"
+        if candidate.exists():
+            return candidate, ext
+    return None, None
 
 
 def load_model(model_path: str):
@@ -347,9 +375,9 @@ async def synthesize_facade_from_run(
 
     model_path: str | None = None
     for cid in candidate_ids:
-        candidate = settings.storage_models / f"{cid}.joblib"
-        if candidate.exists():
-            model_path = f"storage/models/{cid}.joblib"
+        candidate, ext = _find_model_file(settings.storage_models, cid)
+        if candidate:
+            model_path = f"storage/models/{cid}{ext}"
             break
 
     exp = (await db.execute(
@@ -408,8 +436,8 @@ async def synthesize_facade_from_orphan(
     unparseable log, or dataset no longer registered).
     """
     settings = get_settings()
-    model_file = settings.storage_models / f"{task_id}.joblib"
-    if not model_file.exists():
+    model_file, ext = _find_model_file(settings.storage_models, task_id)
+    if not model_file:
         return None
     ctx = parse_legacy_log_context(task_id)
     dataset_path = ctx.get("dataset_path")
@@ -425,7 +453,7 @@ async def synthesize_facade_from_orphan(
     return TaskFacade(
         id=task_id,
         model_type=model_type,
-        model_path=f"storage/models/{task_id}.joblib",
+        model_path=f"storage/models/{task_id}{ext}",
         target_column=target_column,
         test_size=0.2,
         status="SUCCESS",
