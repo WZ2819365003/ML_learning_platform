@@ -3,9 +3,30 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+TaskType = Literal["classification", "regression", "forecasting"]
+
+
+class TimeSeriesValidationConfig(BaseModel):
+    method: Literal["holdout", "rolling_origin", "expanding_window"] = "holdout"
+    test_size: int = Field(gt=0, default=14)
+    step: int = Field(gt=0, default=1)
+
+
+class TimeSeriesPlanConfig(BaseModel):
+    timestamp_col: str
+    target_col: str
+    series_id_col: str | None = None
+    exogenous_cols: list[str] = []
+    freq: str
+    horizon: int = Field(gt=0, le=10000)
+    lookback: int = Field(gt=0, default=28)
+    validation: TimeSeriesValidationConfig = Field(default_factory=TimeSeriesValidationConfig)
+    interval_levels: list[int] = [80, 95]
 
 
 # ===================================================================
