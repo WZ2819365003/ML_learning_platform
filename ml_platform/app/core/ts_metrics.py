@@ -12,10 +12,16 @@ def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
 
-def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """% error; epsilon prevents div-by-zero on truth==0 elements."""
-    eps = 1e-9
-    return float(np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + eps))) * 100.0)
+def mape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-6) -> float:
+    """Mean Absolute Percentage Error.
+
+    Denominator is clamped to ``max(|y_true|, eps)`` to avoid div-by-zero AND
+    to avoid astronomical values when truths are near (but not exactly) zero.
+    Default eps=1e-6; callers with values near this floor should pass a
+    domain-meaningful eps or use sMAPE instead.
+    """
+    denom = np.maximum(np.abs(y_true), eps)
+    return float(np.mean(np.abs((y_true - y_pred) / denom)) * 100.0)
 
 
 def smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:

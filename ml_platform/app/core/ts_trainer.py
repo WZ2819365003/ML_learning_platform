@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import joblib
 import numpy as np
 import pandas as pd
 
@@ -62,9 +63,6 @@ class BaseTSTrainer(ABC):
     @classmethod
     @abstractmethod
     def load(cls, path: Path) -> "BaseTSTrainer": ...
-
-
-import joblib
 
 
 class ARIMATrainer(BaseTSTrainer):
@@ -145,7 +143,11 @@ class ETSTrainer(BaseTSTrainer):
         intervals: dict[int, tuple] = {}
         for level in (self._meta.interval_levels if self._meta else [80, 95]):
             z = norm.ppf(0.5 + level / 200.0)
-            half = z * sigma
+            # Forecast uncertainty grows with horizon for additive trend; scale by sqrt(step).
+            # This is a coarse approximation — full statsmodels ETSModel would simulate
+            # the recursive innovation variance, but is heavier; revisit if needed.
+            steps = np.arange(1, horizon + 1, dtype=float)
+            half = z * sigma * np.sqrt(steps)
             intervals[level] = (mean - half, mean + half)
         return ForecastResult(mean=mean, intervals=intervals)
 

@@ -25,7 +25,9 @@ def test_smape_symmetric():
     y = np.array([2.0, 4.0])
     p = np.array([4.0, 2.0])
     a = smape(y, p)
+    b = smape(p, y)
     assert 0 < a <= 200
+    assert abs(a - b) < 1e-9, f"sMAPE is not symmetric: {a} vs {b}"
 
 
 def test_mase_uses_seasonal_naive():
