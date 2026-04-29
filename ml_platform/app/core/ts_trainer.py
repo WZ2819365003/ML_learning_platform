@@ -418,6 +418,12 @@ class TimesFMAdapter(BaseTSTrainer):
 
     @classmethod
     def load(cls, path):
+        # NOTE: save() only serialises (timestamp_col, target_col, freq, horizon).
+        # series_id_col / exogenous_cols / lookback / interval_levels are reset to
+        # safe defaults — TimesFM is a foundation model that ignores all four during
+        # inference (context is trimmed by params['context_len'], not meta.lookback).
+        # If a future ts_service caller inspects loaded._meta.lookback they will see
+        # the placeholder value 64, not whatever was used at fit time.
         data = json.loads(path.read_text())
         t = cls()
         meta_d = data.get("meta") or {}

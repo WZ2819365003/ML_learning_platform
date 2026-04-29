@@ -34,3 +34,11 @@ def test_timesfm_save_load_marker(df, meta, tmp_path):
 
     t2 = TimesFMAdapter.load(p)
     assert t2._meta.horizon == 14
+    assert t2._meta.timestamp_col == "ds"
+    assert t2._meta.target_col == "y"
+    assert t2._meta.freq == "D"
+    # train_values round-trip preserves all 100 points and float64 dtype
+    assert t2._train_values is not None
+    assert len(t2._train_values) == 100
+    assert t2._train_values.dtype == np.float64
+    np.testing.assert_allclose(t2._train_values, t._train_values)
