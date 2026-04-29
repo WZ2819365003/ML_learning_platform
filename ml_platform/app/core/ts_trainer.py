@@ -1,6 +1,7 @@
 """BaseTSTrainer — abstract contract for all ts family trainers."""
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -363,3 +364,91 @@ class TCNForecasterTrainer(BaseTSTrainer):
         )
         t._model.load_state_dict(data["state_dict"])
         return t
+
+
+class TimesFMAdapter(BaseTSTrainer):
+    """Wraps timesfm_service subprocess call as a BaseTSTrainer.
+
+    fit is a no-op (foundation model; nothing to train).
+    predict shells out to timesfm_env Python 3.10 venv.
+    save/load persist only marker.json — actual model weights live in venv.
+    """
+    name = "timesfm_1"
+    supports_intervals = False
+    supports_exogenous = False
+
+    def __init__(self):
+        self._meta: TSMeta | None = None
+        self._train_values: np.ndarray | None = None  # context for forecast
+        self._params: dict[str, Any] | None = None
+
+    def fit(self, train_df, meta, params):
+        # no-op for foundation model; just stash context for predict()
+        self._meta = meta
+        self._params = params or {"context_len": 512}
+        self._train_values = train_df[meta.target_col].to_numpy(dtype=np.float64)
+
+    def predict(self, horizon, exog=None):
+        from app.services.timesfm_service import _run_forecast_subprocess
+        ctx = self._train_values
+        if self._params and "context_len" in self._params:
+            ctx_len = int(self._params["context_len"])
+            ctx = ctx[-ctx_len:]
+        result = _run_forecast_subprocess({
+            "history": ctx.tolist(),
+            "horizon": int(horizon),
+            "freq": self._meta.freq if self._meta else "D",
+        })
+        if "forecast" not in result:
+            raise RuntimeError(f"TimesFM subprocess returned no forecast: {result}")
+        return ForecastResult(mean=np.asarray(result["forecast"], dtype=float), intervals=None)
+
+    def save(self, path):
+        path.write_text(json.dumps({
+            "model": "timesfm_1",
+            "meta": {
+                "timestamp_col": self._meta.timestamp_col,
+                "target_col": self._meta.target_col,
+                "freq": self._meta.freq,
+                "horizon": self._meta.horizon,
+            } if self._meta else None,
+            "params": self._params,
+            "train_values": self._train_values.tolist() if self._train_values is not None else None,
+        }))
+
+    @classmethod
+    def load(cls, path):
+        data = json.loads(path.read_text())
+        t = cls()
+        meta_d = data.get("meta") or {}
+        t._meta = TSMeta(
+            timestamp_col=meta_d.get("timestamp_col", "ds"),
+            target_col=meta_d.get("target_col", "y"),
+            series_id_col=None, exogenous_cols=[],
+            freq=meta_d.get("freq", "D"),
+            horizon=int(meta_d.get("horizon", 1)),
+            lookback=64, interval_levels=[],
+        )
+        t._params = data.get("params") or {}
+        tv = data.get("train_values")
+        t._train_values = np.asarray(tv, dtype=np.float64) if tv is not None else None
+        return t
+
+
+TS_TRAINER_REGISTRY: dict[str, type[BaseTSTrainer]] = {
+    "arima": ARIMATrainer,
+    "ets": ETSTrainer,
+    "lstm_forecaster": LSTMForecasterTrainer,
+    "tcn_forecaster": TCNForecasterTrainer,
+    "timesfm_1": TimesFMAdapter,
+}
+
+
+def get_ts_trainer(token: str) -> BaseTSTrainer:
+    """Factory: token (matches ts_registry id) -> fresh trainer instance."""
+    cls = TS_TRAINER_REGISTRY.get(token)
+    if cls is None:
+        raise KeyError(
+            f"Unknown ts trainer token: {token!r}. Known: {list(TS_TRAINER_REGISTRY)}"
+        )
+    return cls()
