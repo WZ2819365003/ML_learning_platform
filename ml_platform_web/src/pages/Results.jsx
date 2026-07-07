@@ -401,8 +401,15 @@ function ResultDetailView({ taskId, navigate }) {
       modelItems = res.items ?? [];
       setModels(modelItems);
     } catch { /* ignore */ }
-    setLoading(false);
-    void loadVisualizations(modelItems);
+    // Keep the skeleton up until detail + taskKind + viz payloads resolve.
+    // Otherwise the page paints once with the default taskKind ('classification')
+    // and empty charts, then re-renders when data lands — a visible flicker /
+    // "wrong page first, correct after". Awaiting avoids that first bad paint.
+    try {
+      await loadVisualizations(modelItems);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function loadVisualizations(modelItems = models) {
