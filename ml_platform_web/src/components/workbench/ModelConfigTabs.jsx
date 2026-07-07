@@ -101,9 +101,6 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
   const dlModelOptions = dlReg.models
     .filter(m => !m.task_types || m.task_types.includes(taskType))
     .map(m => ({ value: m.id, label: m.display_name || m.id }))
-  const hasDlAdvanced = (dlSpec?.arch_params || []).some(p => p.advanced)
-    || dlReg.optimizer_params.some(p => p.advanced)
-    || dlReg.train_params.some(p => p.advanced)
 
   const mixedOptions = useMemo(() => ([
     {
@@ -181,44 +178,41 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
         <ModelSelector models={mlReg.models} categories={mlReg.categories} taskFilter={taskType}
           value={mlModel} onChange={v => mlForm.setFieldValue('model_type', v)} />
       </Form.Item>
-      <Space size={16} wrap>
-        <Form.Item name="test_size" label="测试集比例" style={{ marginBottom: 8 }}>
-          <InputNumber min={0.05} max={0.5} step={0.05} style={{ width: 120 }} />
-        </Form.Item>
-        <Form.Item name="cv_folds" label="交叉验证折数" style={{ marginBottom: 8 }}>
-          <InputNumber min={2} max={20} step={1} style={{ width: 120 }} />
-        </Form.Item>
-      </Space>
-      {mlSpec?.params?.length > 0 && (
-        <>
-          <Divider orientation="left" style={{ margin: '8px 0 12px' }}>
-            <Space>
-              模型参数
-              {mlSpec.params.some(p => p.advanced) && (
-                <Button size="small" type="link" icon={<SettingOutlined />} onClick={() => setMlAdvOpen(true)}>
-                  高级设置
-                </Button>
-              )}
-            </Space>
-          </Divider>
-          <DynamicParamForm params={mlSpec.params} advancedMode={false} />
-        </>
-      )}
-      {/* Advanced params live in a modal (rendered inside this Form so fields
-          bind to mlForm via context) to keep the main panel uncluttered. */}
-      <Modal title={<span><SettingOutlined /> 机器学习 · 高级参数</span>} open={mlAdvOpen} width={640}
-        onCancel={() => setMlAdvOpen(false)}
-        footer={<Button type="primary" onClick={() => setMlAdvOpen(false)}>完成</Button>}>
-        <Paragraph type="secondary" style={{ fontSize: 12 }}>不常改的进阶参数，保存后随本次训练一起提交。</Paragraph>
-        <DynamicParamForm params={(mlSpec?.params || []).filter(p => p.advanced)} advancedMode />
-      </Modal>
       <Form.Item name="eval_metrics" label="评估指标">
         <Select mode="multiple" options={metricOptions} placeholder="请选择评估指标" />
       </Form.Item>
+      {mlModel && (
+        <div style={{ marginBottom: 12 }}>
+          <Button icon={<SettingOutlined />} onClick={() => setMlAdvOpen(true)}>高级设置（超参数 / 训练细节）</Button>
+          <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>不改也可直接训练，用默认值</Text>
+        </div>
+      )}
       <Space>
         <Button type="primary" icon={<RocketOutlined />} loading={submitting} onClick={submitMl}>启动机器学习训练</Button>
         <CodeButton kind="ml" />
       </Space>
+      {/* All detail params live in the modal (rendered inside this Form so
+          fields bind to mlForm via context) — keeps the main panel minimal. */}
+      <Modal title={<span><SettingOutlined /> 机器学习 · 高级设置</span>} open={mlAdvOpen} width={640}
+        onCancel={() => setMlAdvOpen(false)}
+        footer={<Button type="primary" onClick={() => setMlAdvOpen(false)}>完成</Button>}>
+        <Paragraph type="secondary" style={{ fontSize: 12 }}>训练细节与模型超参数，保存后随本次训练提交（不填用默认值）。</Paragraph>
+        <Divider orientation="left" style={{ margin: '4px 0 8px' }}>训练控制</Divider>
+        <Space size={16} wrap>
+          <Form.Item name="test_size" label="测试集比例" style={{ marginBottom: 8 }}>
+            <InputNumber min={0.05} max={0.5} step={0.05} style={{ width: 140 }} />
+          </Form.Item>
+          <Form.Item name="cv_folds" label="交叉验证折数" style={{ marginBottom: 8 }}>
+            <InputNumber min={2} max={20} step={1} style={{ width: 140 }} />
+          </Form.Item>
+        </Space>
+        {mlSpec?.params?.length > 0 && (
+          <>
+            <Divider orientation="left" style={{ margin: '4px 0 8px' }}>模型超参数</Divider>
+            <DynamicParamForm params={mlSpec.params} advancedMode />
+          </>
+        )}
+      </Modal>
     </Form>
   )
 
@@ -232,53 +226,35 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
           <Text type="secondary" style={{ fontSize: 12 }}>{dlSpec.description}</Text>
         </Card>
       )}
-      {dlSpec && hasDlAdvanced && (
-        <div style={{ marginBottom: 8 }}>
-          <Button size="small" type="link" icon={<SettingOutlined />} onClick={() => setDlAdvOpen(true)}>
-            高级设置（网络/优化器/训练细节）
-          </Button>
+      {dlSpec && (
+        <div style={{ marginBottom: 12 }}>
+          <Button icon={<SettingOutlined />} onClick={() => setDlAdvOpen(true)}>高级设置（网络 / 优化器 / 训练细节）</Button>
+          <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>不改也可直接训练，用默认值</Text>
         </div>
       )}
-      {dlSpec?.arch_params?.length > 0 && (
-        <>
-          <Divider orientation="left" style={{ margin: '4px 0 8px' }}>网络结构</Divider>
-          <DlParamGroup params={dlSpec.arch_params} prefix="arch_config" advancedMode={false} />
-        </>
-      )}
-      {dlReg.optimizer_params.length > 0 && (
-        <>
-          <Divider orientation="left" style={{ margin: '4px 0 8px' }}>优化器</Divider>
-          <DlParamGroup params={dlReg.optimizer_params} prefix="opt_config" advancedMode={false} />
-        </>
-      )}
-      {dlReg.train_params.length > 0 && (
-        <>
-          <Divider orientation="left" style={{ margin: '4px 0 8px' }}>训练控制</Divider>
-          <DlParamGroup params={dlReg.train_params} prefix="train_config" advancedMode={false} />
-        </>
-      )}
-      {/* DL advanced params modal — inside dlForm's Form so fields bind via context. */}
-      <Modal title={<span><SettingOutlined /> 深度学习 · 高级参数</span>} open={dlAdvOpen} width={700}
-        onCancel={() => setDlAdvOpen(false)}
-        footer={<Button type="primary" onClick={() => setDlAdvOpen(false)}>完成</Button>}>
-        <Paragraph type="secondary" style={{ fontSize: 12 }}>进阶网络 / 优化器 / 训练参数，保存后随本次训练提交。</Paragraph>
-        {(dlSpec?.arch_params || []).some(p => p.advanced) && (
-          <><Divider orientation="left" style={{ margin: '4px 0 8px' }}>网络结构</Divider>
-            <DlParamGroup params={(dlSpec.arch_params || []).filter(p => p.advanced)} prefix="arch_config" advancedMode /></>
-        )}
-        {dlReg.optimizer_params.some(p => p.advanced) && (
-          <><Divider orientation="left" style={{ margin: '4px 0 8px' }}>优化器</Divider>
-            <DlParamGroup params={dlReg.optimizer_params.filter(p => p.advanced)} prefix="opt_config" advancedMode /></>
-        )}
-        {dlReg.train_params.some(p => p.advanced) && (
-          <><Divider orientation="left" style={{ margin: '4px 0 8px' }}>训练控制</Divider>
-            <DlParamGroup params={dlReg.train_params.filter(p => p.advanced)} prefix="train_config" advancedMode /></>
-        )}
-      </Modal>
-      <Space style={{ marginTop: 8 }}>
+      <Space>
         <Button type="primary" icon={<RocketOutlined />} loading={submitting} onClick={submitDl}>启动深度学习训练</Button>
         <CodeButton kind="dl" />
       </Space>
+      {/* All network/optimizer/training params live in the modal (rendered
+          inside dlForm's Form so fields bind via context) — minimal main panel. */}
+      <Modal title={<span><SettingOutlined /> 深度学习 · 高级设置</span>} open={dlAdvOpen} width={720}
+        onCancel={() => setDlAdvOpen(false)}
+        footer={<Button type="primary" onClick={() => setDlAdvOpen(false)}>完成</Button>}>
+        <Paragraph type="secondary" style={{ fontSize: 12 }}>网络结构 / 优化器 / 训练控制，保存后随本次训练提交（不填用默认值）。</Paragraph>
+        {dlSpec?.arch_params?.length > 0 && (
+          <><Divider orientation="left" style={{ margin: '4px 0 8px' }}>网络结构</Divider>
+            <DlParamGroup params={dlSpec.arch_params} prefix="arch_config" advancedMode /></>
+        )}
+        {dlReg.optimizer_params.length > 0 && (
+          <><Divider orientation="left" style={{ margin: '4px 0 8px' }}>优化器</Divider>
+            <DlParamGroup params={dlReg.optimizer_params} prefix="opt_config" advancedMode /></>
+        )}
+        {dlReg.train_params.length > 0 && (
+          <><Divider orientation="left" style={{ margin: '4px 0 8px' }}>训练控制</Divider>
+            <DlParamGroup params={dlReg.train_params} prefix="train_config" advancedMode /></>
+        )}
+      </Modal>
     </Form>
   )
 
