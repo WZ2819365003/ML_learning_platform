@@ -21,6 +21,12 @@ from app.services.data_service import (
 class CreateVersionRequest(BaseModel):
     description: str | None = None
 
+
+class DataPipelineRequest(BaseModel):
+    """Run Python that transforms the dataset's DataFrame → new dataset."""
+    code: str
+    save_as: str | None = None
+
 router = APIRouter(prefix="/data", tags=["Data Management"])
 
 
@@ -31,6 +37,19 @@ async def upload_dataset_route(
 ) -> DatasetResponse:
     """Upload a new dataset file."""
     return await upload_dataset(file=file, db=db)
+
+
+@router.post("/{dataset_id}/pipeline", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
+async def data_pipeline_route(
+    dataset_id: str,
+    body: DataPipelineRequest,
+    db: AsyncSession = Depends(get_db),
+) -> DatasetResponse:
+    """Run a data-pipeline-as-code transform on a dataset and save the result
+    as a new dataset (workflow 数据 Pipeline)."""
+    from app.services.data_pipeline_service import run_data_pipeline
+
+    return await run_data_pipeline(db, dataset_id, body.code, body.save_as)
 
 
 @router.get("/{dataset_id}/preview", response_model=DatasetPreview)

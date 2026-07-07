@@ -7,6 +7,7 @@ import {
   DatabaseOutlined, ExperimentOutlined, ThunderboltOutlined, LineChartOutlined,
   CloudUploadOutlined, InboxOutlined, PlusOutlined, ReloadOutlined,
   ArrowLeftOutlined, ArrowRightOutlined, TrophyOutlined, BulbOutlined, DownloadOutlined,
+  CodeOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
@@ -17,6 +18,7 @@ import ProgressTree from '../components/workbench/ProgressTree'
 import StrategyCompareTab from '../components/workbench/StrategyCompareTab'
 import RunInspector from '../components/workbench/RunInspector'
 import DeployStep from '../components/workbench/DeployStep'
+import DataPipelineModal from '../components/workbench/DataPipelineModal'
 
 const { Text, Title } = Typography
 
@@ -54,6 +56,7 @@ export default function ModelingWorkflow() {
   const [leaderboard, setLeaderboard] = useState([])
   const [datasets, setDatasets] = useState([])
   const [columnInfo, setColumnInfo] = useState(null)
+  const [pipelineOpen, setPipelineOpen] = useState(false)
   const [inspectorRunId, setInspectorRunId] = useState(null)
   const [inspectorTab, setInspectorTab] = useState('overview')
   const [saving, setSaving] = useState(false)
@@ -213,6 +216,14 @@ export default function ModelingWorkflow() {
             </Form.Item>
           </Col>
         </Row>
+        <div style={{ marginTop: -4, marginBottom: 4 }}>
+          <Button icon={<CodeOutlined />} disabled={!datasetIdWatch} onClick={() => setPipelineOpen(true)}>
+            数据处理 Pipeline（代码）
+          </Button>
+          <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+            对所选数据集用 Python 做清洗 / 特征工程，一键生成新数据集
+          </Text>
+        </div>
         <Row gutter={12}>
           <Col span={10}>
             <Form.Item name="task_type" label="任务类型" rules={[{ required: true }]}>
@@ -342,6 +353,14 @@ export default function ModelingWorkflow() {
         </div>
       </Card>
 
+      <DataPipelineModal open={pipelineOpen} datasetId={datasetIdWatch}
+        onClose={() => setPipelineOpen(false)}
+        onCreated={async (ds) => {
+          setPipelineOpen(false)
+          await loadDatasets()
+          form.setFieldsValue({ dataset_id: ds.id, target_column: undefined })
+          message.success('已切换到新数据集，请重新选择目标列')
+        }} />
       <RunInspector open={!!inspectorRunId} runId={inspectorRunId} defaultTab={inspectorTab}
         onClose={() => setInspectorRunId(null)} />
     </div>

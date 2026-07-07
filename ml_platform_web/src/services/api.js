@@ -44,6 +44,10 @@ export const dataApi = {
   previewDataset(datasetId) {
     return api.get(`/data/${datasetId}/preview`);
   },
+  // Data-pipeline-as-code: run Python that transforms the dataset → new dataset.
+  runPipeline(datasetId, payload) {
+    return api.post(`/data/${datasetId}/pipeline`, payload);
+  },
   deleteDataset(datasetId) {
     return api.delete(`/data/${datasetId}`);
   },
