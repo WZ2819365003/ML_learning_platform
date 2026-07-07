@@ -93,6 +93,13 @@ class CreateExperimentBundleRequest(BaseModel):
     description: str | None = None
 
 
+class DeployRunRequest(BaseModel):
+    """Deploy the model trained by a specific run (workflow 部署 step)."""
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    max_batch_size: int = Field(default=100, ge=1, le=10000)
+
+
 # ---------------------------------------------------------------------------
 # Tuning spaces (must be registered BEFORE /{task_id} routes)
 # ---------------------------------------------------------------------------
@@ -315,4 +322,27 @@ async def create_experiment_bundle(
         name=body.name,
         strategies=strategies,
         description=body.description,
+    )
+
+
+@router.post("/{task_id}/runs/{run_id}/deploy", summary="Deploy the model trained by a run", status_code=201)
+async def deploy_run_route(
+    task_id: str,
+    run_id: str,
+    body: DeployRunRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Bridge a V3 run to a live deployment (workflow 部署上线 step).
+
+    Resolves the run's underlying domain model (ML TrainingTask / DL
+    DLTrainingTask) and reuses the existing deployment services. Only
+    SUCCESS runs are deployable.
+    """
+    return await modeling_task_service.deploy_run(
+        db,
+        task_id,
+        run_id,
+        name=body.name,
+        description=body.description,
+        max_batch_size=body.max_batch_size,
     )

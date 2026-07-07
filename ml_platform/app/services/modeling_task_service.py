@@ -40,6 +40,24 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# A V3 ExperimentRun does not carry its trained-model handle directly; the
+# deployable/downloadable artifact lives on the *domain* task referenced by
+# the parent PlatformTask.payload_ref, which has the shape "<kind>:<domain_id>"
+# ("train:<TrainingTask.id>" for ML, "dl_train:<DLTrainingTask.id>" for DL).
+# The model file itself is at storage/models/<domain_id>.joblib (ML).
+def _resolve_domain_ref(payload_ref: str | None) -> tuple[str | None, str | None]:
+    """Return (domain_task_id, family) parsed from a PlatformTask.payload_ref.
+
+    family is "ml" | "dl" | None. Used so the workbench can deploy/download a
+    run's model by reusing the existing per-domain-task endpoints.
+    """
+    if not payload_ref or ":" not in payload_ref:
+        return None, None
+    kind, _, domain_id = payload_ref.partition(":")
+    family = {"train": "ml", "dl_train": "dl"}.get(kind)
+    return (domain_id or None), family
+
+
 # ---------------------------------------------------------------------------
 # Serializers
 # ---------------------------------------------------------------------------
@@ -478,8 +496,21 @@ async def task_leaderboard(db: AsyncSession, task_id: str, top_k: int = 20) -> l
 
     scored.sort(key=lambda x: x[1], reverse=(task.objective_direction or "max") == "max")
 
-    return [
-        {
+    # Resolve each top run's deployable/downloadable model handle via its
+    # parent PlatformTask.payload_ref (same as task_runs), so the workbench
+    # can deploy/download straight from the leaderboard.
+    top = scored[:top_k]
+    task_ids = [run.task_id for run, _ in top if run.task_id]
+    platform_tasks: dict[str, PlatformTask] = {}
+    if task_ids:
+        ptask_rows = await db.execute(select(PlatformTask).where(PlatformTask.id.in_(task_ids)))
+        platform_tasks = {pt.id: pt for pt in ptask_rows.scalars().all()}
+
+    result = []
+    for idx, (run, value) in enumerate(top):
+        pt = platform_tasks.get(run.task_id) if run.task_id else None
+        domain_task_id, family = _resolve_domain_ref(pt.payload_ref if pt else None)
+        result.append({
             "rank": idx + 1,
             "run_id": run.id,
             "experiment_id": run.experiment_id,
@@ -491,10 +522,11 @@ async def task_leaderboard(db: AsyncSession, task_id: str, top_k: int = 20) -> l
             "metric_name": task.objective_metric,
             "params": run.params or {},
             "metrics": run.metrics or {},
+            "domain_task_id": domain_task_id,
+            "family": family,
             "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-        }
-        for idx, (run, value) in enumerate(scored[:top_k])
-    ]
+        })
+    return result
 
 
 async def task_runs(
@@ -563,6 +595,7 @@ async def task_runs(
         exp_meta = exp_index.get(run.experiment_id, {})
         pt = platform_tasks.get(run.task_id) if run.task_id else None
         objective_value = _pick_metric(run.metrics or {}, task.objective_metric or "accuracy")
+        domain_task_id, family = _resolve_domain_ref(pt.payload_ref if pt else None)
         items.append({
             "run_id": run.id,
             "experiment_id": run.experiment_id,
@@ -572,6 +605,9 @@ async def task_runs(
             "trial_no": run.trial_no,
             "rank": run.rank,
             "status": run.status,
+            # deployable/downloadable model handle for this run (see _resolve_domain_ref)
+            "domain_task_id": domain_task_id,
+            "family": family,
             "objective_value": objective_value,
             "metric_name": task.objective_metric,
             "params": run.params or {},
@@ -591,6 +627,76 @@ async def task_runs(
         )
     )
     return {"items": items, "total": len(items)}
+
+
+async def deploy_run(
+    db: AsyncSession,
+    task_id: str,
+    run_id: str,
+    *,
+    name: str,
+    description: str | None = None,
+    max_batch_size: int = 100,
+) -> dict[str, Any]:
+    """Deploy the model trained by a V3 ExperimentRun.
+
+    Bridges the V3 run to the existing per-domain-task deployment services:
+    the run's parent PlatformTask.payload_ref resolves to the ML TrainingTask
+    (family "ml") or DLTrainingTask (family "dl") that owns the model file.
+    """
+    await _get_task_or_404(db, task_id)
+
+    run = (
+        await db.execute(select(ExperimentRun).where(ExperimentRun.id == run_id))
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run 不存在")
+
+    exp_ids = (
+        await db.execute(
+            select(PlatformExperiment.id).where(PlatformExperiment.modeling_task_id == task_id)
+        )
+    ).scalars().all()
+    if run.experiment_id not in set(exp_ids):
+        raise HTTPException(status_code=404, detail="该 Run 不属于此建模任务")
+    if (run.status or "").upper() != "SUCCESS":
+        raise HTTPException(status_code=422, detail="只有训练成功的 Run 才能部署")
+
+    pt = None
+    if run.task_id:
+        pt = (
+            await db.execute(select(PlatformTask).where(PlatformTask.id == run.task_id))
+        ).scalar_one_or_none()
+    domain_task_id, family = _resolve_domain_ref(pt.payload_ref if pt else None)
+    if not domain_task_id:
+        raise HTTPException(status_code=422, detail="无法解析该 Run 的模型句柄")
+
+    if family == "ml":
+        from app.services.deploy_service import create_deployment
+
+        result = await create_deployment(
+            task_id=domain_task_id,
+            name=name,
+            db=db,
+            description=description,
+            max_batch_size=max_batch_size,
+        )
+        return {"family": "ml", "domain_task_id": domain_task_id, **result}
+
+    if family == "dl":
+        from app.services.dl_service import create_dl_deployment
+
+        dep = await create_dl_deployment(domain_task_id, name, description, db)
+        return {
+            "family": "dl",
+            "domain_task_id": domain_task_id,
+            "deployment_id": dep.id,
+            "name": dep.name,
+            "status": getattr(dep, "status", "active"),
+            "endpoints": {"predict": f"/api/dl/deployments/{dep.id}/predict"},
+        }
+
+    raise HTTPException(status_code=422, detail=f"不支持部署的模型族: {family}")
 
 
 # ---------------------------------------------------------------------------
