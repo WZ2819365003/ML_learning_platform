@@ -1,34 +1,55 @@
 import React from 'react'
 import { Layout, Avatar, Dropdown, Space, Badge, Typography, Tag } from 'antd'
-import { BellOutlined, UserOutlined, QuestionCircleOutlined } from '@ant-design/icons'
+import { BellOutlined, UserOutlined, QuestionCircleOutlined, HomeOutlined } from '@ant-design/icons'
 import { useLocation } from 'react-router-dom'
 
 const { Header: AntHeader } = Layout
 const { Text } = Typography
 
+// Leaf page title per route. Section (first breadcrumb crumb) is derived from
+// the path prefix in getBreadcrumb() so the header stays in sync with Sidebar.
 const PAGE_TITLES = {
-  '/dashboard':        { title: '仪表盘', sub: '概览所有训练任务与模型指标' },
-  '/data':             { title: '数据管理', sub: '上传、预览和管理训练数据集' },
-  '/training/config':  { title: '训练配置', sub: '配置并启动机器学习训练任务' },
-  '/training/monitor': { title: '训练监控', sub: '实时跟踪训练进度与日志' },
-  '/training/results': { title: '结果可视化', sub: '分析和对比模型性能指标' },
-  '/models':           { title: '模型管理', sub: '查看和管理已保存的模型' },
-  '/deploy':           { title: '模型部署', sub: '将模型发布为推理接口' },
-  '/settings':         { title: '系统设置', sub: '配置平台参数和环境变量' },
-  '/dl/config':        { title: '深度学习配置', sub: '配置神经网络结构与超参数' },
-  '/dl/monitor':       { title: '深度学习监控', sub: '逐 Epoch 跟踪损失与指标' },
-  '/dl/results':       { title: '深度学习结果', sub: '分析训练曲线与模型表现' },
-  '/ts/tasks/new':     { title: '新建时序任务', sub: '使用 Chronos 进行时间序列预测' },
-  '/ts/tasks':         { title: '时序任务列表', sub: '管理所有时间序列预测任务' },
-  '/tasks':            { title: '任务中心', sub: '统一管理所有异步任务 — 训练、解释、评估' },
-  '/experiments':      { title: '实验管理', sub: '组织多次训练 Run，对比模型性能，自动筛选最优' },
+  '/dashboard':        '仪表盘',
+  '/data':             '数据管理',
+  '/training/config':  '训练配置',
+  '/training/monitor': '训练监控',
+  '/training/results': '结果可视化',
+  '/models':           '模型管理',
+  '/deploy':           '模型部署',
+  '/settings':         '系统设置',
+  '/dl/config':        '模型配置',
+  '/dl/monitor':       '训练监控',
+  '/dl/results':       '结果可视化',
+  '/ts/tasks/new':     '新建任务',
+  '/ts/tasks':         '任务列表',
+  '/tasks':            '任务中心',
+  '/experiments':      '实验管理',
+  '/v3/tasks':         '建模工作台',
+  '/v3/training-plans':'训练方案',
+  '/v3/runs':          'Run 诊断中心',
 }
 
-function getPageMeta(pathname) {
-  if (PAGE_TITLES[pathname]) return PAGE_TITLES[pathname]
-  if (pathname.startsWith('/ts/tasks/')) return { title: '时序任务详情', sub: '查看预测结果与统计信息' }
-  if (pathname.startsWith('/experiments/')) return { title: '实验详情', sub: '排行榜 · 多模型指标对比' }
-  return { title: 'ML Platform', sub: '' }
+// Path prefix -> section label (matches the Sidebar groups).
+const SECTIONS = [
+  ['/training', '机器学习'],
+  ['/dl',       '深度学习'],
+  ['/ts',       '时序任务'],
+  ['/v3',       'V3 平台'],
+  ['/tasks',    'V3 平台'],
+  ['/experiments', 'V3 平台'],
+]
+
+// Returns an array of crumb strings, e.g. ['机器学习', '训练配置'].
+function getBreadcrumb(pathname) {
+  let leaf = PAGE_TITLES[pathname]
+  if (!leaf) {
+    if (pathname.startsWith('/ts/tasks/')) leaf = '任务详情'
+    else if (pathname.startsWith('/experiments/')) leaf = '实验详情'
+    else if (pathname.startsWith('/v3/tasks/')) leaf = '任务详情'
+    else leaf = 'ML Platform'
+  }
+  const section = SECTIONS.find(([p]) => pathname.startsWith(p))?.[1]
+  return section && section !== leaf ? [section, leaf] : [leaf]
 }
 
 const userMenu = [
@@ -40,7 +61,7 @@ const userMenu = [
 
 const Header = () => {
   const location = useLocation()
-  const { title, sub } = getPageMeta(location.pathname)
+  const crumbs = getBreadcrumb(location.pathname)
 
   return (
     <AntHeader
@@ -50,7 +71,8 @@ const Header = () => {
         WebkitBackdropFilter: 'blur(12px)',
         borderBottom: '1px solid rgba(148, 163, 184, 0.15)',
         padding: '0 24px',
-        height: 64,
+        height: 56,
+        lineHeight: 'normal',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -59,11 +81,25 @@ const Header = () => {
         zIndex: 9,
       }}
     >
-      {/* Left: page title */}
-      <Space direction="vertical" size={0}>
-        <Text strong style={{ fontSize: 16, color: '#0f172a', lineHeight: 1.25 }}>{title}</Text>
-        {sub && <Text style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.3 }}>{sub}</Text>}
-      </Space>
+      {/* Left: breadcrumb — navigational context, complements the page's own H1 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <HomeOutlined style={{ color: '#94a3b8', fontSize: 14 }} />
+        {crumbs.map((c, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span style={{ color: '#cbd5e1', fontSize: 13 }}>/</span>}
+            <Text
+              style={{
+                fontSize: 13,
+                fontWeight: i === crumbs.length - 1 ? 600 : 400,
+                color: i === crumbs.length - 1 ? '#334155' : '#94a3b8',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {c}
+            </Text>
+          </React.Fragment>
+        ))}
+      </div>
 
       {/* Right: actions */}
       <Space size={4} align="center">
