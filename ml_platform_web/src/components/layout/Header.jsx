@@ -29,10 +29,14 @@ const PAGE_TITLES = {
   '/v3/runs':          'Run 诊断中心',
 }
 
-// Path prefix -> section label (matches the Sidebar groups).
+// Path prefix -> section label (matches the Sidebar groups). Order matters:
+// more specific prefixes first (e.g. /v3/tasks → 建模 before /v3 → V3 平台).
 const SECTIONS = [
-  ['/training', '机器学习'],
-  ['/dl',       '深度学习'],
+  ['/v3/tasks', '建模'],
+  ['/models',   '建模'],
+  ['/deploy',   '建模'],
+  ['/training', '建模'],
+  ['/dl',       '建模'],
   ['/ts',       '时序任务'],
   ['/v3',       'V3 平台'],
   ['/tasks',    'V3 平台'],

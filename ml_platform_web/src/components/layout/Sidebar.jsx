@@ -5,14 +5,10 @@ import {
   DashboardOutlined,
   DatabaseOutlined,
   RocketOutlined,
-  AppstoreOutlined,
-  CloudServerOutlined,
   SettingOutlined,
-  ExperimentOutlined,
   LineChartOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  ControlOutlined,
   BranchesOutlined,
 } from '@ant-design/icons'
 
@@ -53,23 +49,13 @@ const Sidebar = () => {
       label: <Link to="/data">数据管理</Link>,
     },
     {
-      key: 'training',
+      key: 'modeling',
       icon: <RocketOutlined />,
-      label: '机器学习',
+      label: '建模',
       children: [
-        { key: 'training-config',   label: <Link to="/training/config">训练配置</Link> },
-        { key: 'training-monitor',  label: <Link to="/training/monitor">训练监控</Link> },
-        { key: 'training-results',  label: <Link to="/training/results">结果可视化</Link> },
-      ],
-    },
-    {
-      key: 'dl',
-      icon: <ExperimentOutlined />,
-      label: '深度学习',
-      children: [
-        { key: 'dl-config',   label: <Link to="/dl/config">模型配置</Link> },
-        { key: 'dl-monitor',  label: <Link to="/dl/monitor">训练监控</Link> },
-        { key: 'dl-results',  label: <Link to="/dl/results">结果可视化</Link> },
+        { key: 'modeling-tasks', label: <Link to="/v3/tasks">任务列表</Link> },
+        { key: 'models',         label: <Link to="/models">模型管理</Link> },
+        { key: 'deploy',         label: <Link to="/deploy">模型部署</Link> },
       ],
     },
     {
@@ -80,16 +66,6 @@ const Sidebar = () => {
         { key: 'ts-new',  label: <Link to="/ts/tasks/new">新建任务</Link> },
         { key: 'ts-list', label: <Link to="/ts/tasks">任务列表</Link> },
       ],
-    },
-    {
-      key: 'models',
-      icon: <AppstoreOutlined />,
-      label: <Link to="/models">模型管理</Link>,
-    },
-    {
-      key: 'deploy',
-      icon: <CloudServerOutlined />,
-      label: <Link to="/deploy">模型部署</Link>,
     },
     {
       type: 'divider',
@@ -137,7 +113,8 @@ const Sidebar = () => {
     if (path === '/deploy') return 'deploy'
     if (path === '/settings') return 'settings'
     if (path === '/tasks') return 'tasks'
-    if (path === '/v3/tasks' || path.startsWith('/v3/tasks/')) return 'v3-tasks'
+    // /v3/tasks(/…/workflow) is now the primary 建模 → 任务列表 entry
+    if (path === '/v3/tasks' || path.startsWith('/v3/tasks/')) return 'modeling-tasks'
     if (path.startsWith('/v3/training-plans')) return 'training-plans'
     if (path === '/experiments' || path.startsWith('/experiments/')) return 'experiments'
     if (path === '/v3/runs' || path.startsWith('/v3/runs/')) return 'v3-runs'
@@ -196,7 +173,7 @@ const Sidebar = () => {
         theme="dark"
         mode="inline"
         selectedKeys={[getSelectedKey()]}
-        defaultOpenKeys={['training', 'dl', 'ts', 'v3']}
+        defaultOpenKeys={['modeling', 'ts', 'v3']}
         items={menuItems}
         style={{
           background: 'transparent',

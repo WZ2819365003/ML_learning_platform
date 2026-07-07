@@ -310,7 +310,7 @@ export default function ModelingTasks() {
             </Tooltip>
             <Tooltip title={canDeploy ? '部署最佳模型' : '暂无成功的 Run，无法部署'}>
               <Button size="small" icon={<CloudUploadOutlined />} disabled={!canDeploy}
-                onClick={() => navigate(`/v3/tasks/${row.id}/workflow?step=4`)} />
+                onClick={() => navigate(`/v3/tasks/${row.id}/workflow?step=3`)} />
             </Tooltip>
             <Tooltip title="查看详情（Tab 视图）">
               <Button size="small" icon={<EyeOutlined />}

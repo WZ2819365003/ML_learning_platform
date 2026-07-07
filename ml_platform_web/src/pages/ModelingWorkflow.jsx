@@ -35,10 +35,9 @@ const OBJECTIVE_PRESETS = {
 const _dir = (m) => (['rmse', 'mae', 'mse', 'mape'].includes(m) ? 'min' : 'max')
 
 const STEP_ITEMS = [
-  { title: '数据', icon: <DatabaseOutlined /> },
-  { title: '配置模型', icon: <ExperimentOutlined /> },
-  { title: '训练', icon: <ThunderboltOutlined /> },
-  { title: '可视化结果', icon: <LineChartOutlined /> },
+  { title: '导入数据', icon: <DatabaseOutlined /> },
+  { title: '模型配置', icon: <ExperimentOutlined /> },
+  { title: '训练过程', icon: <ThunderboltOutlined /> },
   { title: '部署上线', icon: <CloudUploadOutlined /> },
 ]
 
@@ -48,7 +47,7 @@ export default function ModelingWorkflow() {
   const [searchParams] = useSearchParams()
   const isNew = taskId === 'new'
 
-  const initialStep = isNew ? 0 : Math.min(4, Math.max(0, Number(searchParams.get('step')) || 0))
+  const initialStep = isNew ? 0 : Math.min(3, Math.max(0, Number(searchParams.get('step')) || 0))
   const [current, setCurrent] = useState(initialStep)
   const [task, setTask] = useState(null)
   const [runs, setRuns] = useState([])
@@ -258,23 +257,7 @@ export default function ModelingWorkflow() {
     </Card>
   )
 
-  const trainStep = (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
-        <Space size={16} wrap>
-          <Text strong>训练进度</Text>
-          <Tag color="green">成功 {runStatusCounts.SUCCESS || 0}</Tag>
-          <Tag color="processing">运行中 {(runStatusCounts.RUNNING || 0) + (runStatusCounts.PENDING || 0)}</Tag>
-          <Tag color="error">失败 {runStatusCounts.FAILED || 0}</Tag>
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => { loadTask(); loadRuns() }}>刷新</Button>
-          <Button size="small" type="primary" ghost icon={<PlusOutlined />} onClick={() => setBatchOpen(true)}>再加一组</Button>
-        </Space>
-      </Card>
-      {task && <ProgressTree modelingTaskId={task.id} />}
-    </Space>
-  )
-
-  const vizColumns = [
+  const runColumns = [
     { title: '排名', key: 'rank', width: 70,
       render: (_, __, i) => i === 0 ? <Tag color="gold" icon={<TrophyOutlined />}>1</Tag> : <span>{i + 1}</span> },
     { title: '模型', key: 'model', render: (_, r) => <Tag>{r.params?.model_type || '-'}</Tag> },
@@ -282,9 +265,9 @@ export default function ModelingWorkflow() {
       render: (s) => <Tag color="blue">{s}</Tag> },
     { title: task?.objective_metric || '目标值', dataIndex: 'objective_value', key: 'objective_value',
       render: (v) => <code style={{ color: '#2563eb', fontWeight: 600 }}>{typeof v === 'number' ? v.toFixed(4) : '-'}</code> },
-    { title: '操作', key: 'actions', width: 200, render: (_, r) => (
+    { title: '操作', key: 'actions', width: 220, render: (_, r) => (
       <Space size={2}>
-        <Button size="small" type="link" onClick={() => { setInspectorRunId(r.run_id); setInspectorTab('overview') }}>详情</Button>
+        <Button size="small" type="link" onClick={() => { setInspectorRunId(r.run_id); setInspectorTab('overview') }}>详情/日志</Button>
         <Button size="small" type="link" icon={<BulbOutlined />}
           onClick={() => { setInspectorRunId(r.run_id); setInspectorTab('shap') }}>解释</Button>
         {r.domain_task_id && (
@@ -297,12 +280,25 @@ export default function ModelingWorkflow() {
     ) },
   ]
 
-  const vizStep = (
+  // 训练过程 = 实时进度 + 日志/可视化。日志与指标图/SHAP 通过 RunInspector
+  // 在每个 Run 上按需打开（其内含 概览/指标图/SHAP/日志 tab）。
+  const trainingStep = (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Card size="small" title={<span><TrophyOutlined style={{ color: '#f59e0b' }} /> 排行榜</span>}
+      <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
+        <Space size={16} wrap>
+          <Text strong>训练进度</Text>
+          <Tag color="green">成功 {runStatusCounts.SUCCESS || 0}</Tag>
+          <Tag color="processing">运行中 {(runStatusCounts.RUNNING || 0) + (runStatusCounts.PENDING || 0)}</Tag>
+          <Tag color="error">失败 {runStatusCounts.FAILED || 0}</Tag>
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => { loadTask(); loadRuns() }}>刷新</Button>
+          <Button size="small" type="primary" ghost icon={<PlusOutlined />} onClick={() => setBatchOpen(true)}>再加一组</Button>
+        </Space>
+      </Card>
+      {task && <ProgressTree modelingTaskId={task.id} />}
+      <Card size="small" title={<span><TrophyOutlined style={{ color: '#f59e0b' }} /> 排行榜（点「详情/日志」看日志与可视化图）</span>}
         bodyStyle={{ padding: 0 }}
         extra={<Button size="small" icon={<ReloadOutlined />} onClick={loadRuns}>刷新</Button>}>
-        <Table size="small" rowKey="run_id" columns={vizColumns} dataSource={leaderboard}
+        <Table size="small" rowKey="run_id" columns={runColumns} dataSource={leaderboard}
           pagination={leaderboard.length > 8 ? { pageSize: 8 } : false}
           locale={{ emptyText: <div style={{ padding: 24 }}><Empty description="还没有成功的 Run" /></div> }} />
       </Card>
@@ -313,7 +309,7 @@ export default function ModelingWorkflow() {
 
   const deployStep = <DeployStep task={task} runs={runs} bestRunId={bestRunId} />
 
-  const stepContent = [dataStep, configStep, trainStep, vizStep, deployStep][current]
+  const stepContent = [dataStep, configStep, trainingStep, deployStep][current]
 
   return (
     <div style={{ padding: 16 }}>
@@ -354,7 +350,7 @@ export default function ModelingWorkflow() {
         </div>
       </Card>
 
-      <ExperimentBatchModal open={batchOpen} task={task}
+      <ExperimentBatchModal open={batchOpen} task={task} groupModelsByFamily
         onClose={() => setBatchOpen(false)}
         onSubmitted={async () => { await loadTask(); await loadRuns(); setCurrent(2) }} />
       <RunInspector open={!!inspectorRunId} runId={inspectorRunId} defaultTab={inspectorTab}
