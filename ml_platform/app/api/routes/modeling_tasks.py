@@ -100,6 +100,13 @@ class DeployRunRequest(BaseModel):
     max_batch_size: int = Field(default=100, ge=1, le=10000)
 
 
+class ConfigExecRequest(BaseModel):
+    """Run user Python that produces a `config` dict, then dispatch it as a
+    batch (workflow 模型配置 → 代码配置 button)."""
+    code: str
+    name: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Tuning spaces (must be registered BEFORE /{task_id} routes)
 # ---------------------------------------------------------------------------
@@ -346,3 +353,39 @@ async def deploy_run_route(
         description=body.description,
         max_batch_size=body.max_batch_size,
     )
+
+
+@router.post("/{task_id}/config-exec", summary="Run code-config and dispatch a batch", status_code=201)
+async def config_exec_route(
+    task_id: str,
+    body: ConfigExecRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Execute the user's Python (must set `config`) and dispatch the resulting
+    experiment batch through the normal tuning pipeline (workflow 代码配置)."""
+    from app.services import tuning_service
+    from app.services.config_exec_service import execute_config_code
+
+    try:
+        cfg = execute_config_code(body.code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    strategy = cfg.get("strategy_type", "baseline")
+    if strategy not in ("baseline", "grid_search", "bayesian_search"):
+        raise HTTPException(status_code=422, detail="strategy_type 必须是 baseline|grid_search|bayesian_search")
+    try:
+        return await tuning_service.dispatch_experiment_batch(
+            db,
+            modeling_task_id=task_id,
+            name=body.name or cfg.get("name") or "代码配置批次",
+            strategy_type=strategy,
+            selected_models=cfg["selected_models"],
+            search_space=cfg.get("search_space") or {},
+            budget_config=cfg.get("budget_config") or {},
+            eval_metrics=cfg.get("eval_metrics"),
+            model_family=cfg.get("model_family"),
+            dl_config=cfg.get("dl_config"),
+        )
+    except ImportError as exc:
+        raise HTTPException(status_code=501, detail=f"Tuning engine unavailable: {exc}") from exc

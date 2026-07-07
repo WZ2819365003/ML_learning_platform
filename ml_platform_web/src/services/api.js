@@ -304,6 +304,9 @@ export const modelingTaskApi = {
   // underlying ML/DL deployment via the run's domain task.
   deployRun: (taskId, runId, data) =>
     api.post(`/v3/tasks/${taskId}/runs/${runId}/deploy`, data),
+  // Run user Python (code-config) → dispatch a batch through the normal pipeline.
+  configExec: (taskId, data) =>
+    api.post(`/v3/tasks/${taskId}/config-exec`, data),
 };
 
 // A run's trained model is downloadable via its domain_task_id (returned by

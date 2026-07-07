@@ -12,7 +12,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   modelingTaskApi, dataApi, runModelDownloadUrl,
 } from '../services/api'
-import ExperimentBatchModal from '../components/workbench/ExperimentBatchModal'
+import ModelConfigTabs from '../components/workbench/ModelConfigTabs'
 import ProgressTree from '../components/workbench/ProgressTree'
 import StrategyCompareTab from '../components/workbench/StrategyCompareTab'
 import RunInspector from '../components/workbench/RunInspector'
@@ -54,7 +54,6 @@ export default function ModelingWorkflow() {
   const [leaderboard, setLeaderboard] = useState([])
   const [datasets, setDatasets] = useState([])
   const [columnInfo, setColumnInfo] = useState(null)
-  const [batchOpen, setBatchOpen] = useState(false)
   const [inspectorRunId, setInspectorRunId] = useState(null)
   const [inspectorTab, setInspectorTab] = useState('overview')
   const [saving, setSaving] = useState(false)
@@ -233,27 +232,20 @@ export default function ModelingWorkflow() {
 
   const configStep = (
     <Card size="small" bodyStyle={{ padding: 20 }}>
-      <Space direction="vertical" size={14} style={{ width: '100%' }}>
-        <Alert type="info" showIcon
-          message="配置一组或多组模型进行训练"
-          description="点击下方按钮选择模型（可多选）、策略（基线 / 网格 / 贝叶斯）与超参数空间。可多次启动，形成多组对照实验。" />
-        <div>
-          <Button type="primary" icon={<PlusOutlined />} size="large"
-            onClick={() => setBatchOpen(true)} disabled={!task}>
-            配置模型并启动训练
-          </Button>
-        </div>
-        {task?.experiments?.length > 0 && (
-          <>
-            <Divider style={{ margin: '4px 0' }}><Text type="secondary" style={{ fontSize: 12 }}>已配置的实验批次</Text></Divider>
-            <Space wrap>
-              {task.experiments.map(e => (
-                <Tag key={e.id} color="blue">{e.name} · {e.strategy_type} · {(e.selected_models || []).length} 模型</Tag>
-              ))}
-            </Space>
-          </>
-        )}
-      </Space>
+      {task
+        ? <ModelConfigTabs task={task}
+            onSubmitted={async () => { await loadTask(); await loadRuns(); setCurrent(2) }} />
+        : <Text type="secondary">请先在「导入数据」步骤创建任务。</Text>}
+      {task?.experiments?.length > 0 && (
+        <>
+          <Divider style={{ margin: '12px 0' }}><Text type="secondary" style={{ fontSize: 12 }}>已配置的实验批次</Text></Divider>
+          <Space wrap>
+            {task.experiments.map(e => (
+              <Tag key={e.id} color="blue">{e.name} · {(e.selected_models || []).length} 模型</Tag>
+            ))}
+          </Space>
+        </>
+      )}
     </Card>
   )
 
@@ -291,7 +283,7 @@ export default function ModelingWorkflow() {
           <Tag color="processing">运行中 {(runStatusCounts.RUNNING || 0) + (runStatusCounts.PENDING || 0)}</Tag>
           <Tag color="error">失败 {runStatusCounts.FAILED || 0}</Tag>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => { loadTask(); loadRuns() }}>刷新</Button>
-          <Button size="small" type="primary" ghost icon={<PlusOutlined />} onClick={() => setBatchOpen(true)}>再加一组</Button>
+          <Button size="small" type="primary" ghost icon={<PlusOutlined />} onClick={() => setCurrent(1)}>再加一组</Button>
         </Space>
       </Card>
       {task && <ProgressTree modelingTaskId={task.id} />}
@@ -350,9 +342,6 @@ export default function ModelingWorkflow() {
         </div>
       </Card>
 
-      <ExperimentBatchModal open={batchOpen} task={task} groupModelsByFamily
-        onClose={() => setBatchOpen(false)}
-        onSubmitted={async () => { await loadTask(); await loadRuns(); setCurrent(2) }} />
       <RunInspector open={!!inspectorRunId} runId={inspectorRunId} defaultTab={inspectorTab}
         onClose={() => setInspectorRunId(null)} />
     </div>
