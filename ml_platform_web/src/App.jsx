@@ -22,6 +22,7 @@ import Experiments from './pages/Experiments'
 import ExperimentRedirect from './pages/ExperimentRedirect'
 import ModelingTasks from './pages/ModelingTasks'
 import ModelingTaskDetail from './pages/ModelingTaskDetail'
+import ModelingWorkflow from './pages/ModelingWorkflow'
 import TrainingPlans from './pages/TrainingPlans'
 import V3Runs from './pages/V3Runs'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -102,6 +103,17 @@ function App() {
 
               {/* V3 Modeling Workbench — new task-centric workflow */}
               <Route path="/v3/tasks" element={<ModelingTasks />} />
+              {/* Guided linear workflow (数据→配置→训练→可视化→部署). taskId="new" = create mode. */}
+              <Route path="/v3/tasks/new/workflow" element={
+                <ErrorBoundary scope="建模工作流" homeTo="/v3/tasks">
+                  <ModelingWorkflow />
+                </ErrorBoundary>
+              } />
+              <Route path="/v3/tasks/:taskId/workflow" element={
+                <ErrorBoundary scope="建模工作流" homeTo="/v3/tasks">
+                  <ModelingWorkflow />
+                </ErrorBoundary>
+              } />
               {/* ErrorBoundary: detail page has many sub-tabs that can throw
                   during data fetch; isolate so one tab crash doesn't white-screen. */}
               <Route path="/v3/tasks/:taskId" element={

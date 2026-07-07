@@ -43,7 +43,8 @@ const SECTIONS = [
 function getBreadcrumb(pathname) {
   let leaf = PAGE_TITLES[pathname]
   if (!leaf) {
-    if (pathname.startsWith('/ts/tasks/')) leaf = '任务详情'
+    if (pathname.endsWith('/workflow')) leaf = '建模工作流'
+    else if (pathname.startsWith('/ts/tasks/')) leaf = '任务详情'
     else if (pathname.startsWith('/experiments/')) leaf = '实验详情'
     else if (pathname.startsWith('/v3/tasks/')) leaf = '任务详情'
     else leaf = 'ML Platform'

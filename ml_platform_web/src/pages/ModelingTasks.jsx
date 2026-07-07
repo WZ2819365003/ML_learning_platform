@@ -6,7 +6,8 @@ import {
 import {
   PlusOutlined, AppstoreOutlined, ExperimentOutlined, TrophyOutlined,
   ReloadOutlined, DeleteOutlined, EyeOutlined, CheckCircleFilled,
-  ClockCircleFilled, CloseCircleFilled, FireOutlined,
+  ClockCircleFilled, CloseCircleFilled, FireOutlined, EditOutlined,
+  CloudUploadOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { modelingTaskApi, dataApi } from '../services/api'
@@ -297,23 +298,34 @@ export default function ModelingTasks() {
     {
       title: '操作',
       key: 'actions',
-      width: 120,
+      width: 220,
       fixed: 'right',
-      render: (_, row) => (
-        <Space size={4}>
-          <Tooltip title="查看详情">
-            <Button size="small" type="primary" ghost icon={<EyeOutlined />}
-              onClick={() => navigate(`/v3/tasks/${row.id}`)}>详情</Button>
-          </Tooltip>
-          <Popconfirm
-            title="确认删除此建模任务？"
-            description="其下所有实验与 Run 都会被级联清理。"
-            onConfirm={() => handleDelete(row.id)}
-          >
-            <Button size="small" danger icon={<DeleteOutlined />} disabled={row.status === 'RUNNING'} />
-          </Popconfirm>
-        </Space>
-      ),
+      render: (_, row) => {
+        const canDeploy = (row.successful_run_count ?? 0) > 0
+        return (
+          <Space size={4}>
+            <Tooltip title="进入工作流（数据→配置→训练→可视化→部署）">
+              <Button size="small" type="primary" ghost icon={<EditOutlined />}
+                onClick={() => navigate(`/v3/tasks/${row.id}/workflow`)}>工作流</Button>
+            </Tooltip>
+            <Tooltip title={canDeploy ? '部署最佳模型' : '暂无成功的 Run，无法部署'}>
+              <Button size="small" icon={<CloudUploadOutlined />} disabled={!canDeploy}
+                onClick={() => navigate(`/v3/tasks/${row.id}/workflow?step=4`)} />
+            </Tooltip>
+            <Tooltip title="查看详情（Tab 视图）">
+              <Button size="small" icon={<EyeOutlined />}
+                onClick={() => navigate(`/v3/tasks/${row.id}`)} />
+            </Tooltip>
+            <Popconfirm
+              title="确认删除此建模任务？"
+              description="其下所有实验与 Run 都会被级联清理。"
+              onConfirm={() => handleDelete(row.id)}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />} disabled={row.status === 'RUNNING'} />
+            </Popconfirm>
+          </Space>
+        )
+      },
     },
   ]
 
@@ -347,7 +359,7 @@ export default function ModelingTasks() {
 
           <Space>
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/v3/tasks/new/workflow')}>
               新建建模任务
             </Button>
           </Space>

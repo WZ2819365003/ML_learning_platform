@@ -300,7 +300,16 @@ export const modelingTaskApi = {
   progressTree: (taskId) => api.get(`/v3/tasks/${taskId}/progress-tree`),
   strategyComparison: (taskId) =>
     api.get(`/v3/tasks/${taskId}/strategy-comparison`),
+  // Deploy the model trained by a run (workflow 部署 step). Bridges to the
+  // underlying ML/DL deployment via the run's domain task.
+  deployRun: (taskId, runId, data) =>
+    api.post(`/v3/tasks/${taskId}/runs/${runId}/deploy`, data),
 };
+
+// A run's trained model is downloadable via its domain_task_id (returned by
+// modelingTaskApi.runs/leaderboard). ML models go through /api/models/{id}/download.
+export const runModelDownloadUrl = (domainTaskId) =>
+  `${api.defaults.baseURL}/models/${domainTaskId}/download`;
 
 export const platformRunsApi = {
   inspect: (runId, params = {}) => api.get(`/platform/runs/${runId}/inspector`, { params }),
