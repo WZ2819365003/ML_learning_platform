@@ -24,7 +24,7 @@ V3 平台的核心价值是「一个任务里跑多个模型、比出最优」�
 新的「建模」分组（`Sidebar.jsx`）：任务列表 `/v3/tasks`（去重，删 V3 的「建模工作台」）、模型管理 `/models`、模型部署 `/deploy`、**运行诊断** `/v3/runs`。
 
 处理掉（页面下线只动导航+路由，**不动其 API 封装**）：
-- **实验管理**（`/experiments`）：导航移除；`App.jsx` 加 `Navigate` 重定向到 `/v3/tasks`；**保留** `platformExperimentsApi`（`ShapView.jsx:312`、`ExperimentRedirect.jsx:25` 仍用）；同步更新 `ExperimentRedirect.jsx:44` 兜底文案（不再指向 `/experiments`）。
+- **实验管理**（`/experiments`）：导航移除；`App.jsx` 加 `Navigate` 重定向到 `/v3/tasks`；**保留** `platformExperimentsApi`（`ShapView.jsx:312`、`ExperimentRedirect.jsx:25` 仍用）；同步更新 `ExperimentRedirect.jsx` 的兜底文案与顶部注释（`:8` 与 `:44`，不再指向 `/experiments`）。
 - **训练方案**（`/v3/training-plans`）：顶层菜单移除；页面保留，入口改到「调参策略」tab 的「套用方案」。
 - **任务中心**（`/tasks`）：顶层菜单移除；路由重定向到 `/v3/runs`。其孤立任务视图并入运行诊断（见 Part 4，**排在最后做**）。
 - **V3 平台 BETA** 分组彻底删除；`Header.jsx` 面包屑 section：`/v3/runs`、`/models`、`/deploy` 归「建模」。
@@ -32,10 +32,13 @@ V3 平台的核心价值是「一个任务里跑多个模型、比出最优」�
 ## Part 2 — 多模型对比重做（核心）
 
 ### 2a. 归一化 adapter（回应 Codex #5，先做）
-新增 `utils/comparison.js`：把三种数据形状归一到一个 `ComparisonVM`：
-- 输入源：`modelingTaskApi.leaderboard`（`ModelingWorkflow.jsx:88`）、`runs`（`ModelingTaskDetail.jsx:107`）、`strategyComparison`（`StrategyCompareTab.jsx:52`）。
-- 输出：`{ rows: [{run_id, model_type, strategy_type, status, metrics:{}, objective_value, domain_task_id, family, is_best}], metricKeys: string[], strategyStats }`。
-- `metricKeys` **动态**取自任务 `eval_metrics` ∪ 目标指标（回应 Codex #7），渲染时**缺失回退**为 `-`。
+新增 `utils/comparison.js`：把 run 列表归一到一个 `ComparisonVM`：
+- 输入源：`modelingTaskApi.leaderboard`（`ModelingWorkflow.jsx:88`）与/或 `runs`（`ModelingTaskDetail.jsx:107`）——行内已带 `metrics:{}`、`objective_value`、`domain_task_id`、`family`、`strategy_type`。
+- 输出 `ComparisonVM = { rows, metricKeys, objective_metric, objective_direction }`：
+  - `rows: [{run_id, model_type, strategy_type, status, metrics:{}, objective_value, domain_task_id, family, is_best}]`。
+  - `metricKeys`：**取所有 run 的 `metrics` 键并集 ∪ `objective_metric`**（⚠**不是** `task.eval_metrics`——task 只暴露 `objective_metric`，run 行暴露 `metrics`，见 `modeling_task_service.py:599`），渲染缺失回退 `-`。
+  - `objective_metric` / `objective_direction`：来自 task，供排序方向与列高亮/标签（`ModelingTaskDetail.jsx:462`）。
+- **策略对比数据不进 adapter**：由内嵌的 `StrategyCompareTab` 自取（它已自 `modelingTaskApi.strategyComparison`），避免重复请求（回应 Codex：二选一，选"section 自取"）。
 
 ### 2b. 共享组件 `components/workbench/ModelComparison.jsx`
 以**模型维度**为主，集中处理 筛选/行操作/三态（空/加载/错误，对齐 `StrategyCompareTab.jsx:190`，回应 Codex #8）：
@@ -45,25 +48,28 @@ V3 平台的核心价值是「一个任务里跑多个模型、比出最优」�
 - 策略对比（**保留**）：内嵌一块「按策略看」，复用 `StrategyCompareTab`。
 
 ### 2c. 共享部署 helper（回应 Codex #6）
-把 `DeployStep.jsx:21/47` 的护栏抽成 `useDeployRun()`（校验 `status==SUCCESS && domain_task_id`、命名、响应态、错误提示），供 `DeployStep` 与 `ModelComparison` 行操作共用，避免重复/漏护栏。
+把 `DeployStep.jsx:21/47` 的护栏抽成 `useDeployRun(task)`，**契约**：返回 `{ deploying, deployment, error, deploy(runId, { name }) }`；`deploy` 内部校验 `status==SUCCESS && domain_task_id`、缺省名 `${task.name}-部署`、维护 `deployment` 响应态与 `error`。`DeployStep` 与 `ModelComparison` 都用它；表格行「部署此模型」先弹**轻量命名框**（默认名可改）再调 `deploy`，**不裸调 `deployRun`**（回应 Codex：行内部署需与 DeployStep 同护栏 + 命名）。
 
 ### 2d. 接入（先一处，回应 Codex 排序）
 先只在 **工作流「训练过程」步** 用 `ModelComparison`（取代当前简版排行榜 `ModelingWorkflow.jsx:301`）；数据形状验证 OK 后，再替换 `ModelingTaskDetail.jsx` 的「Run 对比 + 策略对比」两 tab 为单个「模型对比」tab。
 
 ## Part 3 — 策略配置保留为独立入口（回应 Codex #3）
-- 先把 `ExperimentBatchModal` 拆成 **`ExperimentBatchForm`（控制器+状态+展示：重置/加载调参空间/方案列表/payload 组装/提交）** + **`ExperimentBatchModal`（薄壳）**；保证详情页「启动新批次」Modal 行为不回归（保留其现有 Playwright 断言）。
+- 先把 `ExperimentBatchModal` 拆成 **`ExperimentBatchForm`（控制器+状态+展示：重置/加载调参空间/方案列表/payload 组装/提交）** + **`ExperimentBatchModal`（薄壳）**。`ExperimentBatchForm` 用**显式 `active` prop（+ `resetKey`）** 触发重置/加载，替代现在依赖 Modal `open` 的副作用（`ExperimentBatchModal.jsx:187,206`）：Modal 传 `active=open`，配置步 tab 传 `active=(当前在「调参策略」tab)`，避免误重置/重复请求（回应 Codex：激活/重置契约）。保证详情页「启动新批次」Modal 行为不回归（保留其现有 Playwright 断言）。
 - 工作流「模型配置」步新增第 4 个 tab **「调参策略」**，内嵌 `ExperimentBatchForm`（策略 基线/网格/贝叶斯 + 参与模型 + 每模型搜索空间 + 预算 + **套用方案**）。
 - 直配 3 tab 与「调参策略」tab 各自 `createExperimentBatch` 派发，走同一管线。
 
 ## Part 4 — 运行诊断合并（最后做，回应 Codex #4）
 `V3Runs.jsx`（`v3RunsApi` 扁平表）加第 2 个 tab「孤立任务」：**整块搬** `TaskCenter` 的 `FlatView` + `OrphanTaskDetailDrawer` + `platformTasksApi`（含 重试/取消/删除/批量/筛选/选择），不重写。排在所有改动之后。
 
-## 实施顺序（采纳 Codex 建议）
-1. **Part 1 IA**（侧栏/头/路由/重定向 + `ExperimentRedirect` 文案）——含重定向测试。
-2. **2a adapter + 2b/2c ModelComparison**，**仅接工作流训练步**。
-3. 验证数据形状后，**替换详情页两 tab** 为「模型对比」。
-4. **Part 3**：抽 `ExperimentBatchForm`+壳（先保 Modal 测试），再加「调参策略」tab。
-5. **Part 4**：孤立任务并入运行诊断。
+## 实施顺序（采纳 Codex 复审的 8 步拆分）
+1. **Part 1 IA**（侧栏/头/路由/重定向 + `ExperimentRedirect` 文案与注释）+ 重定向测试。
+2. **`utils/comparison.js` adapter** + fixture/单测，**暂不接 UI**。
+3. **抽 `useDeployRun()`**，`DeployStep` 行为不变（回归测试）。
+4. **`ModelComparison` 仅接工作流训练步**。
+5. 验证数据形状后，**替换详情页两 tab** 为「模型对比」。
+6. **抽 `ExperimentBatchForm`+壳**（先固化 Modal Playwright 断言再改）。
+7. **加「调参策略」tab**（内嵌 `ExperimentBatchForm`，`active` 受控）。
+8. **孤立任务并入运行诊断**（最后）。
 
 ## 需要改动/新增的关键文件
 - 导航：`Sidebar.jsx`、`Header.jsx`、`App.jsx`、`ExperimentRedirect.jsx`（文案）。
@@ -77,7 +83,7 @@ V3 平台的核心价值是「一个任务里跑多个模型、比出最优」�
 2. 「模型对比」：动态指标并排表 + 柱状图 + RunInspector 下钻 + 部署最优；策略对比仍在；空/加载/错误三态正常。
 3. 「调参策略」tab：网格/贝叶斯 + 搜索空间派发调参 Run；「套用方案」预填；详情页「启动新批次」Modal 无回归。
 4. 运行诊断两 tab（全部 Run / 孤立任务，含重试/取消/删除）有数据；`/models`、`/deploy` 正常。
-5. `cd ml_platform && python -m pytest tests/`（无后端改动，回归绿）；**更新受影响的 Playwright**（现断言旧名 `建模工作台/Run 诊断中心/Run 对比/模型解释`，见 `tests/v3-workbench.spec.js:61`、`tests/v3-runs-page.spec.js:51`）；`npm run lint` 改动文件 0 error；本地 `:5188`+`:8001` 逐项截图。
+5. `cd ml_platform && python -m pytest tests/`（无后端改动，回归绿）；**更新受影响的 Playwright**（现断言旧名 `建模工作台/Run 诊断中心/Run 对比/模型解释/策略对比`，见 `tests/v3-workbench.spec.js:61`、`tests/v3-runs-page.spec.js:51`、`tests/v3-strategies-uiplus.spec.js:164`、`tests/v3_2-smoke.spec.js:63`）；`npm run lint` 改动文件 0 error；本地 `:5188`+`:8001` 逐项截图。
 
 ## 风险与缓解
 - 抽 `ExperimentBatchForm`：**控制器/状态与展示一起抽**（非纯 JSX），先固化 Modal 测试再改。
