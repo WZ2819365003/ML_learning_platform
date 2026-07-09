@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import {
   Modal, Form, Input, Select, Radio, InputNumber, Row, Col, Tabs, Tag,
-  Space, Divider, Typography, Alert, Checkbox, message, Tooltip,
+  Space, Divider, Typography, Alert, message, Tooltip,
 } from 'antd'
 import { ThunderboltOutlined, NodeIndexOutlined, FunctionOutlined, InfoCircleOutlined, BookOutlined } from '@ant-design/icons'
-import { modelingTaskApi, trainingPlansApi, dlApi } from '../../services/api'
+import { modelingTaskApi, trainingPlansApi } from '../../services/api'
 
 const { Text } = Typography
 
@@ -171,43 +171,7 @@ function ModelTuningPanel({ strategy, modelKey, spec, value, onChange }) {
 }
 
 
-// Model selector split into 机器学习 / 深度学习 nested tabs. Used only by the
-// unified workflow (groupModelsByFamily). Form.Item injects value/onChange; we
-// keep a single merged selected_models array so submit logic is unchanged.
-function FamilyModelPicker({ value = [], onChange, mlOptions = [], dlOptions = [], loading }) {
-  const mlSet = new Set(mlOptions.map(o => o.value))
-  const dlSet = new Set(dlOptions.map(o => o.value))
-  const mlValue = value.filter(v => mlSet.has(v))
-  const dlValue = value.filter(v => dlSet.has(v))
-  const setFamily = (family, vals) => {
-    const other = family === 'ml' ? value.filter(v => !mlSet.has(v)) : value.filter(v => !dlSet.has(v))
-    onChange?.([...other, ...vals])
-  }
-  return (
-    <Tabs size="small" items={[
-      {
-        key: 'ml', label: `机器学习 (${mlValue.length})`,
-        children: (
-          <Select mode="multiple" loading={loading} style={{ width: '100%' }}
-            value={mlValue} options={mlOptions} onChange={(v) => setFamily('ml', v)}
-            placeholder="选择机器学习模型（可多选）" maxTagCount="responsive" />
-        ),
-      },
-      {
-        key: 'dl', label: `深度学习 (${dlValue.length})`,
-        children: dlOptions.length
-          ? (
-            <Select mode="multiple" loading={loading} style={{ width: '100%' }}
-              value={dlValue} options={dlOptions} onChange={(v) => setFamily('dl', v)}
-              placeholder="选择深度学习模型（可多选）" maxTagCount="responsive" />
-          )
-          : <Text type="secondary" style={{ fontSize: 12 }}>该任务类型暂无可选深度学习模型</Text>,
-      },
-    ]} />
-  )
-}
-
-export default function ExperimentBatchModal({ open, task, onClose, onSubmitted, groupModelsByFamily = false }) {
+export default function ExperimentBatchModal({ open, task, onClose, onSubmitted }) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [tuningSpaces, setTuningSpaces] = useState({})
@@ -219,7 +183,6 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted,
   const [plans, setPlans] = useState([])
   const [appliedPlanId, setAppliedPlanId] = useState(null)
   const [appliedPlanPayload, setAppliedPlanPayload] = useState(null)
-  const [dlModels, setDlModels] = useState([])  // DL catalog for the 深度学习 tab
 
   // Reset state when modal opens / task changes
   useEffect(() => {
@@ -249,16 +212,6 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted,
       .catch(err => message.error('加载调参空间失败：' + (err?.response?.data?.detail || err.message)))
       .finally(() => setLoading(false))
   }, [open, task?.task_type])
-
-  // DL catalog for the 深度学习 tab (only needed when grouping by family).
-  // tuning_spaces.yaml has no torch DL models; they live in /dl/models and
-  // dispatch backfills dl_config defaults + resolves model_family per token.
-  useEffect(() => {
-    if (!open || !groupModelsByFamily) return
-    dlApi.listModels()
-      .then(resp => setDlModels(resp?.models || []))
-      .catch(() => setDlModels([]))
-  }, [open, groupModelsByFamily])
 
   // Load applicable training plans (filtered by task_type so regression plans
   // don't pollute a classification task's picker).
@@ -305,16 +258,6 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted,
     () => Object.keys(tuningSpaces).map(k => ({ value: k, label: k })),
     [tuningSpaces]
   )
-  // 机器学习 = tuning-spaces models (all family 'ml' there). 深度学习 = torch
-  // models from /dl/models filtered by task_type.
-  const mlOptions = modelOptions
-  const dlOptions = useMemo(
-    () => (dlModels || [])
-      .filter(m => !m.task_types || m.task_types.includes(task?.task_type))
-      .map(m => ({ value: m.id, label: m.display_name || m.id })),
-    [dlModels, task?.task_type]
-  )
-  const mlTokenSet = useMemo(() => new Set(mlOptions.map(o => o.value)), [mlOptions])
 
   const updateModelParam = (modelKey, patch) => {
     setModelParams(prev => {
@@ -347,15 +290,6 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted,
     if (!values.selected_models?.length) {
       message.warning('请至少选择一个模型')
       return
-    }
-
-    // In grouped (workflow) mode derive model_family from the selection so the
-    // backend routes DL tokens correctly and backfills dl_config defaults.
-    let familyOverride = appliedPlanPayload?.model_family
-    if (groupModelsByFamily) {
-      const hasMl = values.selected_models.some(m => mlTokenSet.has(m))
-      const hasDl = values.selected_models.some(m => !mlTokenSet.has(m))
-      familyOverride = hasMl && hasDl ? 'mixed' : hasDl ? 'dl' : 'ml'
     }
 
     // Build search_space payload matching backend expectations
@@ -396,7 +330,7 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted,
         search_space,
         budget_config,
         eval_metrics: appliedPlanPayload?.eval_metrics || undefined,
-        model_family: familyOverride,
+        model_family: appliedPlanPayload?.model_family,
         dl_config: appliedPlanPayload?.dl_config || undefined,
       })
       message.success('实验批次已提交，开始训练')
@@ -479,17 +413,13 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted,
         </Row>
 
         <Form.Item name="selected_models" label="参与模型" rules={[{ required: true, message: '请至少选择一个模型' }]}>
-          {groupModelsByFamily
-            ? <FamilyModelPicker mlOptions={mlOptions} dlOptions={dlOptions} loading={loading} />
-            : (
-              <Select
-                mode="multiple"
-                loading={loading}
-                placeholder={`选择要参与 ${task?.task_type === 'regression' ? '回归' : '分类'} 的模型`}
-                options={modelOptions}
-                maxTagCount="responsive"
-              />
-            )}
+          <Select
+            mode="multiple"
+            loading={loading}
+            placeholder={`选择要参与 ${task?.task_type === 'regression' ? '回归' : '分类'} 的模型`}
+            options={modelOptions}
+            maxTagCount="responsive"
+          />
         </Form.Item>
 
         <Row gutter={12}>
@@ -530,19 +460,13 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted,
                 label: m,
                 children: (
                   <div style={{ padding: '4px 2px' }}>
-                    {groupModelsByFamily && !tuningSpaces[m] ? (
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        深度学习模型使用默认网络结构与训练配置（基线）。
-                      </Text>
-                    ) : (
-                      <ModelTuningPanel
-                        strategy={strategy}
-                        modelKey={m}
-                        spec={tuningSpaces[m]}
-                        value={modelParams}
-                        onChange={(patch) => updateModelParam(m, patch)}
-                      />
-                    )}
+                    <ModelTuningPanel
+                      strategy={strategy}
+                      modelKey={m}
+                      spec={tuningSpaces[m]}
+                      value={modelParams}
+                      onChange={(patch) => updateModelParam(m, patch)}
+                    />
                   </div>
                 ),
               }))}

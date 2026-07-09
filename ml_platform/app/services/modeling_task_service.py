@@ -1002,12 +1002,4 @@ def load_tuning_spaces(task_type: str = "classification") -> dict[str, Any]:
         data = yaml.safe_load(f) or {}
     if task_type not in data:
         raise ValueError(f"task_type {task_type!r} not in tuning_spaces.yaml")
-    spaces = data[task_type]
-    # Tag each model spec with its family (ml/dl) so the workbench can group
-    # model selection into 机器学习 / 深度学习 tabs. Additive field — existing
-    # consumers (V3 ExperimentBatchModal) ignore unknown keys.
-    from app.core.model_registry import resolve_model_family
-    for token, spec in spaces.items():
-        if isinstance(spec, dict):
-            spec.setdefault("family", resolve_model_family(token) or "ml")
-    return spaces
+    return data[task_type]

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
-  Card, Button, Table, Tag, Space, Modal, Form, Input, Select, Tooltip,
-  message, Popconfirm, Row, Col, Empty, Divider,
+  Card, Button, Table, Tag, Space, Tooltip, message, Popconfirm, Empty,
 } from 'antd'
 import {
   PlusOutlined, AppstoreOutlined, ExperimentOutlined, TrophyOutlined,
@@ -10,8 +9,7 @@ import {
   CloudUploadOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { modelingTaskApi, dataApi } from '../services/api'
-import TrainingPlanPicker from '../components/workbench/TrainingPlanPicker'
+import { modelingTaskApi } from '../services/api'
 
 const STATUS_META = {
   CREATED:   { color: 'default', icon: <ClockCircleFilled />, label: '待启动' },
@@ -20,22 +18,6 @@ const STATUS_META = {
   FAILED:    { color: 'error', icon: <CloseCircleFilled />, label: '失败' },
   ARCHIVED:  { color: 'default', icon: null, label: '已归档' },
 }
-
-const OBJECTIVE_PRESETS = {
-  classification: [
-    { value: 'accuracy', label: 'Accuracy (越高越好)' },
-    { value: 'f1', label: 'F1 (越高越好)' },
-    { value: 'roc_auc', label: 'ROC-AUC (越高越好)' },
-  ],
-  regression: [
-    { value: 'rmse', label: 'RMSE (越低越好)' },
-    { value: 'mae', label: 'MAE (越低越好)' },
-    { value: 'r2', label: 'R² (越高越好)' },
-  ],
-}
-
-const _objectiveDirection = (metric) =>
-  ['rmse', 'mae', 'mse', 'mape'].includes(metric) ? 'min' : 'max'
 
 // ── Inline stat chip (compact, lives in the card header strip) ───────────────
 function StatChip({ icon, label, value, color }) {
@@ -66,14 +48,7 @@ export default function ModelingTasks() {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState({ items: [], total: 0 })
-  const [datasets, setDatasets] = useState([])
   const [pagination, setPagination] = useState({ page: 1, pageSize: 10 })
-  const [createOpen, setCreateOpen] = useState(false)
-  const [createLoading, setCreateLoading] = useState(false)
-  // columnInfo: { columnName: { dtype, missing_rate, missing_count } }
-  const [columnInfo, setColumnInfo] = useState(null)
-  const [columnsLoading, setColumnsLoading] = useState(false)
-  const [form] = Form.useForm()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -90,115 +65,7 @@ export default function ModelingTasks() {
     }
   }, [pagination.page, pagination.pageSize])
 
-  const loadDatasets = useCallback(async () => {
-    try {
-      const resp = await dataApi.listDatasets({ page: 1, page_size: 100 })
-      setDatasets(resp?.items || resp?.datasets || [])
-    } catch {/* non-fatal */}
-  }, [])
-
   useEffect(() => { load() }, [load])
-  useEffect(() => { loadDatasets() }, [loadDatasets])
-
-  const taskTypeWatch = Form.useWatch('task_type', form) || 'classification'
-  const datasetIdWatch = Form.useWatch('dataset_id', form)
-
-  // When the user picks a dataset in the create modal, fetch its column headers
-  // so the 目标列 field becomes a dropdown.  We use the preview endpoint (which
-  // already returns columns_info: { col: {dtype, missing_rate, ...} }) rather
-  // than adding a new route — the payload is tiny when rows=1.
-  useEffect(() => {
-    if (!createOpen || !datasetIdWatch) { setColumnInfo(null); return }
-    let cancelled = false
-    setColumnsLoading(true)
-    dataApi.previewDataset(datasetIdWatch)
-      .then((resp) => { if (!cancelled) setColumnInfo(resp?.columns_info || null) })
-      .catch(() => { if (!cancelled) setColumnInfo(null) })
-      .finally(() => { if (!cancelled) setColumnsLoading(false) })
-    // Clear any previously selected target_column when the dataset changes
-    form.setFieldValue('target_column', undefined)
-    return () => { cancelled = true }
-  }, [datasetIdWatch, createOpen, form])
-
-  // Build target-column select options, filtered by task type.  For regression
-  // we only surface numeric columns (float/int); for classification we allow
-  // everything but sort numeric first (common convention — label is an int
-  // class id or a string).  Also surface missing_rate as a subtle warning.
-  const targetColumnOptions = React.useMemo(() => {
-    if (!columnInfo) return []
-    const entries = Object.entries(columnInfo)
-    const isNumeric = (dt) => /int|float|double|number/i.test(String(dt))
-    const toFiniteNumber = (value) => {
-      const n = Number(value)
-      return Number.isFinite(n) ? n : null
-    }
-    const isIdLikeClassificationTarget = (meta) => {
-      const uniqueRate = toFiniteNumber(meta.unique_rate)
-      const uniqueCount = toFiniteNumber(meta.unique_count)
-      const singleClass = uniqueCount != null && uniqueCount <= 1
-      const highCardinality = uniqueRate != null && uniqueCount != null
-        && uniqueRate > 0.9 && uniqueCount > 20
-      return taskTypeWatch === 'classification'
-        && (singleClass || highCardinality)
-    }
-    const filtered = taskTypeWatch === 'regression'
-      ? entries.filter(([, m]) => isNumeric(m.dtype))
-      : entries.filter(([, m]) => !isIdLikeClassificationTarget(m))
-    filtered.sort((a, b) => {
-      const an = isNumeric(a[1].dtype) ? 0 : 1
-      const bn = isNumeric(b[1].dtype) ? 0 : 1
-      return an - bn || a[0].localeCompare(b[0])
-    })
-    return filtered.map(([col, meta]) => ({
-      value: col,
-      label: (
-        <Space size={6}>
-          <span style={{ fontWeight: 500 }}>{col}</span>
-          <Tag style={{ fontSize: 10, margin: 0 }} color={isNumeric(meta.dtype) ? 'blue' : 'default'}>
-            {meta.dtype}
-          </Tag>
-          {meta.missing_rate > 0 && (
-            <Tag style={{ fontSize: 10, margin: 0 }} color="warning">
-              缺失 {(meta.missing_rate * 100).toFixed(0)}%
-            </Tag>
-          )}
-          {meta.unique_count != null && (
-            <Tag style={{ fontSize: 10, margin: 0 }} color="geekblue">
-              {meta.unique_count} 类
-            </Tag>
-          )}
-        </Space>
-      ),
-    }))
-  }, [columnInfo, taskTypeWatch])
-
-  const handleCreate = async () => {
-    const values = await form.validateFields()
-    setCreateLoading(true)
-    try {
-      const payload = {
-        name: values.name,
-        description: values.description,
-        dataset_id: values.dataset_id || null,
-        target_column: values.target_column || null,
-        task_type: values.task_type,
-        objective_metric: values.objective_metric,
-        objective_direction: _objectiveDirection(values.objective_metric),
-        training_plan_id: values.training_plan_id || null,
-      }
-      const result = await modelingTaskApi.create(payload)
-      message.success(`建模任务 "${result.name}" 已创建`)
-      setCreateOpen(false)
-      form.resetFields()
-      await load()
-      navigate(`/v3/tasks/${result.id}`)
-    } catch (err) {
-      if (err?.errorFields) return  // form validation
-      message.error(err?.response?.data?.detail || '创建失败')
-    } finally {
-      setCreateLoading(false)
-    }
-  }
 
   const handleDelete = async (taskId) => {
     try {
@@ -345,7 +212,7 @@ export default function ModelingTasks() {
               <Tag color="blue" style={{ marginLeft: 4 }}>V3</Tag>
             </div>
             <div style={{ color: '#64748b', fontSize: 12, marginTop: 4 }}>
-              以"任务"为单位组织建模流程：一个任务可挂多组实验（基线/网格/贝叶斯），自动汇总最佳 Run。
+              以「任务」为单位组织建模流程：一个任务可挂多组实验（基线/网格/贝叶斯），自动汇总最佳 Run。
             </div>
           </div>
 
@@ -395,106 +262,6 @@ export default function ModelingTasks() {
           }}
         />
       </Card>
-
-      {/* ── Create modal ────────────────────────────────────────────────── */}
-      <Modal
-        title="新建建模任务"
-        open={createOpen}
-        onCancel={() => { setCreateOpen(false); form.resetFields() }}
-        onOk={handleCreate}
-        confirmLoading={createLoading}
-        width={640}
-        okText="创建"
-        cancelText="取消"
-      >
-        <Divider style={{ margin: '0 0 16px' }} />
-        <Form form={form} layout="vertical" requiredMark="optional" initialValues={{
-          task_type: 'classification',
-          objective_metric: 'accuracy',
-        }}>
-          <Form.Item name="name" label="任务名称" rules={[{ required: true, min: 2, message: '至少 2 个字符' }]}>
-            <Input placeholder="例: 客户流失预测 v1" />
-          </Form.Item>
-          <Form.Item name="description" label="描述">
-            <Input.TextArea rows={2} placeholder="选填，简述本次建模目标（如业务场景、期望指标）" />
-          </Form.Item>
-          <Row gutter={12}>
-            <Col span={14}>
-              <Form.Item name="dataset_id" label="数据集">
-                <Select placeholder="选择数据集（可稍后在实验批次中指定）"
-                  options={datasets.map(d => ({ value: d.id, label: `${d.name} (${d.row_count || '?'} 行)` }))}
-                  allowClear showSearch
-                  filterOption={(input, opt) => String(opt.label).toLowerCase().includes(input.toLowerCase())}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={10}>
-              <Form.Item
-                name="target_column"
-                label={
-                  <Space size={4}>
-                    <span>目标列</span>
-                    {columnInfo && (
-                      <span style={{ fontSize: 11, color: '#64748b' }}>
-                        (共 {Object.keys(columnInfo).length} 列)
-                      </span>
-                    )}
-                  </Space>
-                }
-                tooltip={!datasetIdWatch ? '请先选择数据集' : undefined}
-              >
-                <Select
-                  placeholder={
-                    !datasetIdWatch ? '请先选择数据集'
-                    : columnsLoading ? '正在读取列头…'
-                    : columnInfo ? '从列表中选择目标列'
-                    : '无法加载列信息'
-                  }
-                  disabled={!datasetIdWatch}
-                  loading={columnsLoading}
-                  options={targetColumnOptions}
-                  showSearch optionFilterProp="value"
-                  filterOption={(input, opt) =>
-                    String(opt.value).toLowerCase().includes(input.toLowerCase())
-                  }
-                  notFoundContent={columnsLoading ? '加载中...' : '无可用列（请检查任务类型是否匹配数据集）'}
-                  allowClear
-                />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Row gutter={12}>
-            <Col span={10}>
-              <Form.Item name="task_type" label="任务类型" rules={[{ required: true }]}>
-                <Select
-                  options={[
-                    { value: 'classification', label: '分类' },
-                    { value: 'regression', label: '回归' },
-                  ]}
-                  onChange={() => {
-                    const t = form.getFieldValue('task_type')
-                    form.setFieldValue('objective_metric', t === 'regression' ? 'rmse' : 'accuracy')
-                    // task_type changed → clear plan binding because plans are task-type-specific
-                    form.setFieldValue('training_plan_id', undefined)
-                  }}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={14}>
-              <Form.Item name="objective_metric" label="优化目标指标" rules={[{ required: true }]}>
-                <Select options={OBJECTIVE_PRESETS[taskTypeWatch]} />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item
-            name="training_plan_id"
-            label="训练方案（可选）"
-            tooltip="选择已保存的训练方案后，本任务将在创建时冻结方案快照，后续编辑方案不会影响此任务。"
-          >
-            <TrainingPlanPicker taskType={taskTypeWatch} />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   )
 }

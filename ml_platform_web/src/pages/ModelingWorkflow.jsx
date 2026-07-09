@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card, Steps, Button, Space, Select, Input, Upload, Form, Row, Col, Tag,
-  Typography, message, Table, Empty, Progress, Tooltip, Divider, Alert,
+  Typography, message, Table, Empty, Tooltip, Divider,
 } from 'antd'
 import {
-  DatabaseOutlined, ExperimentOutlined, ThunderboltOutlined, LineChartOutlined,
+  DatabaseOutlined, ExperimentOutlined, ThunderboltOutlined,
   CloudUploadOutlined, InboxOutlined, PlusOutlined, ReloadOutlined,
   ArrowLeftOutlined, ArrowRightOutlined, TrophyOutlined, BulbOutlined, DownloadOutlined,
   CodeOutlined,

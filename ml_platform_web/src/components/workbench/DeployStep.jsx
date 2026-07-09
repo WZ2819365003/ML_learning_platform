@@ -8,7 +8,7 @@ import {
 } from '@ant-design/icons'
 import { modelingTaskApi, deployApi, runModelDownloadUrl } from '../../services/api'
 
-const { Text, Paragraph } = Typography
+const { Text } = Typography
 
 /**
  * Workflow 部署 step. Given the task's successful runs (with domain_task_id +

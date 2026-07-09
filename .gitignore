@@ -61,3 +61,7 @@ docker/runtime_data/
 
 # MCP config contains SSH credentials — do NOT commit
 .mcp.json
+
+# Local dev env overrides
+.env.local
+ml_platform_web/.env.local
