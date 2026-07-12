@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card, Table, Tag, Space, Button, Input, Select, Tooltip, Empty, message,
-  Typography,
+  Typography, Tabs,
 } from 'antd'
 import {
   ReloadOutlined, EyeOutlined, ExperimentOutlined, BranchesOutlined,
@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { v3RunsApi } from '../services/api'
 import RunInspector from '../components/workbench/RunInspector'
+import OrphanTasksPanel from '../components/workbench/OrphanTasksPanel'
 
 const { Title, Text } = Typography
 
@@ -344,6 +345,8 @@ export default function V3Runs() {
           </Space>
         </div>
 
+        <Tabs defaultActiveKey="runs" items={[
+          { key: 'runs', label: '全部 Run', children: (<>
         {/* Filters */}
         <Space wrap style={{ marginBottom: 14 }}>
           <Input.Search
@@ -407,9 +410,12 @@ export default function V3Runs() {
           locale={{
             emptyText: error
               ? <Empty description={`加载失败：${error}`} />
-              : <Empty description={<span>暂无 Run — 先去 <ExperimentOutlined /> 建模工作台 创建实验</span>} />,
+              : <Empty description={<span>暂无 Run — 先去 <ExperimentOutlined /> 任务列表 创建实验</span>} />,
           }}
         />
+          </>) },
+          { key: 'orphan', label: '孤立任务', children: <OrphanTasksPanel /> },
+        ]} />
       </Card>
 
       {/* Inspector Drawer — close returns to table; no route change */}
