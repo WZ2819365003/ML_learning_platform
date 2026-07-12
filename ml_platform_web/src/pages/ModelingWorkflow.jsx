@@ -1,22 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card, Steps, Button, Space, Select, Input, Upload, Form, Row, Col, Tag,
-  Typography, message, Table, Empty, Tooltip, Divider,
+  Typography, message, Divider,
 } from 'antd'
 import {
   DatabaseOutlined, ExperimentOutlined, ThunderboltOutlined,
   CloudUploadOutlined, InboxOutlined, PlusOutlined, ReloadOutlined,
-  ArrowLeftOutlined, ArrowRightOutlined, TrophyOutlined, BulbOutlined, DownloadOutlined,
+  ArrowLeftOutlined, ArrowRightOutlined,
   CodeOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import {
-  modelingTaskApi, dataApi, runModelDownloadUrl,
-} from '../services/api'
+import { modelingTaskApi, dataApi } from '../services/api'
 import ModelConfigTabs from '../components/workbench/ModelConfigTabs'
 import ProgressTree from '../components/workbench/ProgressTree'
-import StrategyCompareTab from '../components/workbench/StrategyCompareTab'
-import RunInspector from '../components/workbench/RunInspector'
+import ModelComparison from '../components/workbench/ModelComparison'
 import DeployStep from '../components/workbench/DeployStep'
 import DataPipelineModal from '../components/workbench/DataPipelineModal'
 
@@ -57,8 +54,6 @@ export default function ModelingWorkflow() {
   const [datasets, setDatasets] = useState([])
   const [columnInfo, setColumnInfo] = useState(null)
   const [pipelineOpen, setPipelineOpen] = useState(false)
-  const [inspectorRunId, setInspectorRunId] = useState(null)
-  const [inspectorTab, setInspectorTab] = useState('overview')
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [form] = Form.useForm()
@@ -260,31 +255,7 @@ export default function ModelingWorkflow() {
     </Card>
   )
 
-  const runColumns = [
-    { title: '排名', key: 'rank', width: 70,
-      render: (_, __, i) => i === 0 ? <Tag color="gold" icon={<TrophyOutlined />}>1</Tag> : <span>{i + 1}</span> },
-    { title: '模型', key: 'model', render: (_, r) => <Tag>{r.params?.model_type || '-'}</Tag> },
-    { title: '策略', dataIndex: 'strategy_type', key: 'strategy_type',
-      render: (s) => <Tag color="blue">{s}</Tag> },
-    { title: task?.objective_metric || '目标值', dataIndex: 'objective_value', key: 'objective_value',
-      render: (v) => <code style={{ color: '#2563eb', fontWeight: 600 }}>{typeof v === 'number' ? v.toFixed(4) : '-'}</code> },
-    { title: '操作', key: 'actions', width: 220, render: (_, r) => (
-      <Space size={2}>
-        <Button size="small" type="link" onClick={() => { setInspectorRunId(r.run_id); setInspectorTab('overview') }}>详情/日志</Button>
-        <Button size="small" type="link" icon={<BulbOutlined />}
-          onClick={() => { setInspectorRunId(r.run_id); setInspectorTab('shap') }}>解释</Button>
-        {r.domain_task_id && (
-          <Tooltip title="下载模型文件">
-            <Button size="small" type="link" icon={<DownloadOutlined />}
-              href={runModelDownloadUrl(r.domain_task_id)} target="_blank" />
-          </Tooltip>
-        )}
-      </Space>
-    ) },
-  ]
-
-  // 训练过程 = 实时进度 + 日志/可视化。日志与指标图/SHAP 通过 RunInspector
-  // 在每个 Run 上按需打开（其内含 概览/指标图/SHAP/日志 tab）。
+  // 训练过程 = 实时进度 + 模型对比（含日志/可视化/SHAP 下钻、策略对比、部署）。
   const trainingStep = (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
@@ -298,15 +269,7 @@ export default function ModelingWorkflow() {
         </Space>
       </Card>
       {task && <ProgressTree modelingTaskId={task.id} />}
-      <Card size="small" title={<span><TrophyOutlined style={{ color: '#f59e0b' }} /> 排行榜（点「详情/日志」看日志与可视化图）</span>}
-        bodyStyle={{ padding: 0 }}
-        extra={<Button size="small" icon={<ReloadOutlined />} onClick={loadRuns}>刷新</Button>}>
-        <Table size="small" rowKey="run_id" columns={runColumns} dataSource={leaderboard}
-          pagination={leaderboard.length > 8 ? { pageSize: 8 } : false}
-          locale={{ emptyText: <div style={{ padding: 24 }}><Empty description="还没有成功的 Run" /></div> }} />
-      </Card>
-      {task && <StrategyCompareTab taskId={task.id}
-        onInspect={(rid) => { setInspectorRunId(rid); setInspectorTab('shap') }} />}
+      {task && <ModelComparison task={task} rows={leaderboard} loading={false} error={null} onRefresh={loadRuns} />}
     </Space>
   )
 
@@ -361,8 +324,6 @@ export default function ModelingWorkflow() {
           form.setFieldsValue({ dataset_id: ds.id, target_column: undefined })
           message.success('已切换到新数据集，请重新选择目标列')
         }} />
-      <RunInspector open={!!inspectorRunId} runId={inspectorRunId} defaultTab={inspectorTab}
-        onClose={() => setInspectorRunId(null)} />
     </div>
   )
 }
