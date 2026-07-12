@@ -11,6 +11,7 @@ import { trainingApi, dlApi, modelingTaskApi } from '../../services/api'
 import ModelSelector from '../ModelSelector'
 import DynamicParamForm from '../DynamicParamForm'
 import CodeConfigModal from './CodeConfigModal'
+import ExperimentBatchForm from './ExperimentBatchForm'
 
 const { Text, Paragraph } = Typography
 
@@ -77,6 +78,7 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
   const [dlAdvOpen, setDlAdvOpen] = useState(false)
   const [codeOpen, setCodeOpen] = useState(false)
   const [codeTemplate, setCodeTemplate] = useState('')
+  const [activeKey, setActiveKey] = useState('ml')
 
   useEffect(() => {
     trainingApi.listModels()
@@ -279,10 +281,23 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
         为本任务（{task?.dataset_name || '数据集'} · 目标 {task?.target_column || '-'}）配置模型。可多次启动，累积成多组对照实验。
       </Paragraph>
       <Tabs
+        activeKey={activeKey}
+        onChange={setActiveKey}
         items={[
           { key: 'ml', label: '机器学习', children: mlTab },
           { key: 'dl', label: '深度学习', children: dlTab },
           { key: 'mixed', label: '混合策略', children: mixedTab },
+          { key: 'tune', label: '调参策略', children: (
+            <div>
+              <div style={{ marginBottom: 8, textAlign: 'right' }}>
+                <Button type="link" size="small" onClick={() => window.open('/v3/training-plans', '_blank')}>
+                  管理训练方案 →
+                </Button>
+              </div>
+              <ExperimentBatchForm task={task} active={activeKey === 'tune'} resetKey={task?.id}
+                onSubmitted={onSubmitted} />
+            </div>
+          ) },
         ]}
       />
       <CodeConfigModal open={codeOpen} task={task} defaultCode={codeTemplate}
