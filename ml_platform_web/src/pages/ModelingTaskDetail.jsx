@@ -1,12 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
   Card, Button, Tabs, Tag, Space, Table, Descriptions, Typography, Empty,
-  Row, Col, Spin, Alert, Statistic, Tooltip, Breadcrumb, message, Progress,
-  Select,
+  Row, Col, Spin, Alert, Statistic, Breadcrumb, message,
 } from 'antd'
 import {
   ArrowLeftOutlined, ReloadOutlined, PlusOutlined, TrophyOutlined,
-  NodeIndexOutlined, LineChartOutlined, BulbOutlined, ExperimentOutlined,
+  NodeIndexOutlined, LineChartOutlined, ExperimentOutlined,
   CheckCircleFilled, CloseCircleFilled, ClockCircleFilled, FireOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -15,7 +14,7 @@ import ExperimentBatchModal from '../components/workbench/ExperimentBatchModal'
 import RunInspector from '../components/workbench/RunInspector'
 import TrainingPlanSnapshotView from '../components/workbench/TrainingPlanSnapshotView'
 import ProgressTree from '../components/workbench/ProgressTree'
-import StrategyCompareTab from '../components/workbench/StrategyCompareTab'
+import ModelComparison from '../components/workbench/ModelComparison'
 
 const { Text, Paragraph } = Typography
 
@@ -39,11 +38,6 @@ function renderStatus(status) {
   return <Tag icon={meta.icon} color={meta.color}>{meta.label}</Tag>
 }
 
-function fmt(n, digits = 4) {
-  if (typeof n !== 'number' || !Number.isFinite(n)) return '-'
-  return n.toFixed(digits)
-}
-
 export default function ModelingTaskDetail() {
   const { taskId } = useParams()
   const navigate = useNavigate()
@@ -57,11 +51,6 @@ export default function ModelingTaskDetail() {
   const [runs, setRuns] = useState([])
   const [runsLoading, setRunsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
-  // Strategy filter for the Run 对比 tab. 'all' = no filter; otherwise a
-  // strategy_type token (baseline / grid_search / bayesian_search). Set
-  // automatically when the user clicks "查看 Run →" on an experiment row,
-  // so the deep-link from 实验编排 → Run 对比 lands on the right slice.
-  const [runStrategyFilter, setRunStrategyFilter] = useState('all')
 
   // Modals
   const [batchOpen, setBatchOpen] = useState(false)
@@ -119,7 +108,7 @@ export default function ModelingTaskDetail() {
   useEffect(() => { loadLeaderboard() }, [loadLeaderboard])
   useEffect(() => { loadRuns() }, [loadRuns])
   useEffect(() => {
-    if (activeTab === 'runs') {
+    if (activeTab === 'compare') {
       loadLeaderboard()
       loadRuns()
     }
@@ -135,7 +124,7 @@ export default function ModelingTaskDetail() {
   const refreshAll = async () => {
     await loadTask()
     await loadRuns()
-    if (activeTab === 'runs') await loadLeaderboard()
+    if (activeTab === 'compare') await loadLeaderboard()
   }
 
   if (loading && !task) {
@@ -302,15 +291,8 @@ export default function ModelingTaskDetail() {
     },
     {
       title: '操作', key: 'actions', width: 120,
-      render: (_, row) => (
-        <Button size="small" type="link"
-          onClick={() => {
-            // Deep-link: jump to Run 对比 with this batch's strategy
-            // pre-selected in the dropdown so the user lands on a slice
-            // that matches the row they clicked.
-            setRunStrategyFilter(row.strategy_type || 'all')
-            setActiveTab('runs')
-          }}>查看 Run →</Button>
+      render: () => (
+        <Button size="small" type="link" onClick={() => setActiveTab('compare')}>查看对比 →</Button>
       ),
     },
   ]
@@ -344,163 +326,15 @@ export default function ModelingTaskDetail() {
     </Card>
   )
 
-  // ── Tab: Runs (full run matrix + leaderboard order) ──────────────────────
-  const allRunRows = runs.length ? runs : leaderboard
-  // Build the strategy options dynamically from rows actually present, so we
-  // never offer a strategy that has 0 runs.  Always include "all".
-  const runStrategiesPresent = Array.from(new Set(
-    allRunRows.map(r => r.strategy_type).filter(Boolean)
-  ))
-  const runStrategyOptions = [
-    { value: 'all', label: `全部策略 (${allRunRows.length})` },
-    ...runStrategiesPresent.map(s => ({
-      value: s,
-      label: `${s} (${allRunRows.filter(r => r.strategy_type === s).length})`,
-    })),
-  ]
-  const runRows = runStrategyFilter === 'all'
-    ? allRunRows
-    : allRunRows.filter(r => r.strategy_type === runStrategyFilter)
-  const leaderboardColumns = [
-    {
-      title: '全局', key: 'global_rank', width: 72,
-      render: (_, __, index) => {
-        const rank = index + 1
-        return rank === 1 ? <Tag color="gold" icon={<TrophyOutlined />}>{rank}</Tag>
-          : rank <= 3 ? <Tag color="blue">{rank}</Tag> : <span style={{ color: '#64748b' }}>{rank}</span>
-      },
-    },
-    {
-      title: '实验', dataIndex: 'experiment_name', key: 'experiment_name', ellipsis: true,
-      render: (name, row) => (
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 500 }}>{name}</div>
-          <Tag color={STRATEGY_COLOR[row.strategy_type] || 'default'} style={{ fontSize: 10, marginTop: 2 }}>
-            {row.strategy_type}
-          </Tag>
-        </div>
-      ),
-    },
-    {
-      title: '模型', key: 'model', width: 140,
-      render: (_, row) => <Tag>{row.params?.model_type || '-'}</Tag>,
-    },
-    {
-      title: '状态', dataIndex: 'status', key: 'status', width: 105,
-      render: (status, row) => renderStatus(row.platform_task?.status || status || 'SUCCESS'),
-    },
-    {
-      title: '进度', key: 'progress', width: 130,
-      render: (_, row) => {
-        const raw = row.platform_task?.progress
-        const value = Number(raw ?? (row.status === 'SUCCESS' ? 1 : 0))
-        const percent = value > 1 ? Math.round(value) : Math.round(value * 100)
-        const status = (row.platform_task?.status || row.status || '').toUpperCase()
-        return (
-          <Progress
-            percent={Math.max(0, Math.min(100, percent))}
-            size="small"
-            status={status === 'FAILED' ? 'exception' : status === 'SUCCESS' ? 'success' : 'active'}
-          />
-        )
-      },
-    },
-    { title: 'Trial', dataIndex: 'trial_no', key: 'trial_no', width: 70 },
-    {
-      title: task?.objective_metric || '目标值',
-      dataIndex: 'objective_value', key: 'objective_value', width: 120,
-      render: (v) => <code style={{ color: '#2563eb', fontSize: 12, fontWeight: 600 }}>{fmt(v)}</code>,
-      sorter: (a, b) => (a.objective_value ?? 0) - (b.objective_value ?? 0),
-    },
-    {
-      title: '超参', key: 'params', ellipsis: true,
-      render: (_, row) => {
-        const entries = Object.entries(row.params || {}).slice(0, 3)
-        return (
-          <Tooltip title={<pre style={{ margin: 0, fontSize: 10, whiteSpace: 'pre-wrap' }}>
-            {JSON.stringify(row.params, null, 2)}
-          </pre>}>
-            <Space size={4} wrap>
-              {entries.map(([k, v]) => (
-                <Tag key={k} style={{ margin: 0, fontSize: 10 }}>
-                  {k}={typeof v === 'object' ? '...' : String(v)}
-                </Tag>
-              ))}
-              {Object.keys(row.params || {}).length > 3 && <Tag>...</Tag>}
-            </Space>
-          </Tooltip>
-        )
-      },
-    },
-    {
-      title: '完成时间', dataIndex: 'finished_at', key: 'finished_at', width: 140,
-      render: (v) => v ? new Date(v).toLocaleString('zh-CN', { hour12: false }) : '-',
-    },
-    {
-      title: '操作', key: 'actions', width: 150,
-      render: (_, row) => (
-        <Space size={2}>
-          <Button size="small" type="link" onClick={(e) => { e.stopPropagation(); openInspector(row.run_id, 'overview') }}>
-            详情
-          </Button>
-          <Tooltip title="直接打开该 Run 的 SHAP 解释">
-            <Button size="small" type="link" icon={<BulbOutlined />}
-              onClick={(e) => { e.stopPropagation(); openInspector(row.run_id, 'shap') }}>
-              解释
-            </Button>
-          </Tooltip>
-        </Space>
-      ),
-    },
-  ]
-
-  const runsTab = (
-    <Card size="small" bodyStyle={{ padding: 0 }}>
-      <div style={{ padding: '10px 14px', borderBottom: '1px solid #f1f5f9',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Space>
-          <Text strong>Run 矩阵</Text>
-          <Tag>{runRows.length}{runStrategyFilter !== 'all' && ` / ${allRunRows.length}`}</Tag>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            按 <code>{task?.objective_metric}</code> ({task?.objective_direction}) 排序
-          </Text>
-          <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>策略：</Text>
-          <Select
-            size="small"
-            style={{ minWidth: 180 }}
-            value={runStrategyFilter}
-            onChange={setRunStrategyFilter}
-            options={runStrategyOptions}
-          />
-          {runStrategyFilter !== 'all' && (
-            <Button size="small" type="link" onClick={() => setRunStrategyFilter('all')}>
-              清除筛选
-            </Button>
-          )}
-        </Space>
-        <Button size="small" icon={<ReloadOutlined />} onClick={refreshAll} loading={lbLoading || runsLoading}>
-          刷新
-        </Button>
-      </div>
-      <Table
-        size="small"
-        rowKey="run_id"
-        loading={lbLoading || runsLoading}
-        columns={leaderboardColumns}
-        dataSource={runRows}
-        pagination={runRows.length > 10 ? {
-          pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条`,
-          style: { padding: '10px 14px', margin: 0 },
-        } : false}
-        onRow={(row) => ({
-          onClick: () => openInspector(row.run_id, 'overview'),
-          style: { cursor: 'pointer' },
-        })}
-        locale={{ emptyText: <div style={{ padding: 24 }}>
-          <Empty description="还没有 Run" />
-        </div> }}
-      />
-    </Card>
+  // ── Tab: 模型对比 (shared ModelComparison over all runs) ─────────────────
+  const compareTab = (
+    <ModelComparison
+      task={task}
+      rows={runs.length ? runs : leaderboard}
+      loading={runsLoading || lbLoading}
+      error={null}
+      onRefresh={refreshAll}
+    />
   )
 
   return (
@@ -548,13 +382,7 @@ export default function ModelingTaskDetail() {
           items={[
             { key: 'overview',    label: <span><ExperimentOutlined /> 任务概览</span>, children: overviewTab },
             { key: 'experiments', label: <span><NodeIndexOutlined /> 实验编排 ({experiments.length})</span>, children: experimentsTab },
-            { key: 'runs',        label: <span><LineChartOutlined /> Run 对比 ({runStats.total || 0})</span>, children: runsTab },
-            { key: 'strategy-compare', label: <span><TrophyOutlined /> 策略对比</span>, children: (
-              <StrategyCompareTab
-                taskId={taskId}
-                onInspect={(rid) => { setInspectorRunId(rid); setInspectorTab('shap') }}
-              />
-            )},
+            { key: 'compare',     label: <span><LineChartOutlined /> 模型对比 ({runStats.total || 0})</span>, children: compareTab },
           ]}
         />
       </Card>
