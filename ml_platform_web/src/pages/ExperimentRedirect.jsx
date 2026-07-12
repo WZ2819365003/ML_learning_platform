@@ -2,10 +2,11 @@
  * /experiments/:experimentId is legacy — the dedicated ExperimentDetail page
  * has been retired.  A PlatformExperiment now always lives under a
  * ModelingTask, so we look up the modeling_task_id and redirect into the
- * workbench at /v3/tasks/:modeling_task_id (which has a "Run 对比" tab that
- * supersedes the old experiment compare UI).
+ * workbench at /v3/tasks/:modeling_task_id (whose "模型对比" tab supersedes the
+ * old experiment compare UI).
  *
- * Falls back to /experiments if resolution fails so the user isn't stranded.
+ * If resolution fails, falls back to an Alert pointing at /v3/tasks so the
+ * user isn't stranded (the standalone /experiments page has been retired).
  */
 import React, { useEffect, useState } from 'react'
 import { useParams, Navigate } from 'react-router-dom'

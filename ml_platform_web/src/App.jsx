@@ -17,8 +17,6 @@ import DLResults from './pages/DLResults'
 import TSConfig from './pages/TSConfig'
 import TSMonitor from './pages/TSMonitor'
 import TSResults from './pages/TSResults'
-import TaskCenter from './pages/TaskCenter'
-import Experiments from './pages/Experiments'
 import ExperimentRedirect from './pages/ExperimentRedirect'
 import ModelingTasks from './pages/ModelingTasks'
 import ModelingTaskDetail from './pages/ModelingTaskDetail'
@@ -96,9 +94,10 @@ function App() {
               <Route path="/ts/monitor" element={<TSMonitor />} />
               <Route path="/ts/results" element={<TSResults />} />
 
-              {/* V3 Platform routes */}
-              <Route path="/tasks" element={<TaskCenter />} />
-              <Route path="/experiments" element={<Experiments />} />
+              {/* Legacy V3 pages retired — redirect into the 建模 group.
+                  (/experiments/:id keeps working via ExperimentRedirect below.) */}
+              <Route path="/tasks" element={<Navigate to="/v3/runs" replace />} />
+              <Route path="/experiments" element={<Navigate to="/v3/tasks" replace />} />
               <Route path="/experiments/:experimentId" element={<ExperimentRedirect />} />
 
               {/* V3 Modeling Workbench — new task-centric workflow */}

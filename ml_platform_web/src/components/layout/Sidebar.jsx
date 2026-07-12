@@ -9,7 +9,6 @@ import {
   LineChartOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  BranchesOutlined,
 } from '@ant-design/icons'
 
 const { Sider } = Layout
@@ -56,6 +55,7 @@ const Sidebar = () => {
         { key: 'modeling-tasks', label: <Link to="/v3/tasks">任务列表</Link> },
         { key: 'models',         label: <Link to="/models">模型管理</Link> },
         { key: 'deploy',         label: <Link to="/deploy">模型部署</Link> },
+        { key: 'v3-runs',        label: <Link to="/v3/runs">运行诊断</Link> },
       ],
     },
     {
@@ -70,31 +70,6 @@ const Sidebar = () => {
     {
       type: 'divider',
     },
-    // V3 Platform features — hidden behind VITE_ENABLE_V3 flag until Stage 2
-    // is fully deployed. Set VITE_ENABLE_V3=true in .env.local to enable.
-    ...(import.meta.env.VITE_ENABLE_V3 !== 'false' ? [{
-      key: 'v3',
-      icon: <BranchesOutlined />,
-      label: (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          V3 平台
-          <span style={{
-            fontSize: 9, fontWeight: 700, letterSpacing: '0.04em',
-            background: 'rgba(96,165,250,0.18)', color: '#60a5fa',
-            padding: '1px 5px', borderRadius: 4, lineHeight: 1.6,
-          }}>
-            BETA
-          </span>
-        </span>
-      ),
-      children: [
-        { key: 'v3-tasks',    label: <Link to="/v3/tasks">建模工作台</Link> },
-        { key: 'training-plans', label: <Link to="/v3/training-plans">训练方案</Link> },
-        { key: 'tasks',       label: <Link to="/tasks">任务中心</Link> },
-        { key: 'experiments', label: <Link to="/experiments">实验管理</Link> },
-        { key: 'v3-runs',     label: <Link to="/v3/runs">Run 诊断中心</Link> },
-      ],
-    }] : []),
     {
       key: 'settings',
       icon: <SettingOutlined />,
@@ -112,11 +87,8 @@ const Sidebar = () => {
     if (path === '/models') return 'models'
     if (path === '/deploy') return 'deploy'
     if (path === '/settings') return 'settings'
-    if (path === '/tasks') return 'tasks'
-    // /v3/tasks(/…/workflow) is now the primary 建模 → 任务列表 entry
+    // /v3/tasks(/…/workflow) is the primary 建模 → 任务列表 entry
     if (path === '/v3/tasks' || path.startsWith('/v3/tasks/')) return 'modeling-tasks'
-    if (path.startsWith('/v3/training-plans')) return 'training-plans'
-    if (path === '/experiments' || path.startsWith('/experiments/')) return 'experiments'
     if (path === '/v3/runs' || path.startsWith('/v3/runs/')) return 'v3-runs'
     if (path === '/dl/config') return 'dl-config'
     if (path === '/dl/monitor') return 'dl-monitor'
@@ -173,7 +145,7 @@ const Sidebar = () => {
         theme="dark"
         mode="inline"
         selectedKeys={[getSelectedKey()]}
-        defaultOpenKeys={['modeling', 'ts', 'v3']}
+        defaultOpenKeys={['modeling', 'ts']}
         items={menuItems}
         style={{
           background: 'transparent',

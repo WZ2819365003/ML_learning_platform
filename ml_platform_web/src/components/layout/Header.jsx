@@ -22,25 +22,20 @@ const PAGE_TITLES = {
   '/dl/results':       '结果可视化',
   '/ts/tasks/new':     '新建任务',
   '/ts/tasks':         '任务列表',
-  '/tasks':            '任务中心',
-  '/experiments':      '实验管理',
   '/v3/tasks':         '建模工作台',
   '/v3/training-plans':'训练方案',
-  '/v3/runs':          'Run 诊断中心',
+  '/v3/runs':          '运行诊断',
 }
 
 // Path prefix -> section label (matches the Sidebar groups). Order matters:
-// more specific prefixes first (e.g. /v3/tasks → 建模 before /v3 → V3 平台).
+// more specific prefixes first. All /v3/* now belong to the 建模 group.
 const SECTIONS = [
-  ['/v3/tasks', '建模'],
+  ['/v3',       '建模'],
   ['/models',   '建模'],
   ['/deploy',   '建模'],
   ['/training', '建模'],
   ['/dl',       '建模'],
   ['/ts',       '时序任务'],
-  ['/v3',       'V3 平台'],
-  ['/tasks',    'V3 平台'],
-  ['/experiments', 'V3 平台'],
 ]
 
 // Returns an array of crumb strings, e.g. ['机器学习', '训练配置'].

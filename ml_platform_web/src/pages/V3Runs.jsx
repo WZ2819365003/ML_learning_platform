@@ -322,7 +322,7 @@ export default function V3Runs() {
               <BranchesOutlined />
             </div>
             <div>
-              <Title level={4} style={{ margin: 0, color: '#0f172a' }}>Run 诊断中心</Title>
+              <Title level={4} style={{ margin: 0, color: '#0f172a' }}>运行诊断</Title>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 跨所有建模任务的 Run 平铺列表 · 一键打开 SHAP 解释 / 自动诊断
               </Text>
