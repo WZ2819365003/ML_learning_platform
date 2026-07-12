@@ -6,7 +6,8 @@ import {
 import {
   CloudUploadOutlined, DownloadOutlined, ThunderboltOutlined, TrophyOutlined,
 } from '@ant-design/icons'
-import { modelingTaskApi, deployApi, runModelDownloadUrl } from '../../services/api'
+import { deployApi, runModelDownloadUrl } from '../../services/api'
+import { useDeployRun } from '../../hooks/useDeployRun'
 
 const { Text } = Typography
 
@@ -24,11 +25,13 @@ export default function DeployStep({ task, runs = [], bestRunId }) {
   )
   const [runId, setRunId] = useState(null)
   const [name, setName] = useState('')
-  const [deploying, setDeploying] = useState(false)
-  const [deployment, setDeployment] = useState(null)
+  const { deploying, deployment, error, deploy, reset } = useDeployRun(task)
   const [predictInput, setPredictInput] = useState('[\n  {}\n]')
   const [predicting, setPredicting] = useState(false)
   const [predictResult, setPredictResult] = useState(null)
+
+  // Preserve the previous toast-on-failure behaviour (hook exposes `error`).
+  useEffect(() => { if (error) message.error(error) }, [error])
 
   // Default selection = best run (or first success run)
   useEffect(() => {
@@ -47,20 +50,8 @@ export default function DeployStep({ task, runs = [], bestRunId }) {
   const handleDeploy = async () => {
     if (!runId) { message.warning('请先选择一个成功的 Run'); return }
     if (!name.trim()) { message.warning('请填写部署名称'); return }
-    setDeploying(true)
     setPredictResult(null)
-    try {
-      const resp = await modelingTaskApi.deployRun(task.id, runId, {
-        name: name.trim(),
-        description: `来自建模任务 ${task.name} 的最佳模型`,
-      })
-      setDeployment(resp)
-      message.success('部署成功，模型已上线')
-    } catch (err) {
-      message.error(err?.response?.data?.detail || '部署失败')
-    } finally {
-      setDeploying(false)
-    }
+    await deploy(runId, { name })
   }
 
   const handlePredict = async () => {
@@ -106,7 +97,7 @@ export default function DeployStep({ task, runs = [], bestRunId }) {
             <Select
               style={{ width: '100%', marginTop: 4 }}
               value={runId}
-              onChange={(v) => { setRunId(v); setDeployment(null); setPredictResult(null) }}
+              onChange={(v) => { setRunId(v); reset(); setPredictResult(null) }}
               options={successRuns.map(r => ({
                 value: r.run_id,
                 label: (
