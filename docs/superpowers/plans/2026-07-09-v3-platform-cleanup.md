@@ -37,32 +37,39 @@ useDeployRun(task): { deploying: boolean, deployment: object|null, error: string
 **Files:**
 - Modify: `ml_platform_web/src/components/layout/Sidebar.jsx`（删 V3 平台分组；建模加 运行诊断）
 - Modify: `ml_platform_web/src/App.jsx`（加 `/experiments`→`/v3/tasks`、`/tasks`→`/v3/runs` 重定向；删对应旧 route 的菜单可达性，但保留 `/experiments/:experimentId`、`/v3/tasks/:id`）
-- Modify: `ml_platform_web/src/components/layout/Header.jsx`（`/v3/runs` section 归「建模」；section 表去掉已删项）
+- Modify: `ml_platform_web/src/components/layout/Header.jsx`（`/v3/runs` section 归「建模」；`PAGE_TITLES['/v3/runs']`→'运行诊断'；section 表去掉已删项）
+- Modify: `ml_platform_web/src/pages/V3Runs.jsx`（页标题 `Run 诊断中心`→`运行诊断`）
 - Modify: `ml_platform_web/src/pages/ExperimentRedirect.jsx`（顶部注释 `:8` 与兜底文案 `:44` 不再指向 `/experiments`）
 - Test: `playwright_test/test/13-v3-ia-redirects.spec.js`（新）
 
 **Interfaces:** Produces 无（纯路由/导航）。
 
 - [ ] **Step 1: 写重定向失败测试**
+
+⚠ 项目有两套 Playwright 配置：根 `playwright.config.js`（testDir `./tests`，baseURL `127.0.0.1:3000`，webServer 自动起前后端）与 `playwright_test/playwright.config.js`（testDir `./test`，baseURL `process.env.BASE_UI || 127.0.0.1:3000`）。本测试放 `playwright_test/test/`，**用相对路径吃所在套件的 baseURL，不得硬编码端口**（本地对着 :5188 跑时用 `BASE_UI=http://localhost:5188` 传入）。
+
 ```js
 // playwright_test/test/13-v3-ia-redirects.spec.js
 import { test, expect } from '@playwright/test'
-const BASE = process.env.E2E_BASE || 'http://localhost:5188'
 test('legacy V3 routes redirect into 建模', async ({ page }) => {
-  await page.goto(`${BASE}/experiments`)
+  await page.goto('/experiments')
   await expect(page).toHaveURL(/\/v3\/tasks$/)
-  await page.goto(`${BASE}/tasks`)
+  await page.goto('/tasks')
   await expect(page).toHaveURL(/\/v3\/runs$/)
 })
-test('sidebar has no V3 平台 / 实验管理 / 任务中心 top items', async ({ page }) => {
-  await page.goto(`${BASE}/v3/tasks`)
-  await expect(page.getByRole('menuitem', { name: 'V3 平台' })).toHaveCount(0)
-  await expect(page.getByText('运行诊断')).toBeVisible()
+test('sidebar has no V3 平台 group; 建模 has 运行诊断', async ({ page }) => {
+  await page.goto('/v3/tasks')
+  const sider = page.locator('.ant-layout-sider')
+  // 注意：V3 菜单标题带 BETA 徽章（文本为 "V3 平台BETA"），精确 name 匹配会漏 — 用包含匹配
+  await expect(sider.getByText('V3 平台')).toHaveCount(0)
+  await expect(sider.getByText('实验管理')).toHaveCount(0)
+  await expect(sider.getByText('任务中心')).toHaveCount(0)
+  await expect(sider.getByText('运行诊断')).toBeVisible()
 })
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
-Run: `npx playwright test playwright_test/test/13-v3-ia-redirects.spec.js`
+Run: `cd playwright_test && BASE_UI=http://localhost:5188 npx playwright test test/13-v3-ia-redirects.spec.js`
 Expected: FAIL（当前有 V3 平台菜单、无重定向）
 
 - [ ] **Step 3: 改 Sidebar 建模分组**（`Sidebar.jsx`：`menuItems` 里 建模.children 追加、删除 V3 平台分组块）
@@ -87,9 +94,10 @@ children: [
 // TaskCenter/Experiments 的 import 可留（未用则删，避免 lint unused）。V3Runs 路由保持 /v3/runs。
 ```
 
-- [ ] **Step 5: 改 Header section + ExperimentRedirect 文案**
-`Header.jsx` SECTIONS：`/v3/runs`→'建模'（已在 Part1 覆盖，确认）；删除 `/tasks`、`/experiments` 到「V3 平台」的映射（现重定向）。
-`ExperimentRedirect.jsx`：注释与兜底跳转/文案改成指向 `/v3/tasks`（"返回任务列表"）。
+- [ ] **Step 5: 改 Header section/标题 + V3Runs 页标题 + ExperimentRedirect 文案**
+`Header.jsx`：SECTIONS `/v3/runs`→'建模'；删除 `/tasks`、`/experiments` 到「V3 平台」的映射（现重定向）；`PAGE_TITLES['/v3/runs']` 由 `'Run 诊断中心'` 改为 `'运行诊断'`。
+`V3Runs.jsx:325`：页面 `<Title>` 由 `Run 诊断中心` 改为 `运行诊断`（与菜单一致，旧断言在 Step 7 同步更新）。
+`ExperimentRedirect.jsx`：顶部注释（`:8`）与兜底跳转/文案（`:44`）改成指向 `/v3/tasks`（"返回任务列表"）。
 
 - [ ] **Step 6: lint + 跑测试确认通过**
 Run: `npx eslint src/components/layout/Sidebar.jsx src/App.jsx src/components/layout/Header.jsx src/pages/ExperimentRedirect.jsx`
@@ -279,7 +287,13 @@ git commit -m "refactor(v3): 抽 useDeployRun 共享部署护栏，DeployStep �
 - Produces: `<ModelComparison task={task} rows={rawRows} loading={bool} error={str} onRefresh={fn} />`
 
 - [ ] **Step 1: 组件骨架（三态 + 表 + 图 + 策略节 + 部署）**
-关键点：`const vm = useMemo(() => buildComparisonVM(rows, task), [rows, task])`；表列 = 固定列(排名/模型/策略/状态) + `vm.metricKeys.map(k => 列: render r.metrics[k] ?? '-')`；rank1 高亮 `is_best`；行操作 详情/解释(RunInspector)/下载(`runModelDownloadUrl(domain_task_id)`)/部署(弹命名框→`deploy(run_id,{name})`)；顶部「部署最优」= 对 `vm.rows.find(is_best)`；ECharts 柱状图 = 主指标(可切 metricKeys)跨模型；底部内嵌 `<StrategyCompareTab taskId={task.id} onInspect={...} />`（自取策略数据，不经 adapter）。三态：`loading`→骨架/Spin，`error`→Alert，空→Empty（对齐 StrategyCompareTab 风格）。
+关键点：`const vm = useMemo(() => buildComparisonVM(rows, task), [rows, task])`。
+- **表**：固定列(排名/模型/策略/状态) + `vm.metricKeys.map(k => 列: render r.metrics[k] ?? '-')`；`is_best` 行高亮。
+- **行操作**：详情/解释(RunInspector)；下载 仅当 `domain_task_id` 存在；**部署**——按钮 `disabled = !(r.status==='SUCCESS' && r.domain_task_id)`（Task 5 详情页会喂进 RUNNING/FAILED 的 run，务必按此禁用），点击弹命名框（默认 `${task.name}-部署`，可改）→ `deploy(r.run_id, { name })`（`useDeployRun`，Task 3）。
+- **顶部「部署最优」**：对 `vm.rows.find(r => r.is_best)`，同样受 `SUCCESS && domain_task_id` 约束。
+- **对比图（ECharts 柱状）**：⚠**先按模型聚合**——同一 `model_type` 可能有多条 run（网格/贝叶斯多 trial），每模型只取**其最优 trial**的该指标值（按 `objective_direction` 选 max/min）画一根柱；可切 `metricKeys`。
+- **策略节**：底部内嵌 `<StrategyCompareTab taskId={task.id} onInspect={rid => openInspector(rid,'shap')} />`（自取策略数据，不经 adapter）。
+- **三态**：`loading`→Spin/骨架，`error`→Alert，空→Empty（对齐 `StrategyCompareTab` 风格）。
 
 - [ ] **Step 2: 工作流训练步接入**
 `ModelingWorkflow.jsx` 训练过程步：把 `runColumns`+排行榜 Card+`StrategyCompareTab` 三块替换为
@@ -351,6 +365,8 @@ git commit -m "refactor(v3): 抽 ExperimentBatchForm(受控)+薄壳，保 Modal 
 
 - [ ] **Step 1: 加 tab**
 `Tabs.items` 追加 `{ key:'tune', label:'调参策略', children:<ExperimentBatchForm task={task} active={activeKey==='tune'} resetKey={task?.id} onSubmitted={onSubmitted}/> }`；用 `Tabs onChange` 维护 `activeKey`，只有当前是 `tune` 时 `active=true`（避免后台重复请求）。「套用方案」已在 ExperimentBatchForm 内（保留），「存为方案」不做。
+
+⚠**训练方案管理页别成孤儿**：Task 1 删了 V3 菜单里「训练方案」入口，而「套用方案」只是下拉、到不了 `/v3/training-plans` 管理页。**在调参策略 tab 顶部加一个 `<Button type="link" onClick={()=>window.open('/v3/training-plans','_blank')}>管理训练方案 →</Button>`**（或 `navigate`），让用户仍能创建/编辑方案。`/v3/training-plans` 路由在 App.jsx 保留（Task 1 不删该 route，仅删菜单项）。
 - [ ] **Step 2: 本地验证**：配置步出现 机器学习/深度学习/混合/**调参策略** 四 tab；调参策略里选网格/贝叶斯 + 搜索空间 → 派发调参 Run（进度树可见）；套用方案预填。
 - [ ] **Step 3: lint + 提交**
 ```bash
