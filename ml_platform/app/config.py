@@ -127,7 +127,7 @@ class Settings:
     )
     # Set to "false" to disable object storage (e.g. local-only dev)
     s3_enabled: bool = field(
-        default_factory=lambda: os.getenv("S3_ENABLED", "true").lower() == "true"
+        default_factory=lambda: os.getenv("S3_ENABLED", "false").lower() == "true"
     )
 
     # Convenience: project root

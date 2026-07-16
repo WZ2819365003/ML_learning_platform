@@ -18,6 +18,8 @@ local-only development without a running MinIO instance.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from pathlib import Path
 
 import boto3
@@ -27,6 +29,10 @@ from botocore.exceptions import ClientError
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+_CIRCUIT_COOLDOWN_SECONDS = 30.0
+_circuit_open_until = 0.0
+_circuit_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -40,7 +46,12 @@ def _get_client():
         endpoint_url=s.s3_endpoint_url,
         aws_access_key_id=s.s3_access_key,
         aws_secret_access_key=s.s3_secret_key,
-        config=Config(signature_version="s3v4"),
+        config=Config(
+            signature_version="s3v4",
+            connect_timeout=2,
+            read_timeout=3,
+            retries={"mode": "standard", "total_max_attempts": 1},
+        ),
         region_name="us-east-1",  # MinIO ignores region but boto3 requires it
     )
 
@@ -55,6 +66,27 @@ def _ensure_bucket(client, bucket: str) -> None:
             logger.info("Created MinIO bucket: %s", bucket)
         else:
             raise
+
+
+def _circuit_is_open() -> bool:
+    with _circuit_lock:
+        return time.monotonic() < _circuit_open_until
+
+
+def _open_circuit() -> None:
+    global _circuit_open_until
+    with _circuit_lock:
+        _circuit_open_until = time.monotonic() + _CIRCUIT_COOLDOWN_SECONDS
+
+
+def _close_circuit() -> None:
+    global _circuit_open_until
+    with _circuit_lock:
+        _circuit_open_until = 0.0
+
+
+def _reset_circuit_for_tests() -> None:
+    _close_circuit()
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +105,9 @@ def upload_file(local_path: str | Path, object_key: str) -> str | None:
     settings = get_settings()
     if not settings.s3_enabled:
         return None
+    if _circuit_is_open():
+        logger.debug("Object storage circuit open; skipping upload %s", object_key)
+        return None
 
     local_path = Path(local_path)
     if not local_path.exists():
@@ -83,9 +118,11 @@ def upload_file(local_path: str | Path, object_key: str) -> str | None:
         client = _get_client()
         _ensure_bucket(client, settings.s3_bucket)
         client.upload_file(str(local_path), settings.s3_bucket, object_key)
+        _close_circuit()
         logger.info("Uploaded %s → s3://%s/%s", local_path.name, settings.s3_bucket, object_key)
         return object_key
     except Exception as exc:
+        _open_circuit()
         logger.warning("Object storage upload failed (%s): %s", object_key, exc)
         return None
 
