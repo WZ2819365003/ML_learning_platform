@@ -29,7 +29,6 @@ export default class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, info) {
     // Log to console; in prod we could wire this to an error tracker.
-    // eslint-disable-next-line no-console
     console.error('[ErrorBoundary]', this.props.scope || 'unscoped', error, info)
     this.setState({ info })
   }

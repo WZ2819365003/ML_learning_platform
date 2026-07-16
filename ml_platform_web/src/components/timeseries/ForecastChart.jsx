@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react'
-import * as echarts from 'echarts'
+import echarts from '../../utils/echarts'
 
 function buildLabelSeries(result) {
   const historical = result?.historical ?? []

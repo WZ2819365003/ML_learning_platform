@@ -2,10 +2,8 @@
  *
  * The project shipped a `lint` script and the eslint-plugin-react* devDeps but
  * no config file, so `npm run lint` errored out ("couldn't find a configuration
- * file"). This restores a working config. Classic React runtime (files import
- * React), so plugin:react/recommended's jsx-uses-react keeps React "used".
- *
- * NOTE: repo-wide warning cleanup is a separate task — this only makes lint run.
+ * file"). Vite uses the automatic JSX runtime, including files that do not need
+ * an explicit React import.
  */
 module.exports = {
   root: true,
@@ -13,6 +11,7 @@ module.exports = {
   extends: [
     'eslint:recommended',
     'plugin:react/recommended',
+    'plugin:react/jsx-runtime',
     'plugin:react-hooks/recommended',
   ],
   parserOptions: {
@@ -28,7 +27,7 @@ module.exports = {
   rules: {
     'react/prop-types': 'off',
     'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
-    'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^(React|_)' }],
     'no-empty': ['warn', { allowEmptyCatch: true }],
   },
 }

@@ -28,7 +28,7 @@ function ParamLabel({ displayName, description }) {
 }
 
 function renderField(param) {
-  const { name, type, default: defaultVal, min, max, step, options } = param;
+  const { type, default: defaultVal, min, max, step, options } = param;
 
   if (type === 'int') {
     return (

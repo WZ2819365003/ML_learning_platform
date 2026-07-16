@@ -22,6 +22,7 @@ import {
 } from 'antd'
 import { TrophyOutlined, ReloadOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { modelingTaskApi } from '../../services/api'
+import { buildStrategyCardVM } from '../../utils/comparison'
 import EChart from '../EChart'
 
 const { Text } = Typography
@@ -73,12 +74,6 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
     return strategies
       .filter(s => s.stats && s.run_count >= 2)
       .map(s => [s.stats.min, s.stats.q1, s.stats.median, s.stats.q3, s.stats.max])
-  }, [data])
-
-  const boxCategories = useMemo(() => {
-    return (data?.strategies || [])
-      .filter(s => s.stats && s.run_count >= 2)
-      .map(s => STRATEGY_META[s.strategy_type]?.label || s.strategy_type)
   }, [data])
 
   // Strip plot points (one dot per SUCCESS run) so single-run strategies
@@ -213,7 +208,8 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
         {CANONICAL.map(key => {
           const s = strategyMap[key]
           const meta = STRATEGY_META[key]
-          const best = s?.best_run
+          const card = s ? buildStrategyCardVM(s) : null
+          const best = card?.bestRun
           return (
             <Col xs={24} md={8} key={key}>
               <Card
@@ -227,7 +223,7 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
                 }
                 styles={{ body: { padding: '12px 16px' } }}
               >
-                {s ? (
+                {s && card.hasBestRun ? (
                   <Space direction="vertical" size={6} style={{ width: '100%' }}>
                     <Statistic
                       title={`最佳 ${data.metric_name}`}
@@ -241,7 +237,7 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
                       <Text code>{best?.model_type || '-'}</Text>
                       <br />
                       <Text type="secondary">Run 数: </Text>
-                      <Text>{s.run_count}/{s.full_run_count}（成功/总）</Text>
+                      <Text>{card.runCount}/{card.fullRunCount}（成功/总）</Text>
                       {best?.run_id && (
                         <>
                           <br />
@@ -253,7 +249,9 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
                 ) : (
                   <Empty
                     imageStyle={{ height: 50 }}
-                    description={<Text type="secondary" style={{ fontSize: 12 }}>该策略未运行</Text>}
+                    description={<Text type="secondary" style={{ fontSize: 12 }}>
+                      {s ? `暂无成功 Run（0/${card.fullRunCount}）` : '该策略未运行'}
+                    </Text>}
                   />
                 )}
               </Card>

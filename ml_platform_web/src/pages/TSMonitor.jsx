@@ -4,17 +4,16 @@
  * 功能: 任务统计 + 筛选表格 + 新建任务弹窗（多步骤向导）
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Badge, Button, Card, Col, Descriptions, Empty, Form,
   InputNumber, Modal, Popconfirm, Radio, Row,
   Select, Space, Steps, Statistic, Table, Tag, Typography, message,
 } from 'antd'
 import {
-  CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined,
   DeleteOutlined, EyeOutlined,
   LineChartOutlined, PlusOutlined, ReloadOutlined,
-  SyncOutlined, ThunderboltOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { dataApi, tsApi } from '../services/api'
 import { formatDateTime } from '../utils/formatters'
@@ -52,7 +51,7 @@ function CreateTaskModal({ open, onClose, onCreated }) {
     if (!open) { setStep(0); form.resetFields(); setPreview({}); setColumns([]); return }
     void loadDatasets()
     void loadDeployments()
-  }, [open])
+  }, [form, open])
 
   async function loadDatasets() {
     setDsLoad(true)
@@ -230,13 +229,29 @@ function CreateTaskModal({ open, onClose, onCreated }) {
 // ── 主页面 ──────────────────────────────────────────────────────────────────────
 export default function TSMonitor() {
   const navigate = useNavigate()
+  const location = useLocation()
 
   const [tasks, setTasks]       = useState([])
   const [total, setTotal]       = useState(0)
   const [page, setPage]         = useState(1)
   const [loading, setLoading]   = useState(false)
   const [statusFilter, setFilter] = useState(null)
-  const [createOpen, setCreate] = useState(false)
+  const [createOpen, setCreate] = useState(
+    () => new URLSearchParams(location.search).get('drawer') === 'create',
+  )
+
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('drawer') === 'create') {
+      setCreate(true)
+    }
+  }, [location.search])
+
+  const closeCreate = () => {
+    setCreate(false)
+    if (new URLSearchParams(location.search).get('drawer') === 'create') {
+      navigate('/ts/tasks', { replace: true })
+    }
+  }
   const refreshTimer            = useRef(null)
 
   useEffect(() => {
@@ -415,7 +430,7 @@ export default function TSMonitor() {
       {/* Create Modal */}
       <CreateTaskModal
         open={createOpen}
-        onClose={() => setCreate(false)}
+        onClose={closeCreate}
         onCreated={task => { void fetchTasks(1, statusFilter); navigate(`/ts/tasks/${task.id}`) }}
       />
     </Space>

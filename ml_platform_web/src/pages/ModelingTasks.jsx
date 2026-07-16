@@ -8,7 +8,7 @@ import {
   ClockCircleFilled, CloseCircleFilled, FireOutlined, EditOutlined,
   CloudUploadOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { modelingTaskApi } from '../services/api'
 
 const STATUS_META = {
@@ -99,9 +99,9 @@ export default function ModelingTasks() {
       key: 'name',
       render: (name, row) => (
         <div>
-          <a onClick={() => navigate(`/v3/tasks/${row.id}`)} style={{ fontWeight: 600, fontSize: 13 }}>
+          <Link to={`/v3/tasks/${row.id}`} style={{ fontWeight: 600, fontSize: 13 }}>
             {name}
-          </a>
+          </Link>
           {row.description && (
             <div style={{ color: '#64748b', fontSize: 12, marginTop: 2, lineHeight: 1.35 }}>
               {row.description}

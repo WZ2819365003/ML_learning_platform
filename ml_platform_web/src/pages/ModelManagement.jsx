@@ -35,11 +35,11 @@ import {
   TagOutlined,
   TrophyOutlined,
 } from '@ant-design/icons';
-import * as echarts from 'echarts';
+import echarts from '../utils/echarts';
 import api, { dataApi, deployApi, dlApi, modelApi, timesfmApi, trainingApi } from '../services/api';
 import { formatBytes, formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
 
-const { Paragraph, Text, Title } = Typography;
+const { Text, Title } = Typography;
 const { TextArea } = Input;
 
 const PAGE_SIZE = 10;
@@ -773,7 +773,6 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
 
 // ── Universal (TimesFM) Tab ───────────────────────────────────────────────────
 const FREQ_LABELS = { high: '高频', medium: '中频', low: '低频' };
-const TS_STATUS_COLOR = { PENDING: 'default', RUNNING: 'processing', SUCCESS: 'success', FAILED: 'error' };
 const TS_STATUS_LABEL = { PENDING: '等待中', RUNNING: '运行中', SUCCESS: '完成', FAILED: '失败' };
 
 function UniversalModelTab() {

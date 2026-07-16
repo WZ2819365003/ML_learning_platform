@@ -44,7 +44,7 @@ export default function ModelingWorkflow() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const isNew = taskId === 'new'
+  const isNew = !taskId || taskId === 'new'
 
   const initialStep = isNew ? 0 : Math.min(3, Math.max(0, Number(searchParams.get('step')) || 0))
   const [current, setCurrent] = useState(initialStep)
@@ -174,6 +174,7 @@ export default function ModelingWorkflow() {
   }
 
   const bestRunId = leaderboard.find(r => r.rank === 1)?.run_id
+  const finalizationLocked = task?.final_evaluation?.state && task.final_evaluation.state !== 'OPEN'
   const runStatusCounts = runs.reduce((acc, r) => {
     const s = String(r.status).toUpperCase()
     acc[s] = (acc[s] || 0) + 1
@@ -265,11 +266,13 @@ export default function ModelingWorkflow() {
           <Tag color="processing">运行中 {(runStatusCounts.RUNNING || 0) + (runStatusCounts.PENDING || 0)}</Tag>
           <Tag color="error">失败 {runStatusCounts.FAILED || 0}</Tag>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => { loadTask(); loadRuns() }}>刷新</Button>
-          <Button size="small" type="primary" ghost icon={<PlusOutlined />} onClick={() => setCurrent(1)}>再加一组</Button>
+          <Button size="small" type="primary" ghost icon={<PlusOutlined />}
+            disabled={finalizationLocked} onClick={() => setCurrent(1)}>再加一组</Button>
         </Space>
       </Card>
       {task && <ProgressTree modelingTaskId={task.id} />}
-      {task && <ModelComparison task={task} rows={leaderboard} loading={false} error={null} onRefresh={loadRuns} />}
+      {task && <ModelComparison task={task} rows={leaderboard} loading={false} error={null}
+        onRefresh={async () => { await Promise.all([loadTask(), loadRuns()]) }} />}
     </Space>
   )
 

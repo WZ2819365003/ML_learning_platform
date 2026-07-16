@@ -8,7 +8,6 @@ import {
   Row,
   Skeleton,
   Space,
-  Statistic,
   Table,
   Tag,
   Typography,
@@ -16,14 +15,13 @@ import {
 } from 'antd';
 import {
   ArrowRightOutlined,
-  CheckCircleOutlined,
   DatabaseOutlined,
   LineChartOutlined,
   RocketOutlined,
   TrophyOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import * as echarts from 'echarts';
+import echarts from '../utils/echarts';
 import { dataApi, modelApi, trainingApi } from '../services/api';
 import { formatDateTime, formatMetric, metricLabels, pickPrimaryMetric } from '../utils/formatters';
 
@@ -41,7 +39,7 @@ function useChart(ref, option) {
       window.removeEventListener('resize', onResize);
       instance.dispose();
     };
-  }, [option]);
+  }, [option, ref]);
 }
 
 /* ── Status tag ───────────────────────────────────────────────────────────── */
@@ -82,7 +80,7 @@ function StatusTag({ status }) {
 }
 
 /* ── Gradient stat card ───────────────────────────────────────────────────── */
-function GradientStatCard({ title, value, suffix, prefix, colorClass, icon }) {
+function GradientStatCard({ title, value, suffix, colorClass, icon }) {
   return (
     <Card
       className={colorClass}

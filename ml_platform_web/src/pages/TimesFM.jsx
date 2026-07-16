@@ -29,7 +29,7 @@ import {
   PlayCircleOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import * as echarts from 'echarts';
+import echarts from '../utils/echarts';
 import { dataApi, timesfmApi } from '../services/api';
 import { formatDateTime } from '../utils/formatters';
 

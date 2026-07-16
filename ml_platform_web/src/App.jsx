@@ -1,29 +1,30 @@
-import React from 'react'
+import { lazy, Suspense } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
-import { App as AntApp, ConfigProvider, Layout } from 'antd'
+import { App as AntApp, ConfigProvider, Layout, Spin } from 'antd'
 import Sidebar from './components/layout/Sidebar'
 import Header from './components/layout/Header'
-import Dashboard from './pages/Dashboard'
-import DataManagement from './pages/DataManagement'
-import TrainingConfig from './pages/TrainingConfig'
-import TrainingMonitor from './pages/TrainingMonitor'
-import Results from './pages/Results'
-import ModelManagement from './pages/ModelManagement'
-import ModelDeploy from './pages/ModelDeploy'
-import Settings from './pages/Settings'
-import DLConfig from './pages/DLConfig'
-import DLMonitor from './pages/DLMonitor'
-import DLResults from './pages/DLResults'
-import TSConfig from './pages/TSConfig'
-import TSMonitor from './pages/TSMonitor'
-import TSResults from './pages/TSResults'
-import ExperimentRedirect from './pages/ExperimentRedirect'
-import ModelingTasks from './pages/ModelingTasks'
-import ModelingTaskDetail from './pages/ModelingTaskDetail'
-import ModelingWorkflow from './pages/ModelingWorkflow'
-import TrainingPlans from './pages/TrainingPlans'
-import V3Runs from './pages/V3Runs'
 import ErrorBoundary from './components/ErrorBoundary'
+
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const DataManagement = lazy(() => import('./pages/DataManagement'))
+const TrainingConfig = lazy(() => import('./pages/TrainingConfig'))
+const TrainingMonitor = lazy(() => import('./pages/TrainingMonitor'))
+const Results = lazy(() => import('./pages/Results'))
+const ModelManagement = lazy(() => import('./pages/ModelManagement'))
+const ModelDeploy = lazy(() => import('./pages/ModelDeploy'))
+const Settings = lazy(() => import('./pages/Settings'))
+const DLConfig = lazy(() => import('./pages/DLConfig'))
+const DLMonitor = lazy(() => import('./pages/DLMonitor'))
+const DLResults = lazy(() => import('./pages/DLResults'))
+const TSConfig = lazy(() => import('./pages/TSConfig'))
+const TSMonitor = lazy(() => import('./pages/TSMonitor'))
+const TSResults = lazy(() => import('./pages/TSResults'))
+const ExperimentRedirect = lazy(() => import('./pages/ExperimentRedirect'))
+const ModelingTasks = lazy(() => import('./pages/ModelingTasks'))
+const ModelingTaskDetail = lazy(() => import('./pages/ModelingTaskDetail'))
+const ModelingWorkflow = lazy(() => import('./pages/ModelingWorkflow'))
+const TrainingPlans = lazy(() => import('./pages/TrainingPlans'))
+const V3Runs = lazy(() => import('./pages/V3Runs'))
 
 const { Content } = Layout
 
@@ -70,6 +71,11 @@ function App() {
         <Layout style={{ background: 'transparent' }}>
           <Header />
           <Content style={{ margin: '0 20px 20px', padding: 0, background: 'transparent' }}>
+            <Suspense fallback={(
+              <div style={{ display: 'grid', placeItems: 'center', minHeight: 320 }}>
+                <Spin size="large" tip="页面加载中" />
+              </div>
+            )}>
             <Routes>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
@@ -124,6 +130,7 @@ function App() {
               <Route path="/v3/runs" element={<V3Runs />} />
               <Route path="/v3" element={<Navigate to="/v3/tasks" replace />} />
             </Routes>
+            </Suspense>
           </Content>
         </Layout>
       </Layout>

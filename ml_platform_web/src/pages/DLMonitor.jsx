@@ -389,11 +389,14 @@ function DLTaskDetailView({ taskId, navigate }) {
   const logEndRef = useRef(null);
   const wsRef = useRef(null);
   const logWsRef = useRef(null);
-  const wsBase = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8000`;
+  const loadStatusRef = useRef(null);
+  const loadLogsRef = useRef(null);
+  const wsBase = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
+  const monitoredStatus = (taskInfo?.status ?? '').toUpperCase();
 
   useEffect(() => {
-    void loadStatus();
-    void loadLogs();
+    void loadStatusRef.current?.();
+    void loadLogsRef.current?.();
     return () => {
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
       if (logWsRef.current) { logWsRef.current.close(); logWsRef.current = null; }
@@ -402,9 +405,7 @@ function DLTaskDetailView({ taskId, navigate }) {
 
   // Heartbeat: poll logs every 4 s while training is running (catches missed WS messages)
   useEffect(() => {
-    if (!taskInfo) return;
-    const s = (taskInfo.status ?? '').toUpperCase();
-    if (s !== 'RUNNING' && s !== 'PENDING') return;
+    if (monitoredStatus !== 'RUNNING' && monitoredStatus !== 'PENDING') return;
     const timer = setInterval(async () => {
       try {
         const res = await dlApi.getLogs(taskId, { page: 1, page_size: 1000 });
@@ -413,7 +414,7 @@ function DLTaskDetailView({ taskId, navigate }) {
       } catch { /* ignore */ }
     }, 4000);
     return () => clearInterval(timer);
-  }, [taskInfo?.status, taskId]);
+  }, [monitoredStatus, taskId]);
 
   // Auto-scroll log panel when new entries arrive
   useEffect(() => {
@@ -536,6 +537,9 @@ function DLTaskDetailView({ taskId, navigate }) {
     };
   }
 
+  loadStatusRef.current = loadStatus;
+  loadLogsRef.current = loadLogs;
+
   async function handleStop() {
     setStopping(true);
     try {
@@ -549,7 +553,7 @@ function DLTaskDetailView({ taskId, navigate }) {
     }
   }
 
-  const status = (taskInfo?.status ?? 'PENDING').toUpperCase();
+  const status = monitoredStatus || 'PENDING';
   const isRunning = status === 'RUNNING';
   const taskType = taskInfo?.task_type ?? 'auto';
   // Epoch table: all epochs descending, client-side pagination

@@ -219,7 +219,7 @@ function ExperimentBlock({ experiment, objectiveMetric, onInspect }) {
 
 // ── Hierarchical tab ──────────────────────────────────────────────────────
 
-function HierarchicalView({ onInspect, filterStatus, setFilterStatus }) {
+function HierarchicalView({ onInspect, filterStatus }) {
   const [tree, setTree] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -661,7 +661,6 @@ const TaskCenter = () => {
                     <HierarchicalView
                       onInspect={openInspector}
                       filterStatus={treeFilterStatus}
-                      setFilterStatus={setTreeFilterStatus}
                     />
                   </>
                 ),

@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Layout, Menu, Tooltip } from 'antd'
+import { Grid, Layout, Menu, Tooltip } from 'antd'
 import { Link, useLocation } from 'react-router-dom'
 import {
   DashboardOutlined,
@@ -35,6 +35,8 @@ function BrandMark({ size = 36 }) {
 const Sidebar = () => {
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
+  const screens = Grid.useBreakpoint()
+  const isMobile = screens.lg === false
 
   const menuItems = [
     {
@@ -98,11 +100,25 @@ const Sidebar = () => {
     return 'dashboard'
   }
 
-  return (
+  return <>
+    {isMobile && !collapsed && (
+      <div
+        aria-hidden="true"
+        onClick={() => setCollapsed(true)}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(15, 23, 42, 0.35)',
+          zIndex: 99,
+        }}
+      />
+    )}
     <Sider
       collapsible
       collapsed={collapsed}
       onCollapse={setCollapsed}
+      breakpoint="lg"
+      onBreakpoint={setCollapsed}
       trigger={null}
       width={220}
       collapsedWidth={72}
@@ -110,8 +126,10 @@ const Sidebar = () => {
         background: 'linear-gradient(180deg, #090f1e 0%, #0d1b38 60%, #0f2046 100%)',
         boxShadow: '4px 0 24px rgba(9, 15, 30, 0.45)',
         borderRight: 'none',
-        position: 'relative',
-        zIndex: 10,
+        position: isMobile ? 'fixed' : 'relative',
+        inset: isMobile ? '0 auto 0 0' : undefined,
+        height: isMobile ? '100dvh' : undefined,
+        zIndex: isMobile ? 100 : 10,
       }}
     >
       {/* Logo area */}
@@ -147,6 +165,7 @@ const Sidebar = () => {
         selectedKeys={[getSelectedKey()]}
         defaultOpenKeys={['modeling', 'ts']}
         items={menuItems}
+        onClick={() => { if (isMobile) setCollapsed(true) }}
         style={{
           background: 'transparent',
           borderRight: 0,
@@ -156,7 +175,9 @@ const Sidebar = () => {
       />
 
       {/* Collapse toggle */}
-      <div
+      <button
+        type="button"
+        aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
         onClick={() => setCollapsed(!collapsed)}
         style={{
           position: 'absolute',
@@ -166,6 +187,9 @@ const Sidebar = () => {
           display: 'flex',
           justifyContent: 'center',
           cursor: 'pointer',
+          padding: 0,
+          border: 0,
+          background: 'transparent',
         }}
       >
         <Tooltip title={collapsed ? '展开' : '收起'} placement="right">
@@ -187,9 +211,10 @@ const Sidebar = () => {
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           </div>
         </Tooltip>
-      </div>
+      </button>
     </Sider>
-  )
+    {isMobile && <div aria-hidden="true" style={{ width: 72, flex: '0 0 72px' }} />}
+  </>
 }
 
 export default Sidebar

@@ -116,7 +116,6 @@ function buildBarOption(importances) {
         color: (p) => {
           // Gradient from muted to vivid blue based on rank
           const pct = p.dataIndex / Math.max(1, features.length - 1)
-          const mix = Math.round(60 + 140 * pct)
           return `rgb(37, 99, 235, ${0.4 + 0.6 * pct})`.replace(
             'rgb(', 'rgba(',
           )
@@ -215,6 +214,7 @@ function buildBeeswarmOption(samples, featureNames, importances) {
       dimension: 2,
       seriesIndex: [],
     },
+    series,
   }
 }
 
@@ -272,7 +272,7 @@ function buildDependenceOption(samples, featureNames, importances, selected) {
 
 // ── Component ────────────────────────────────────────────────────────────
 
-export default function ShapView({ runId, initialSummary, experimentId, runStatus }) {
+export default function ShapView({ runId, experimentId, runStatus }) {
   const [payload, setPayload] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -479,7 +479,7 @@ export default function ShapView({ runId, initialSummary, experimentId, runStatu
                 对该模型预测结果影响最大的 Top-{narrative.length} 特征：
               </div>
               <ol style={{ margin: '0 0 6px 18px', padding: 0, fontSize: 13, lineHeight: 1.9 }}>
-                {narrative.map(({ feature, absImp, direction, rank }) => (
+                {narrative.map(({ feature, absImp, direction }) => (
                   <li key={feature}>
                     <code style={{ color: '#2563eb' }}>{feature}</code>
                     <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>

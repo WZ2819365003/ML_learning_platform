@@ -32,9 +32,9 @@ import {
   SlidersOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import * as echarts from 'echarts';
 import { dlApi, modelApi, vizApi } from '../services/api';
 import { formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
+import EChart from '../components/EChart';
 import ShapView from '../components/viz/ShapView';
 import TrainingHistoryChart from '../components/viz/TrainingHistoryChart';
 import CrossValidationView from '../components/viz/CrossValidationView';
@@ -60,6 +60,7 @@ function getApiErrorText(error) {
 
 function inferTaskKind(modelType, metrics = {}) {
   const mt = String(modelType || '').toLowerCase();
+  if (mt === 'logistic_regression') return 'classification';
   if (mt.includes('regressor') || mt.includes('regression')) return 'regression';
   if (REGRESSION_METRIC_KEYS.some(k => typeof metrics?.[k] === 'number')) return 'regression';
   return 'classification';
@@ -145,7 +146,7 @@ function regressionDiagnostics(actual = [], predicted = []) {
   const n = Math.min(actual.length, predicted.length);
   if (n === 0) return null;
   const residuals = [];
-  let sumAbs = 0, sumSq = 0, sumActual = 0, sumPred = 0;
+  let sumAbs = 0, sumSq = 0, sumActual = 0;
   let mapeSum = 0, mapeN = 0;
   for (let i = 0; i < n; i++) {
     const a = Number(actual[i]);
@@ -156,7 +157,6 @@ function regressionDiagnostics(actual = [], predicted = []) {
     sumAbs += Math.abs(r);
     sumSq  += r * r;
     sumActual += a;
-    sumPred += p;
     if (Math.abs(a) > 1e-9) {
       mapeSum += Math.abs(r / a);
       mapeN++;
@@ -185,21 +185,6 @@ function regressionDiagnostics(actual = [], predicted = []) {
 // ─── URL helper ──────────────────────────────────────────────────────────────
 function useQuery() {
   return new URLSearchParams(useLocation().search);
-}
-
-// ─── ECharts hook ─────────────────────────────────────────────────────────────
-function useChart(ref, option) {
-  useEffect(() => {
-    if (!ref.current || !option) return undefined;
-    const instance = echarts.init(ref.current);
-    instance.setOption(option, true);
-    const onResize = () => instance.resize();
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      instance.dispose();
-    };
-  }, [option, ref]);
 }
 
 // ─── List view ────────────────────────────────────────────────────────────────
@@ -382,16 +367,9 @@ function ResultDetailView({ taskId, navigate }) {
   const [loading, setLoading] = useState(true);
   const [vizLoading, setVizLoading] = useState(false);
 
-  const confusionMatrixRef = useRef(null);
-  const rocCurveRef       = useRef(null);
-  const featureImportanceRef = useRef(null);
-  // learningCurveRef removed in v3.2.2 — CV is rendered by <CrossValidationView/>.
-  const residualPlotRef = useRef(null);
-  const predictedVsActualRef = useRef(null);
-  const residualHistogramRef = useRef(null);
-  const qqPlotRef = useRef(null);
+  const loadAllRef = useRef(null);
 
-  useEffect(() => { void loadAll(); }, [taskId]);
+  useEffect(() => { void loadAllRef.current?.(); }, [taskId]);
 
   async function loadAll() {
     setLoading(true);
@@ -500,6 +478,8 @@ function ResultDetailView({ taskId, navigate }) {
     if (allFailed) message.error('加载可视化详情失败');
     setVizLoading(false);
   }
+
+  loadAllRef.current = loadAll;
 
   // Small renderer: shows chart container when data is present, inline error
   // (with retry) when that specific endpoint failed, empty state otherwise.
@@ -762,15 +742,6 @@ function ResultDetailView({ taskId, navigate }) {
              predictedVsActual, residualPlot, residualHistogram, qqPlot };
   }, [vizState]);
 
-  useChart(confusionMatrixRef, chartOptions.confusionMatrix);
-  useChart(rocCurveRef, chartOptions.rocCurve);
-  useChart(featureImportanceRef, chartOptions.featureImportance);
-  // (learningCurve hook removed — CrossValidationView owns the CV chart now.)
-  useChart(predictedVsActualRef, chartOptions.predictedVsActual);
-  useChart(residualPlotRef, chartOptions.residualPlot);
-  useChart(residualHistogramRef, chartOptions.residualHistogram);
-  useChart(qqPlotRef, chartOptions.qqPlot);
-
   const resultMetrics = detail?.result_metrics ?? selectedModel?.result_metrics ?? {};
   const taskKind = vizState.taskKind ?? inferTaskKind(detail?.model_type ?? selectedModel?.model_type, resultMetrics);
   const metricItems = Object.entries(resultMetrics)
@@ -810,14 +781,14 @@ function ResultDetailView({ taskId, navigate }) {
         <Col xs={24} xl={12}>
           <Card title={<Space><HeatMapOutlined style={{ color: '#2563eb' }} />混淆矩阵</Space>} {...cardProps('#2563eb')}>
             <ChartSlot errorKey="confusionMatrix" hasData={!!vizState.confusionMatrix} emptyText="暂无混淆矩阵数据">
-              <div ref={confusionMatrixRef} style={{ width: '100%', height: 360 }} />
+              <EChart option={chartOptions.confusionMatrix} style={{ height: 360 }} />
             </ChartSlot>
           </Card>
         </Col>
         <Col xs={24} xl={12}>
           <Card title={<Space><LineChartOutlined style={{ color: '#7c3aed' }} />ROC 曲线</Space>} {...cardProps('#7c3aed')}>
             <ChartSlot errorKey="rocCurve" hasData={!!vizState.rocCurve} emptyText="暂无 ROC 曲线数据">
-              <div ref={rocCurveRef} style={{ width: '100%', height: 360 }} />
+              <EChart option={chartOptions.rocCurve} style={{ height: 360 }} />
             </ChartSlot>
           </Card>
         </Col>
@@ -851,7 +822,7 @@ function ResultDetailView({ taskId, navigate }) {
           hasData={!!vizState.predictedVsActual}
           emptyText="暂无预测-真实值数据（需要回归任务的测试集预测）"
         >
-          <div ref={predictedVsActualRef} style={{ width: '100%', height: 420 }} />
+          <EChart option={chartOptions.predictedVsActual} style={{ height: 420 }} />
         </ChartSlot>
         <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
           点应密集地落在绿色 <code>y = x</code> 对角线两侧；超出黄色虚线 ±1σ 的样本属于较大误差。
@@ -993,7 +964,7 @@ function ResultDetailView({ taskId, navigate }) {
       <Card title={<Space><BarChartOutlined style={{ color: '#10b981' }} />模型原生特征重要性 (Top 10)</Space>} {...cardProps('#10b981')}>
         <ChartSlot errorKey="featureImportance" hasData={!!vizState.featureImportance}
           emptyText="该模型不支持 feature_importances_（仅树模型可用）">
-          <div ref={featureImportanceRef} style={{ width: '100%', height: 360 }} />
+          <EChart option={chartOptions.featureImportance} style={{ height: 360 }} />
         </ChartSlot>
       </Card>
     </Space>
@@ -1071,7 +1042,7 @@ function ResultDetailView({ taskId, navigate }) {
           <Card title={<Space><BarChartOutlined style={{ color: '#7c3aed' }} />残差直方图</Space>} {...cardProps('#7c3aed')}>
             <ChartSlot errorKey="predictedVsActual" hasData={!!chartOptions.residualHistogram}
               emptyText="暂无残差数据">
-              <div ref={residualHistogramRef} style={{ width: '100%', height: 320 }} />
+              <EChart option={chartOptions.residualHistogram} style={{ height: 320 }} />
             </ChartSlot>
             <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
               理想形态：以 0 为中心、近似正态钟形。明显偏斜或多峰提示模型存在系统性偏差。
@@ -1081,7 +1052,7 @@ function ResultDetailView({ taskId, navigate }) {
         <Col xs={24} xl={12}>
           <Card title={<Space><LineChartOutlined style={{ color: '#0ea5e9' }} />残差 vs 预测值（异方差检查）</Space>} {...cardProps('#0ea5e9')}>
             <ChartSlot errorKey="residualPlot" hasData={!!vizState.residualPlot} emptyText="暂无残差数据">
-              <div ref={residualPlotRef} style={{ width: '100%', height: 320 }} />
+              <EChart option={chartOptions.residualPlot} style={{ height: 320 }} />
             </ChartSlot>
             <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
               点应在 y = 0 横线上下随机分布。出现喇叭口或曲线模式说明残差方差随预测值变化（异方差）。
@@ -1092,7 +1063,7 @@ function ResultDetailView({ taskId, navigate }) {
           <Card title={<Space><DotChartOutlined style={{ color: '#10b981' }} />Q-Q 正态性检验</Space>} {...cardProps('#10b981')}>
             <ChartSlot errorKey="predictedVsActual" hasData={!!chartOptions.qqPlot}
               emptyText="暂无残差数据">
-              <div ref={qqPlotRef} style={{ width: '100%', height: 320 }} />
+              <EChart option={chartOptions.qqPlot} style={{ height: 320 }} />
             </ChartSlot>
             <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
               点越贴近绿色对角线，残差越接近正态分布。两端翘起表示重尾。

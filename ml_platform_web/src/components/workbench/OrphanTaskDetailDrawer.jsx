@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert, Button, Descriptions, Drawer, Empty, Popconfirm, Space, Spin,
-  Tabs, Tag, Tooltip, Typography, message,
+  Tabs, Tag, Typography, message,
 } from 'antd'
 import {
   ClockCircleOutlined, CloseCircleOutlined, CodeOutlined,
-  DatabaseOutlined, ExperimentOutlined, FileTextOutlined, InfoCircleOutlined,
-  LineChartOutlined, ReloadOutlined, RedoOutlined,
+  DatabaseOutlined, ExperimentOutlined, InfoCircleOutlined,
+  ReloadOutlined, RedoOutlined,
 } from '@ant-design/icons'
 import { platformTasksApi } from '../../services/api'
 

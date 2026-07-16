@@ -140,6 +140,7 @@ export default function ModelingTaskDetail() {
   }
 
   const bestRun = leaderboard.find(r => r.rank === 1)
+  const finalizationLocked = task.final_evaluation?.state && task.final_evaluation.state !== 'OPEN'
 
   // ── Tab: Overview ─────────────────────────────────────────────────────────
   const overviewTab = (
@@ -305,7 +306,7 @@ export default function ModelingTaskDetail() {
           <Text strong>实验批次</Text>
           <Tag>{experiments.length}</Tag>
         </Space>
-        <Button type="primary" size="small" icon={<PlusOutlined />}
+        <Button type="primary" size="small" icon={<PlusOutlined />} disabled={finalizationLocked}
           onClick={() => setBatchOpen(true)}>
           启动新批次
         </Button>
@@ -366,7 +367,8 @@ export default function ModelingTaskDetail() {
           <Space>
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/v3/tasks')}>返回</Button>
             <Button icon={<ReloadOutlined />} onClick={refreshAll}>刷新</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setBatchOpen(true)}>
+            <Button type="primary" icon={<PlusOutlined />} disabled={finalizationLocked}
+              onClick={() => setBatchOpen(true)}>
               启动新批次
             </Button>
           </Space>

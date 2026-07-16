@@ -2,16 +2,18 @@ import { useState } from 'react'
 import { message } from 'antd'
 import { modelingTaskApi } from '../services/api'
 
+export const deploymentNameError = (name) => name?.trim() ? null : '请填写部署名称'
+
 /**
  * useDeployRun — shared deploy guardrails for a modeling task's runs.
  *
  * Deploys a run's model via the V3 bridge (`modelingTaskApi.deployRun`). Owns
- * the deployment name default, response state, and error handling so both
+ * deployment-name validation, response state, and error handling so both
  * DeployStep and the ModelComparison row action behave identically. Callers
  * should still gate the trigger UI on `status === 'SUCCESS' && domain_task_id`.
  *
  * @param {{id: string, name: string}} task
- * @returns {{deploying: boolean, deployment: object|null, error: string|null, deploy: (runId: string, opts?: {name?: string}) => Promise<void>}}
+ * @returns {{deploying: boolean, deployment: object|null, error: string|null, deploy: (runId: string, opts?: {name?: string}) => Promise<object|null>}}
  */
 export function useDeployRun(task) {
   const [deploying, setDeploying] = useState(false)
@@ -19,18 +21,24 @@ export function useDeployRun(task) {
   const [error, setError] = useState(null)
 
   const deploy = async (runId, { name } = {}) => {
-    if (!runId) { message.warning('请先选择一个成功的 Run'); return }
+    if (!runId) { message.warning('请先选择一个成功的 Run'); return null }
+    const nameError = deploymentNameError(name)
+    if (nameError) { message.warning(nameError); return null }
     setDeploying(true)
     setError(null)
     try {
       const resp = await modelingTaskApi.deployRun(task.id, runId, {
-        name: (name && name.trim()) || `${task.name}-部署`,
+        name: name.trim(),
         description: `来自建模任务 ${task.name} 的模型`,
       })
       setDeployment(resp)
       message.success('部署成功，模型已上线')
+      return resp
     } catch (err) {
-      setError(err?.response?.data?.detail || '部署失败')
+      const detail = err?.response?.data?.detail || '部署失败'
+      setError(detail)
+      message.error(detail)
+      return null
     } finally {
       setDeploying(false)
     }

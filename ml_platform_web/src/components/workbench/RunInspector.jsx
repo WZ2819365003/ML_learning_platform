@@ -15,7 +15,7 @@ import TrainingViz from './TrainingViz'
 import TrainingHistoryChart from '../viz/TrainingHistoryChart'
 import CrossValidationView from '../viz/CrossValidationView'
 
-const { Text, Paragraph } = Typography
+const { Text } = Typography
 
 const STATUS_TAG = {
   SUCCESS:  <Tag icon={<CheckCircleFilled />} color="success">成功</Tag>,
@@ -24,10 +24,6 @@ const STATUS_TAG = {
   PENDING:  <Tag icon={<ClockCircleFilled />} color="default">等待中</Tag>,
   QUEUED:   <Tag icon={<ClockCircleFilled />} color="default">排队中</Tag>,
   CANCELED: <Tag color="warning">已取消</Tag>,
-}
-
-const LEVEL_COLOR = {
-  INFO: '#3b82f6', WARN: '#f59e0b', WARNING: '#f59e0b', ERROR: '#ef4444', DEBUG: '#94a3b8',
 }
 
 function MetricsGrid({ metrics }) {
@@ -39,8 +35,19 @@ function MetricsGrid({ metrics }) {
         <div key={k} style={{
           padding: '8px 12px', borderRadius: 6,
           background: 'rgba(37, 99, 235, 0.04)', border: '1px solid rgba(37, 99, 235, 0.1)',
+          minWidth: 0,
         }}>
-          <div style={{ fontSize: 11, color: '#64748b' }}>{k}</div>
+          <Tooltip title={k}>
+            <div style={{
+              fontSize: 11,
+              color: '#64748b',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {k}
+            </div>
+          </Tooltip>
           <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', fontFamily: 'monospace' }}>
             {typeof v === 'number' ? v.toFixed(4) : String(v)}
           </div>
@@ -436,7 +443,6 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                 children: run ? (
                   <ShapView
                     runId={run.id}
-                    initialSummary={shap}
                     experimentId={run.experiment_id || exp?.id}
                     runStatus={run.status}
                   />

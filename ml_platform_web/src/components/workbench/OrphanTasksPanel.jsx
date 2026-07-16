@@ -78,6 +78,7 @@ export default function OrphanTasksPanel() {
     try {
       const res = await platformTasksApi.list({
         page: p, page_size: PAGE_SIZE,
+        orphan_only: true,
         ...(filterKind ? { kind: filterKind } : {}),
         ...(filterStatus ? { status: filterStatus } : {}),
       })

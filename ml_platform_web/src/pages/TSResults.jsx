@@ -174,23 +174,25 @@ export default function TSResults() {
 
   const meta = STATUS_META[task?.status] ?? { badge: 'default', label: task?.status ?? '未知', color: '#8c8c8c' }
   const result = task?.result ?? null
-  const predictions = result?.predictions ?? result?.point_forecast ?? []
-  const q10 = result?.quantile_10 ?? result?.q10 ?? []
-  const q90 = result?.quantile_90 ?? result?.q90 ?? []
   const historical = result?.historical_values ?? result?.historical ?? []
-  const hasPredictions = predictions.length > 0
+  const predictionCount = (result?.predictions ?? result?.point_forecast ?? []).length
+  const intervalCount = (result?.quantile_10 ?? result?.q10 ?? []).length
+  const hasPredictions = predictionCount > 0
 
-  const resultRows = useMemo(
-    () =>
+  const resultRows = useMemo(() => {
+      const predictions = result?.predictions ?? result?.point_forecast ?? []
+      const q10 = result?.quantile_10 ?? result?.q10 ?? []
+      const q90 = result?.quantile_90 ?? result?.q90 ?? []
+      return (
       predictions.map((value, index) => ({
         key: index + 1,
         step: index + 1,
         value,
         q10: q10[index],
         q90: q90[index],
-      })),
-    [predictions, q10, q90],
-  )
+      }))
+      )
+    }, [result])
 
   if (loading) {
     return (
@@ -360,14 +362,14 @@ export default function TSResults() {
             <Col span={8}>
               <Statistic
                 title={<Text type="secondary" style={{ fontSize: 11 }}>预测点数</Text>}
-                value={predictions.length}
+                value={predictionCount}
                 valueStyle={{ fontSize: 18 }}
               />
             </Col>
             <Col span={8}>
               <Statistic
                 title={<Text type="secondary" style={{ fontSize: 11 }}>区间信息</Text>}
-                value={q10.length ? 'Q10 ~ Q90' : '—'}
+                value={intervalCount ? 'Q10 ~ Q90' : '—'}
                 valueStyle={{ fontSize: 14 }}
               />
             </Col>

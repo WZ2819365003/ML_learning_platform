@@ -74,7 +74,10 @@ function fmt(v, digits = 4) {
 }
 
 export default function CrossValidationView({ payload, taskKind = 'classification', height = 320 }) {
-  const steps = Array.isArray(payload?.steps) ? payload.steps : []
+  const steps = useMemo(
+    () => (Array.isArray(payload?.steps) ? payload.steps : []),
+    [payload?.steps],
+  )
 
   const presets = METRIC_PRESETS[taskKind] || METRIC_PRESETS.classification
 
@@ -102,7 +105,7 @@ export default function CrossValidationView({ payload, taskKind = 'classificatio
   // R² on the same axis poorly, so we put them on a second y-axis.
   const isMinMetric = (key) => ['rmse', 'mae', 'mse'].includes(key)
 
-  const seriesData = activeMetrics.map((m, idx) => ({
+  const seriesData = activeMetrics.map((m) => ({
     name: m.name,
     type: 'bar',
     yAxisIndex: isMinMetric(m.key) ? 1 : 0,

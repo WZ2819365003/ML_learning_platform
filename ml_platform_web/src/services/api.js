@@ -304,6 +304,8 @@ export const modelingTaskApi = {
   progressTree: (taskId) => api.get(`/v3/tasks/${taskId}/progress-tree`),
   strategyComparison: (taskId) =>
     api.get(`/v3/tasks/${taskId}/strategy-comparison`),
+  finalize: (taskId) =>
+    api.post(`/v3/tasks/${taskId}/final-evaluation`),
   // Deploy the model trained by a run (workflow 部署 step). Bridges to the
   // underlying ML/DL deployment via the run's domain task.
   deployRun: (taskId, runId, data) =>

@@ -25,13 +25,10 @@ export default function DeployStep({ task, runs = [], bestRunId }) {
   )
   const [runId, setRunId] = useState(null)
   const [name, setName] = useState('')
-  const { deploying, deployment, error, deploy, reset } = useDeployRun(task)
+  const { deploying, deployment, deploy, reset } = useDeployRun(task)
   const [predictInput, setPredictInput] = useState('[\n  {}\n]')
   const [predicting, setPredicting] = useState(false)
   const [predictResult, setPredictResult] = useState(null)
-
-  // Preserve the previous toast-on-failure behaviour (hook exposes `error`).
-  useEffect(() => { if (error) message.error(error) }, [error])
 
   // Default selection = best run (or first success run)
   useEffect(() => {

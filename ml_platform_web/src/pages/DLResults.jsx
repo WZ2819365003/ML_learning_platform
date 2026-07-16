@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Alert, Button, Card, Col, Empty, Pagination,
@@ -335,19 +335,18 @@ function DLResultDetailView({ taskId, navigate }) {
   const [taskInfo, setTaskInfo] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { void loadTask(); }, [taskId]);
-
-  async function loadTask() {
+  const loadTask = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await dlApi.getStatus(taskId);
-      setTaskInfo(data);
+      setTaskInfo(await dlApi.getStatus(taskId));
     } catch {
       message.error('加载任务结果失败');
     } finally {
       setLoading(false);
     }
-  }
+  }, [taskId]);
+
+  useEffect(() => { void loadTask(); }, [loadTask]);
 
   const status          = (taskInfo?.status ?? '').toUpperCase();
   const rawMetrics      = taskInfo?.result_metrics ?? {};

@@ -278,11 +278,18 @@ export default function TrainingPlans() {
   const formTaskType   = Form.useWatch('task_type',    form) || 'classification'
   const formStrategyType = Form.useWatch('strategy_type', form) || 'baseline'
   const formFamily     = Form.useWatch('model_family', form) || 'ml'
-  const formSelected   = Form.useWatch('selected_models', form) || []
-  const formDlConfig   = Form.useWatch('dl_config',    form) || {}
-  const formSearchSpace = Form.useWatch('search_space', form) || {}
-  const formBudget      = Form.useWatch('budget_config', form) || {}
-  const availableModels = tuningSpaces[formTaskType] || {}
+  const watchedSelected = Form.useWatch('selected_models', form)
+  const watchedDlConfig = Form.useWatch('dl_config', form)
+  const watchedSearchSpace = Form.useWatch('search_space', form)
+  const watchedBudget = Form.useWatch('budget_config', form)
+  const formSelected = useMemo(() => watchedSelected || [], [watchedSelected])
+  const formDlConfig = useMemo(() => watchedDlConfig || {}, [watchedDlConfig])
+  const formSearchSpace = useMemo(() => watchedSearchSpace || {}, [watchedSearchSpace])
+  const formBudget = useMemo(() => watchedBudget || {}, [watchedBudget])
+  const availableModels = useMemo(
+    () => tuningSpaces[formTaskType] || {},
+    [formTaskType, tuningSpaces],
+  )
 
   // Run count estimator — shown as a chip next to the submit button so the
   // user sees how expensive their plan will be before clicking 创建.
@@ -460,7 +467,7 @@ export default function TrainingPlans() {
     setDrawerOpen(true)
   }
 
-  const handleEdit = async (plan) => {
+  const handleEdit = useCallback(async (plan) => {
     setEditingId(plan.id)
     setEditingModelToken(null)
     form.resetFields()
@@ -480,20 +487,27 @@ export default function TrainingPlans() {
     setSavedParamTokens(Object.fromEntries((plan.selected_models || []).map(t => [t, true])))
     setModelSelectOpen(false)
     setDrawerOpen(true)
-  }
+  }, [form])
 
-  const handleDuplicate = async (plan) => {
+  const handleDuplicate = useCallback(async (plan) => {
     try {
-      const { id: _id, created_at, updated_at, use_count, last_used_at, ...rest } = plan
+      const {
+        id: _id,
+        created_at: _createdAt,
+        updated_at: _updatedAt,
+        use_count: _useCount,
+        last_used_at: _lastUsedAt,
+        ...rest
+      } = plan
       await trainingPlansApi.create({ ...rest, name: `${plan.name} (副本)` })
       message.success('已复制')
       await loadPlans()
     } catch (e) {
       message.error(e?.response?.data?.detail || '复制失败')
     }
-  }
+  }, [loadPlans])
 
-  const handleDelete = async (plan) => {
+  const handleDelete = useCallback(async (plan) => {
     try {
       await trainingPlansApi.remove(plan.id)
       message.success('已删除')
@@ -501,7 +515,7 @@ export default function TrainingPlans() {
     } catch (e) {
       message.error(e?.response?.data?.detail || '删除失败')
     }
-  }
+  }, [loadPlans])
 
   const handleSubmit = async () => {
     try {
@@ -626,7 +640,7 @@ export default function TrainingPlans() {
         </Space>
       ),
     },
-  ], [])
+  ], [handleDelete, handleDuplicate, handleEdit])
 
   return (
     <div style={{ padding: '20px 4px' }}>
@@ -863,7 +877,7 @@ export default function TrainingPlans() {
             <Space size={4}>
               <span>候选模型配置表</span>
               <Text type="secondary" style={{ fontSize: 11 }}>
-                （选中模型后生成配置行；点击"编辑参数"进入独立参数配置页）
+                （选中模型后生成配置行；点击“编辑参数”进入独立参数配置页）
               </Text>
             </Space>
           }>
@@ -997,7 +1011,7 @@ export default function TrainingPlans() {
 
           <Paragraph type="secondary" style={{ fontSize: 11, marginTop: 4 }}>
             未修改的模型将使用 tuning-spaces 注册表默认值；
-            在"候选模型配置表"中点击"编辑参数"即可进入该模型的独立参数配置页。
+            在“候选模型配置表”中点击“编辑参数”即可进入该模型的独立参数配置页。
           </Paragraph>
         </Form>
       </Modal>

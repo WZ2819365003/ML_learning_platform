@@ -287,7 +287,7 @@ export default function LogViewer({ historical, domainTaskId, isLive }) {
                 {highlight(l.message || '', search)}
                 {l.extra && Object.keys(l.extra).length > 0 && (
                   <span style={{ color: c.dim, marginLeft: 10 }}>
-                    {Object.entries(l.extra).map(([k, v], i) => (
+                    {Object.entries(l.extra).map(([k, v]) => (
                       <span key={k} style={{ marginRight: 8 }}>
                         <span style={{ color: '#94a3b8' }}>{k}=</span>
                         <span style={{ color: '#cbd5e1' }}>{String(v)}</span>

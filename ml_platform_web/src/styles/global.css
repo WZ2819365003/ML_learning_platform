@@ -57,6 +57,7 @@
 html { font-size: 14px; }
 
 body {
+  margin: 0;
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -128,6 +129,18 @@ body {
   background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
   box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45) !important;
   transform: translateY(-1px) !important;
+}
+.ant-btn-primary.ant-btn-background-ghost {
+  background: transparent !important;
+  border-color: var(--brand-500) !important;
+  color: var(--brand-500) !important;
+  box-shadow: none !important;
+}
+.ant-btn-primary.ant-btn-background-ghost:hover {
+  background: rgba(37, 99, 235, 0.06) !important;
+  border-color: var(--brand-400) !important;
+  color: var(--brand-400) !important;
+  box-shadow: none !important;
 }
 .ant-btn-default:hover {
   border-color: var(--brand-500) !important;

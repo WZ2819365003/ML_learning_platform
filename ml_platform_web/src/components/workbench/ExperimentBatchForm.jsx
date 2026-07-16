@@ -186,7 +186,6 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
       setAppliedPlanId(null)
       setAppliedPlanPayload(null)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, resetKey, task, form])
 
   // Load tuning spaces when active + task type known.

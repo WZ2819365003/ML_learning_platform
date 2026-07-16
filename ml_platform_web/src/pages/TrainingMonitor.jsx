@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
-  Button, Card, Descriptions, Input, Modal, Pagination,
+  Button, Card, Descriptions, Input, Pagination,
   Popconfirm, Progress, Space, Table, Tag, Typography, message,
 } from 'antd';
 import {
@@ -306,12 +306,14 @@ function TaskDetailView({ taskId, navigate }) {
     enabled: !!taskId,
     maxEntries: 500,
   });
+  const loadTaskRef = useRef(null);
+  const seedLogsRef = useRef(null);
 
   useEffect(() => {
-    void loadTask();
-    void seedLogsFromRest();
+    void loadTaskRef.current?.();
+    void seedLogsRef.current?.();
     // Keep status/metrics polling at 3s for progress bar (logs now streamed).
-    const timer = setInterval(() => { void loadTask(); }, 3000);
+    const timer = setInterval(() => { void loadTaskRef.current?.(); }, 3000);
     return () => clearInterval(timer);
   }, [taskId]);
 
@@ -336,6 +338,9 @@ function TaskDetailView({ taskId, navigate }) {
       /* no historical logs yet */
     }
   }
+
+  loadTaskRef.current = loadTask;
+  seedLogsRef.current = seedLogsFromRest;
 
   const logText = logs.length
     ? logs.map(e => `${e.timestamp ?? ''} | ${e.level ?? 'INFO'} | ${e.message}`).join('\n')
