@@ -16,8 +16,14 @@ from sklearn.model_selection import train_test_split
 from app.config import get_settings
 from app.core.trainer import detect_task_type, get_trainer, list_available_models
 from app.core.logger import TrainingLogger
-from app.models.database import AsyncSession, Dataset, TrainingTask, async_session_factory
-from app.services.prediction_service import load_dataframe, prepare_training_frame
+from app.models.database import (
+    AsyncSession,
+    Dataset,
+    ExperimentRun,
+    TrainingTask,
+    async_session_factory,
+)
+from app.services.prediction_service import load_dataframe, prepare_raw_training_frame
 from app.utils.storage_paths import to_portable_storage_path
 from app.services.object_storage import upload_training_artifacts
 
@@ -70,9 +76,9 @@ def _make_platform_progress_callback(
     return _callback
 
 def _prepare_data(file_path: str, target_column: str, test_size: float, is_regression: bool = False):
-    """Load data, encode labels, split into train/val sets."""
+    """Load data and split raw rows before any fitted transformation."""
     df = load_dataframe(file_path)
-    X, y, _, _ = prepare_training_frame(df, target_column)
+    X, y = prepare_raw_training_frame(df, target_column)
 
     # Regression targets are continuous — stratify is not applicable
     stratify = None
@@ -89,12 +95,39 @@ def _prepare_data(file_path: str, target_column: str, test_size: float, is_regre
                 f"分类目标列 {target_column!r} 的最小类别样本数为 {min_class_count}，"
                 "无法进行分层切分；请不要选择 ID/序号列，改选真实标签列。"
             )
-        stratify = y.values
+        stratify = y
     X_train, X_val, y_train, y_val = train_test_split(
-        X.values, y.values, test_size=test_size, random_state=42, stratify=stratify
+        X, y, test_size=test_size, random_state=42, stratify=stratify
     )
 
-    return X_train, X_val, y_train, y_val
+    return (
+        X_train.reset_index(drop=True),
+        X_val.reset_index(drop=True),
+        y_train.reset_index(drop=True),
+        y_val.reset_index(drop=True),
+    )
+
+
+def _trainer_validation_inputs(evaluation_mode: str, X_val, y_val):
+    if evaluation_mode == "selection":
+        return None, None
+    return X_val, y_val
+
+
+async def _resolve_evaluation_mode(
+    db: AsyncSession,
+    platform_task_id: str | None,
+) -> str:
+    if not platform_task_id:
+        return "standard"
+    run = (
+        await db.execute(
+            select(ExperimentRun).where(ExperimentRun.task_id == platform_task_id)
+        )
+    ).scalar_one_or_none()
+    if run is not None and (run.search_meta or {}).get("evaluation_mode") == "selection":
+        return "selection"
+    return "standard"
 
 
 def _apply_class_weight(
@@ -153,6 +186,11 @@ def _try_init_mlflow():
         return None
 
 
+def _log_model_artifact(mlflow, model_file: Path) -> None:
+    """Store the self-contained joblib without assuming an sklearn model shape."""
+    mlflow.log_artifact(str(model_file), artifact_path="model")
+
+
 def _run_training_sync(
     task_id: str,
     file_path: str,
@@ -165,6 +203,7 @@ def _run_training_sync(
     model_save_dir: str,
     class_weight: str | None = None,
     progress_callback: Callable[[int, int, dict], None] | None = None,
+    evaluation_mode: str = "standard",
 ) -> dict:
     """Synchronous training function to run in thread pool."""
     # Initialize per-task logger
@@ -175,7 +214,7 @@ def _run_training_sync(
         return _run_training_sync_inner(
             tl, task_id, file_path, target_column, model_type,
             hyperparameters, test_size, eval_metrics, cv_folds,
-            model_save_dir, class_weight, progress_callback,
+            model_save_dir, class_weight, progress_callback, evaluation_mode,
         )
     except Exception as exc:
         # Record the failure explicitly so the Inspector can show WHY it
@@ -209,6 +248,7 @@ def _run_training_sync_inner(
     model_save_dir: str,
     class_weight: str | None,
     progress_callback: Callable[[int, int, dict], None] | None,
+    evaluation_mode: str = "standard",
 ) -> dict:
     # Try MLflow integration (optional)
     mlflow = _try_init_mlflow()
@@ -220,7 +260,8 @@ def _run_training_sync_inner(
     X_train, X_val, y_train, y_val = _prepare_data(file_path, target_column, test_size, is_regression)
     tl.log("INFO", "Data prepared",
            train_samples=len(X_train), val_samples=len(X_val),
-           features=X_train.shape[1], target=target_column)
+           features=X_train.shape[1], target=target_column,
+           evaluation_mode=evaluation_mode)
 
     # Translate class_weight into model-specific hyperparameter keys
     effective_hp = _apply_class_weight(hyperparameters, model_type, class_weight, y_train)
@@ -262,8 +303,11 @@ def _run_training_sync_inner(
 
     # Train
     tl.log("INFO", f"Starting training with {cv_folds}-fold cross validation")
+    trainer_X_val, trainer_y_val = _trainer_validation_inputs(
+        evaluation_mode, X_val, y_val
+    )
     result_metrics = trainer.train(
-        X_train, y_train, X_val, y_val,
+        X_train, y_train, trainer_X_val, trainer_y_val,
         eval_metrics=eval_metrics,
         cv_folds=cv_folds,
         callback=on_fold_complete,
@@ -298,7 +342,7 @@ def _run_training_sync_inner(
             mlflow.log_metrics({f"final_{k}": v for k, v in final_log.items() if isinstance(v, (int, float))})
             mlflow.log_artifact(str(tl.log_file))
             mlflow.log_artifact(str(tl.metrics_file))
-            mlflow.sklearn.log_model(trainer.model, "model")
+            _log_model_artifact(mlflow, model_file)
             mlflow.end_run()
             tl.log("INFO", "MLflow run completed")
         except Exception as e:
@@ -392,6 +436,7 @@ async def _run_training_sync_by_id(
         test_size     = task.test_size or 0.2
         eval_metrics  = task.eval_metrics or ["accuracy"]
         cv_folds      = int(getattr(task, "cv_folds", None) or 5)
+        evaluation_mode = await _resolve_evaluation_mode(db, platform_task_id)
 
     # Mark domain task RUNNING
     async with async_session_factory() as db:
@@ -410,7 +455,7 @@ async def _run_training_sync_by_id(
             _run_training_sync,
             training_task_id, file_path, target_column, model_type,
             hyperparams, test_size, eval_metrics, cv_folds,
-            str(settings.storage_models), None, progress_callback,
+            str(settings.storage_models), None, progress_callback, evaluation_mode,
         )
         metrics = {k: v for k, v in training_result["result_metrics"].items() if k != "cv_folds"}
 

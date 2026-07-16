@@ -1,10 +1,12 @@
 from abc import ABC, abstractmethod
 from typing import Any, Callable
 import numpy as np
-from sklearn.model_selection import cross_val_score, StratifiedKFold
+import pandas as pd
+from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, precision_score, recall_score, log_loss
 import joblib
-from pathlib import Path
+
+from app.core.model_artifact import fit_tabular_artifact
 
 # Callback type: callback(step: int, total_steps: int, metrics: dict)
 MetricsCallback = Callable[[int, int, dict], None] | None
@@ -33,24 +35,32 @@ class BaseTrainer(ABC):
 
         # Use StratifiedKFold for cross-validation as "training steps"
         skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
+        tabular_input = isinstance(X_train, pd.DataFrame)
+        base_model = self.model
 
         fold_results = []
-        X_full = np.vstack([X_train, X_val]) if X_val is not None and len(X_val) > 0 else X_train
-        y_full = np.concatenate([y_train, y_val]) if y_val is not None and len(y_val) > 0 else y_train
-
-        for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_full, y_full)):
-            X_fold_train, X_fold_val = X_full[train_idx], X_full[val_idx]
-            y_fold_train, y_fold_val = y_full[train_idx], y_full[val_idx]
+        for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
+            X_fold_train, X_fold_val = _take_rows(X_train, train_idx), _take_rows(X_train, val_idx)
+            y_fold_train, y_fold_val = _take_rows(y_train, train_idx), _take_rows(y_train, val_idx)
 
             # Train on fold
-            self.model.fit(X_fold_train, y_fold_train)
+            fold_model = (
+                fit_tabular_artifact(
+                    base_model,
+                    X_fold_train,
+                    y_fold_train,
+                    task_kind="classification",
+                )
+                if tabular_input
+                else self.model.fit(X_fold_train, y_fold_train)
+            )
 
             # Evaluate
-            y_pred = self.model.predict(X_fold_val)
+            y_pred = fold_model.predict(X_fold_val)
             y_pred_proba = None
-            if hasattr(self.model, 'predict_proba'):
+            if hasattr(fold_model, 'predict_proba'):
                 try:
-                    y_pred_proba = self.model.predict_proba(X_fold_val)
+                    y_pred_proba = fold_model.predict_proba(X_fold_val)
                 except Exception:
                     pass
 
@@ -62,7 +72,15 @@ class BaseTrainer(ABC):
                 callback(fold_idx + 1, cv_folds, fold_metrics)
 
         # Final training on all data
-        self.model.fit(X_train, y_train)
+        if tabular_input:
+            self.model = fit_tabular_artifact(
+                base_model,
+                X_train,
+                y_train,
+                task_kind="classification",
+            )
+        else:
+            self.model.fit(X_train, y_train)
 
         # Final evaluation on validation set
         final_metrics = {}
@@ -83,9 +101,16 @@ class BaseTrainer(ABC):
                 continue
             values = [fr[key] for fr in fold_results if fr[key] is not None]
             if values:
-                avg_metrics[f"cv_avg_{key}"] = round(np.mean(values), 4)
-                avg_metrics[f"cv_std_{key}"] = round(np.std(values), 4)
+                mean_value = round(np.mean(values), 4)
+                std_value = round(np.std(values), 4)
+                avg_metrics[f"cv_avg_{key}"] = mean_value
+                avg_metrics[f"cv_std_{key}"] = std_value
+                avg_metrics[f"selection_cv_mean_{key}"] = mean_value
+                avg_metrics[f"selection_cv_std_{key}"] = std_value
 
+        final_metrics.update({
+            f"final_test_{key}": value for key, value in final_metrics.items()
+        })
         final_metrics.update(avg_metrics)
         final_metrics["cv_folds"] = fold_results
 
@@ -125,6 +150,10 @@ class BaseTrainer(ABC):
 
     def load(self, path: str):
         self.model = joblib.load(path)
+
+
+def _take_rows(values, indices):
+    return values.iloc[indices] if hasattr(values, "iloc") else values[indices]
 
 
 class RandomForestTrainer(BaseTrainer):

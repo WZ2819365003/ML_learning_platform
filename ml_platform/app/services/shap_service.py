@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.resolver import (
     TaskFacade,
     is_regressor,
-    load_and_split_data_no_stratify,
+    load_and_split_data_for_model,
     load_model,
     resolve_task_and_dataset,
 )
@@ -267,10 +267,20 @@ async def compute_shap_summary(
     """
     task, dataset = await resolve_task_and_dataset(task_id, db)
 
-    X_train, X_test, y_train, y_test, feature_names = load_and_split_data_no_stratify(
-        dataset.file_path, task.target_column, task.test_size
+    loaded_model = load_model(task.model_path)
+    prepared = load_and_split_data_for_model(
+        dataset.file_path,
+        task.target_column,
+        task.test_size,
+        loaded_model,
+        stratified=False,
     )
-    model = load_model(task.model_path)
+    X_train = prepared["X_train"]
+    X_test = prepared["X_test"]
+    y_train = prepared["y_train"]
+    y_test = prepared["y_test"]
+    feature_names = prepared["feature_names"]
+    model = prepared["model"]
 
     # Subsample X_test for SHAP — bounded for performance
     if len(X_test) > max_samples:

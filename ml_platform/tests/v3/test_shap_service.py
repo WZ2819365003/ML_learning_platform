@@ -15,7 +15,9 @@ import pandas as pd
 import pytest
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
 
+from app.core.model_artifact import fit_tabular_artifact
 from app.services import shap_service
 from app.services.shap_service import (
     METHOD_KERNEL,
@@ -27,6 +29,12 @@ from app.services.shap_service import (
     _round_list_2d,
     _to_f64_list,
 )
+
+
+def test_installed_shap_imports_with_supported_numpy():
+    import shap
+
+    assert tuple(int(part) for part in shap.__version__.split(".")[:2]) >= (0, 49)
 
 
 def test_to_f64_list_handles_numpy_inexact():
@@ -211,10 +219,8 @@ async def test_compute_shap_summary_tree_model(synthetic_rf_run, db):
     """End-to-end: synthetic RF → compute_shap_summary returns a well-formed
     payload using the best available rung of the ladder.
 
-    In environments where SHAP's TreeExplainer works we expect `method=tree`;
-    when SHAP hits a numpy-2.0 dtype issue we correctly fall through to
-    `permutation`. We accept either — the critical contract is that we never
-    silently return fake `model_feature_importances`.
+    The pinned SHAP version supports NumPy 2.x, so a tree model must use the
+    tree rung rather than silently degrading to permutation importance.
     """
     from app.models.database import Dataset, TrainingTask
 
@@ -245,7 +251,7 @@ async def test_compute_shap_summary_tree_model(synthetic_rf_run, db):
 
     payload = await shap_service.compute_shap_summary(task_id, db, max_samples=30)
     assert payload["status"] == "ready"
-    assert payload["method"] in (METHOD_TREE, METHOD_KERNEL, METHOD_PERMUTATION)
+    assert payload["method"] == METHOD_TREE
     assert payload["feature_count"] == 4
     assert payload["sample_count"] <= 30
     # Top feature should be 'a' or 'b' since they're the ones driving y
@@ -261,3 +267,83 @@ async def test_compute_shap_summary_tree_model(synthetic_rf_run, db):
         assert payload["shap_values"] is None
         assert payload["feature_values"] is None
         assert len(payload["mean_abs_shap"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_compute_shap_summary_with_tabular_artifact(db):
+    from app.config import get_settings
+    from app.models.database import Dataset, TrainingTask
+    import uuid
+
+    settings = get_settings()
+    settings.ensure_storage_dirs()
+    suffix = uuid.uuid4().hex[:8]
+    task_id = f"artifact_{suffix}"
+    dataset_id = f"ds_artifact_{suffix}"
+
+    rng = np.random.RandomState(7)
+    numeric = rng.randn(120, 2)
+    frame = pd.DataFrame(
+        {
+            "signal": numeric[:, 0],
+            "load": numeric[:, 1],
+            "kind": np.where(numeric[:, 0] >= 0, "hot", "cold"),
+        }
+    )
+    labels = pd.Series(
+        np.where(numeric[:, 0] + numeric[:, 1] >= 0, "fault", "normal")
+    )
+    stored = frame.copy()
+    stored["label"] = labels
+    csv_path = settings.storage_uploads / f"{task_id}.csv"
+    model_path = settings.storage_models / f"{task_id}.joblib"
+    stored.to_csv(csv_path, index=False)
+
+    X_train, _, y_train, _ = train_test_split(
+        frame,
+        labels,
+        test_size=0.2,
+        random_state=42,
+        stratify=labels,
+    )
+    artifact = fit_tabular_artifact(
+        RandomForestClassifier(n_estimators=20, random_state=0),
+        X_train.reset_index(drop=True),
+        y_train.reset_index(drop=True),
+        task_kind="classification",
+    )
+    joblib.dump(artifact, model_path)
+
+    dataset = Dataset(
+        id=dataset_id,
+        name="artifact-shap",
+        file_path=str(csv_path),
+        file_size=1024,
+        row_count=len(stored),
+        column_count=len(stored.columns),
+    )
+    task = TrainingTask(
+        id=task_id,
+        dataset_id=dataset_id,
+        name="artifact-rf",
+        model_type="random_forest",
+        hyperparameters={},
+        target_column="label",
+        test_size=0.2,
+        eval_metrics=["accuracy"],
+        status="SUCCESS",
+        progress=100,
+        model_path=f"storage/models/{task_id}.joblib",
+    )
+    db.add_all([dataset, task])
+    await db.commit()
+
+    try:
+        payload = await shap_service.compute_shap_summary(task_id, db, max_samples=30)
+        assert payload["status"] == "ready"
+        assert payload["method"] in (METHOD_TREE, METHOD_KERNEL, METHOD_PERMUTATION)
+        assert payload["feature_count"] == 3
+        assert "kind" in {item["feature"] for item in payload["top_features"]}
+    finally:
+        for path in (csv_path, model_path):
+            path.unlink(missing_ok=True)

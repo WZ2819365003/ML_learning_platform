@@ -37,6 +37,7 @@ from app.services.resolver import (
     load_and_split_data_no_stratify,
     load_and_split_data_stratified,
     load_model,
+    resolve_and_load,
     resolve_legacy_id_candidates,
     resolve_task_and_dataset,
 )
@@ -76,16 +77,17 @@ def _load_task_model_data(task, dataset, test_size: float = 0.2):
 
 async def get_confusion_matrix(task_id: str, db: AsyncSession, normalize: bool = False) -> dict:
     """Compute confusion matrix for a completed training task."""
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     if is_regressor(task.model_type):
         raise HTTPException(
             status_code=400,
             detail="该任务为回归任务，不支持混淆矩阵。请查看残差图或预测-真实值散点。",
         )
-    model = load_model(task.model_path)
-    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
+    model = prepared["model"]
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    class_labels = prepared["class_labels"]
 
     y_pred = model.predict(X_test)
     cm = confusion_matrix(y_test, y_pred)
@@ -105,16 +107,17 @@ async def get_confusion_matrix(task_id: str, db: AsyncSession, normalize: bool =
 
 async def get_roc_curve(task_id: str, db: AsyncSession) -> dict:
     """Compute ROC curve data for a completed training task."""
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     if is_regressor(task.model_type):
         raise HTTPException(
             status_code=400,
             detail="该任务为回归任务，不支持 ROC 曲线。请查看残差图或预测-真实值散点。",
         )
-    model = load_model(task.model_path)
-    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
+    model = prepared["model"]
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    class_labels = prepared["class_labels"]
 
     if not hasattr(model, "predict_proba"):
         raise HTTPException(status_code=400, detail="Model does not support probability prediction for ROC")
@@ -149,12 +152,9 @@ async def get_roc_curve(task_id: str, db: AsyncSession) -> dict:
 
 async def get_feature_importance(task_id: str, db: AsyncSession) -> dict:
     """Feature importance extracted from the model (tree-based or linear)."""
-    task, dataset = await resolve_task_and_dataset(task_id, db)
-    model = load_model(task.model_path)
-    # Non-stratified split — we only need feature names. Works for regression too.
-    _, _, _, _, feature_names = load_and_split_data_no_stratify(
-        dataset.file_path, task.target_column, task.test_size
-    )
+    prepared = await resolve_and_load(task_id, db, stratified=False)
+    model = prepared["model"]
+    feature_names = prepared["feature_names"]
 
     if hasattr(model, "feature_importances_"):
         importance = np.asarray(model.feature_importances_, dtype=np.float64)
@@ -227,11 +227,10 @@ async def get_shap_summary(task_id: str, db: AsyncSession, max_samples: int = 20
 
 async def get_residual_plot(task_id: str, db: AsyncSession) -> dict:
     """Return residuals (y_true - y_pred) and predicted values for residual plot."""
-    task, dataset = await resolve_task_and_dataset(task_id, db)
-    X_train, X_test, y_train, y_test, _ = load_and_split_data_no_stratify(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    prepared = await resolve_and_load(task_id, db, stratified=False)
+    model = prepared["model"]
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
 
     y_pred = model.predict(X_test)
     residuals = (y_test - y_pred).tolist()
@@ -248,11 +247,10 @@ async def get_residual_plot(task_id: str, db: AsyncSession) -> dict:
 
 async def get_predicted_vs_actual(task_id: str, db: AsyncSession) -> dict:
     """Return predicted vs actual values for scatter plot."""
-    task, dataset = await resolve_task_and_dataset(task_id, db)
-    X_train, X_test, y_train, y_test, _ = load_and_split_data_no_stratify(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    prepared = await resolve_and_load(task_id, db, stratified=False)
+    model = prepared["model"]
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
 
     y_pred = model.predict(X_test)
 
@@ -285,12 +283,13 @@ async def get_per_class_metrics(task_id: str, db: AsyncSession) -> dict:
     averages are included.  The frontend table can render one row per
     class with the last two rows pinned as aggregate.
     """
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     _guard_classification(task.model_type, "per_class metrics")
-    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    class_labels = prepared["class_labels"]
+    model = prepared["model"]
     y_pred = model.predict(X_test)
 
     report = classification_report(
@@ -338,12 +337,13 @@ async def get_pr_curve(task_id: str, db: AsyncSession) -> dict:
     arrays; the frontend plots PR + vertical line at best_threshold.
     Multiclass is one-vs-rest per class.
     """
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     _guard_classification(task.model_type, "PR curve")
-    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    class_labels = prepared["class_labels"]
+    model = prepared["model"]
     if not hasattr(model, "predict_proba"):
         raise HTTPException(
             status_code=400,
@@ -399,12 +399,12 @@ async def get_calibration_curve(task_id: str, db: AsyncSession, n_bins: int = 10
     Binary-only.  ECE is the mean of |prob_pred - prob_true| weighted by
     per-bin count.  Good calibration means the curve hugs the diagonal.
     """
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     _guard_classification(task.model_type, "calibration curve")
-    _, X_test, _, y_test, _, _ = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    model = prepared["model"]
     if not hasattr(model, "predict_proba"):
         raise HTTPException(
             status_code=400,
@@ -460,12 +460,12 @@ async def get_threshold_analysis(
     by default) with precision / recall / F1 / accuracy.  The UI picks the
     best-F1 row to highlight.
     """
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     _guard_classification(task.model_type, "threshold analysis")
-    _, X_test, _, y_test, _, _ = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    model = prepared["model"]
     if not hasattr(model, "predict_proba"):
         raise HTTPException(
             status_code=400,
@@ -519,14 +519,14 @@ async def get_prediction_distribution(
     by true class to see separation.  For regression: residual histogram
     + summary stats.
     """
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
+    model = prepared["model"]
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
     bins = max(10, min(100, int(bins)))
 
     if is_regressor(task.model_type):
-        _, X_test, _, y_test, _ = load_and_split_data_no_stratify(
-            dataset.file_path, task.target_column, task.test_size
-        )
-        model = load_model(task.model_path)
         y_pred = model.predict(X_test)
         residuals = np.asarray(y_test) - np.asarray(y_pred)
         counts, edges = np.histogram(residuals, bins=bins)
@@ -541,10 +541,7 @@ async def get_prediction_distribution(
             "max": round(float(np.max(residuals)), 4),
         }
 
-    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    class_labels = prepared["class_labels"]
     if not hasattr(model, "predict_proba"):
         raise HTTPException(
             status_code=400,

@@ -23,6 +23,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.evaluation_metrics import resolve_objective_metrics
 from app.models.database import (
     Dataset,
     DatasetVersion,
@@ -62,7 +63,26 @@ def _resolve_domain_ref(payload_ref: str | None) -> tuple[str | None, str | None
 # Serializers
 # ---------------------------------------------------------------------------
 
+FINAL_EVALUATION_CONFIG_KEY = "_final_evaluation"
+FINAL_EVALUATION_VERSION = 1
+
+
+def task_final_evaluation_state(task: ModelingTask) -> dict[str, Any]:
+    stored = (task.config or {}).get(FINAL_EVALUATION_CONFIG_KEY)
+    if not isinstance(stored, dict):
+        return {"state": "OPEN", "version": FINAL_EVALUATION_VERSION}
+    return dict(stored)
+
+
+def set_task_final_evaluation_state(task: ModelingTask, state: dict[str, Any]) -> None:
+    config = dict(task.config or {})
+    config[FINAL_EVALUATION_CONFIG_KEY] = dict(state)
+    task.config = config
+
+
 def serialize_modeling_task(task: ModelingTask) -> dict[str, Any]:
+    public_config = dict(task.config or {})
+    public_config.pop(FINAL_EVALUATION_CONFIG_KEY, None)
     return {
         "id": task.id,
         "name": task.name,
@@ -77,7 +97,8 @@ def serialize_modeling_task(task: ModelingTask) -> dict[str, Any]:
         "status": task.status,
         "best_experiment_id": task.best_experiment_id,
         "best_run_id": task.best_run_id,
-        "config": task.config or {},
+        "config": public_config,
+        "final_evaluation": task_final_evaluation_state(task),
         "summary_snapshot": task.summary_snapshot or {},
         # V3 Phase 2 — plan binding
         "training_plan_id": task.training_plan_id,
@@ -418,6 +439,18 @@ async def update_modeling_task(
     objective_direction: str | None = None,
 ) -> dict[str, Any]:
     task = await _get_task_or_404(db, task_id)
+    final_state = task_final_evaluation_state(task)
+    objective_changes = (
+        objective_metric is not None and objective_metric != task.objective_metric
+    ) or (
+        objective_direction is not None
+        and objective_direction != task.objective_direction
+    )
+    if final_state.get("state") != "OPEN" and objective_changes:
+        raise HTTPException(
+            status_code=409,
+            detail="任务已进入最终确认流程，不能修改优化目标或方向。",
+        )
     if name is not None:
         task.name = name
     if description is not None:
@@ -453,13 +486,18 @@ async def delete_modeling_task(db: AsyncSession, task_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _pick_metric(metrics: dict, metric_key: str) -> float | None:
-    v = (metrics or {}).get(metric_key)
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
+    return resolve_objective_metrics(metrics, metric_key).selection_value
+
+
+def _objective_metric_payload(metrics: dict, metric_key: str) -> dict[str, Any]:
+    resolved = resolve_objective_metrics(metrics, metric_key)
+    return {
+        "objective_value": resolved.selection_value,
+        "selection_metric_key": resolved.selection_metric_key,
+        "selection_value": resolved.selection_value,
+        "final_test_metric_key": resolved.final_test_metric_key,
+        "final_test_value": resolved.final_test_value,
+    }
 
 
 async def task_leaderboard(db: AsyncSession, task_id: str, top_k: int = 20) -> list[dict[str, Any]]:
@@ -507,9 +545,12 @@ async def task_leaderboard(db: AsyncSession, task_id: str, top_k: int = 20) -> l
         platform_tasks = {pt.id: pt for pt in ptask_rows.scalars().all()}
 
     result = []
-    for idx, (run, value) in enumerate(top):
+    for idx, (run, _value) in enumerate(top):
         pt = platform_tasks.get(run.task_id) if run.task_id else None
         domain_task_id, family = _resolve_domain_ref(pt.payload_ref if pt else None)
+        metric_payload = _objective_metric_payload(
+            run.metrics or {}, task.objective_metric or "accuracy"
+        )
         result.append({
             "rank": idx + 1,
             "run_id": run.id,
@@ -518,7 +559,7 @@ async def task_leaderboard(db: AsyncSession, task_id: str, top_k: int = 20) -> l
             "strategy_type": exp_index[run.experiment_id]["strategy_type"]
                               or run.source_experiment_type,
             "trial_no": run.trial_no,
-            "objective_value": value,
+            **metric_payload,
             "metric_name": task.objective_metric,
             "params": run.params or {},
             "metrics": run.metrics or {},
@@ -594,7 +635,9 @@ async def task_runs(
     for run in runs:
         exp_meta = exp_index.get(run.experiment_id, {})
         pt = platform_tasks.get(run.task_id) if run.task_id else None
-        objective_value = _pick_metric(run.metrics or {}, task.objective_metric or "accuracy")
+        metric_payload = _objective_metric_payload(
+            run.metrics or {}, task.objective_metric or "accuracy"
+        )
         domain_task_id, family = _resolve_domain_ref(pt.payload_ref if pt else None)
         items.append({
             "run_id": run.id,
@@ -608,7 +651,7 @@ async def task_runs(
             # deployable/downloadable model handle for this run (see _resolve_domain_ref)
             "domain_task_id": domain_task_id,
             "family": family,
-            "objective_value": objective_value,
+            **metric_payload,
             "metric_name": task.objective_metric,
             "params": run.params or {},
             "metrics": run.metrics or {},
@@ -768,7 +811,7 @@ async def list_all_runs(
         if task is None:
             continue  # orphaned run — skip
         metric_name = task.objective_metric or "accuracy"
-        metric_val = _pick_metric(run.metrics or {}, metric_name)
+        metric_payload = _objective_metric_payload(run.metrics or {}, metric_name)
         model_type = (run.params or {}).get("model_type") if isinstance(run.params, dict) else None
         items.append({
             "run_id": run.id,
@@ -780,7 +823,7 @@ async def list_all_runs(
             "task_type": task.task_type,
             "objective_metric": metric_name,
             "objective_direction": task.objective_direction or "max",
-            "objective_value": metric_val,
+            **metric_payload,
             "trial_no": run.trial_no,
             "rank": run.rank,
             "status": run.status,
@@ -888,12 +931,14 @@ async def strategy_comparison(db: AsyncSession, task_id: str) -> dict[str, Any]:
         if value is None:
             continue
         buckets.setdefault(strategy, []).append((run, value))
+        metric_payload = _objective_metric_payload(run.metrics or {}, metric_name)
         raw_points.append({
             "strategy_type": strategy,
             "run_id": run.id,
             "experiment_id": run.experiment_id,
             "trial_no": run.trial_no,
             "value": value,
+            **metric_payload,
             "model_type": (run.params or {}).get("model_type")
                 or (run.search_meta or {}).get("model_type"),
         })
@@ -911,12 +956,13 @@ async def strategy_comparison(db: AsyncSession, task_id: str) -> dict[str, Any]:
         best_run: dict[str, Any] | None = None
         if items:
             best_tuple = max(items, key=lambda t: t[1]) if reverse else min(items, key=lambda t: t[1])
-            run, value = best_tuple
+            run, _value = best_tuple
+            metric_payload = _objective_metric_payload(run.metrics or {}, metric_name)
             best_run = {
                 "run_id": run.id,
                 "experiment_id": run.experiment_id,
                 "trial_no": run.trial_no,
-                "objective_value": value,
+                **metric_payload,
                 "params": run.params or {},
                 "metrics": run.metrics or {},
                 "model_type": (run.params or {}).get("model_type")

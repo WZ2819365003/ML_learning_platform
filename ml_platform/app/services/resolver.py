@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.model_artifact import is_tabular_artifact
 from app.models.database import (
     Dataset,
     ExperimentRun,
@@ -46,7 +47,11 @@ from app.models.database import (
     PlatformTask,
     TrainingTask,
 )
-from app.services.prediction_service import load_dataframe, prepare_training_frame
+from app.services.prediction_service import (
+    load_dataframe,
+    prepare_raw_training_frame,
+    prepare_training_frame,
+)
 from app.utils.storage_paths import resolve_runtime_path
 
 logger = logging.getLogger(__name__)
@@ -167,6 +172,56 @@ def load_and_split_data_no_stratify(
     )
     feature_names = list(X.columns)
     return X_train, X_test, y_train, y_test, feature_names
+
+
+def load_and_split_data_for_model(
+    file_path: str,
+    target_column: str,
+    test_size: float,
+    model,
+    *,
+    stratified: bool,
+) -> dict[str, Any]:
+    """Prepare evaluation matrices using persisted state for new artifacts."""
+    if not is_tabular_artifact(model):
+        if stratified:
+            X_train, X_test, y_train, y_test, feature_names, class_labels = (
+                load_and_split_data_stratified(file_path, target_column, test_size)
+            )
+        else:
+            X_train, X_test, y_train, y_test, feature_names = (
+                load_and_split_data_no_stratify(file_path, target_column, test_size)
+            )
+            class_labels = None
+        return {
+            "model": model,
+            "X_train": X_train,
+            "X_test": X_test,
+            "y_train": y_train,
+            "y_test": y_test,
+            "feature_names": feature_names,
+            "class_labels": class_labels,
+        }
+
+    df = load_dataframe(file_path)
+    raw_X, raw_y = prepare_raw_training_frame(df, target_column)
+    stratify_values = raw_y if stratified else None
+    X_train_raw, X_test_raw, y_train_raw, y_test_raw = train_test_split(
+        raw_X,
+        raw_y,
+        test_size=test_size,
+        random_state=42,
+        stratify=stratify_values,
+    )
+    return {
+        "model": model.estimator,
+        "X_train": model.transform_features(X_train_raw),
+        "X_test": model.transform_features(X_test_raw),
+        "y_train": model.encode_target(y_train_raw),
+        "y_test": model.encode_target(y_test_raw),
+        "feature_names": model.feature_names,
+        "class_labels": [str(value) for value in model.class_labels] or None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -524,25 +579,16 @@ async def resolve_and_load(task_id: str, db: AsyncSession, *, stratified: bool |
         stratified = task.task_kind == "classification" if isinstance(task, TaskFacade) \
             else not is_regressor(getattr(task, "model_type", None))
 
-    if stratified:
-        X_train, X_test, y_train, y_test, feature_names, class_labels = load_and_split_data_stratified(
-            dataset.file_path, task.target_column, task.test_size
-        )
-    else:
-        X_train, X_test, y_train, y_test, feature_names = load_and_split_data_no_stratify(
-            dataset.file_path, task.target_column, task.test_size
-        )
-        class_labels = None
-
-    model = load_model(task.model_path)
+    loaded_model = load_model(task.model_path)
+    prepared = load_and_split_data_for_model(
+        dataset.file_path,
+        task.target_column,
+        task.test_size,
+        loaded_model,
+        stratified=stratified,
+    )
     return {
         "task": task,
         "dataset": dataset,
-        "model": model,
-        "X_train": X_train,
-        "X_test": X_test,
-        "y_train": y_train,
-        "y_test": y_test,
-        "feature_names": feature_names,
-        "class_labels": class_labels,
+        **prepared,
     }

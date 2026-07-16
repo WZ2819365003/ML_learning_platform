@@ -238,6 +238,19 @@ async def task_leaderboard(
     return await modeling_task_service.task_leaderboard(db, task_id, top_k=top_k)
 
 
+@router.post(
+    "/{task_id}/final-evaluation",
+    summary="Confirm the selection winner on the sealed hold-out",
+)
+async def finalize_task_winner_route(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services import final_evaluation_service
+
+    return await final_evaluation_service.finalize_task_winner(db, task_id)
+
+
 @router.get(
     "/{task_id}/strategy-comparison",
     summary="Compare baseline / grid_search / bayesian_search for this task",

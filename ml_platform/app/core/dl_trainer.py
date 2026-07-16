@@ -34,6 +34,8 @@ from sklearn.metrics import (
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
+from app.core.model_artifact import DLPreprocessingArtifact
+
 logger = logging.getLogger(__name__)
 
 EpochCallback = Callable[[int, dict], None] | None
@@ -52,6 +54,7 @@ class BaseDLTrainer(ABC):
         self.scaler: StandardScaler | None = None
         self.model_type: str = ""
         self.num_classes: int = 1
+        self.preprocessing_artifact: DLPreprocessingArtifact | None = None
 
     # ── Abstract ──────────────────────────────────────────────────────────────
 
@@ -370,8 +373,9 @@ class BaseDLTrainer(ABC):
     # ── Persistence ───────────────────────────────────────────────────────────
 
     def save(self, path: str, arch_config: dict | None = None, input_dim: int = 0,
-             task_type: str = "", feature_columns: list[str] | None = None):
-        """Save .pt checkpoint; scaler saved as {path}.scaler.joblib."""
+             task_type: str = "", feature_columns: list[str] | None = None,
+             preprocessing_artifact: DLPreprocessingArtifact | None = None):
+        """Save checkpoint plus optional scaler and preprocessing sidecars."""
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         torch.save({
@@ -385,6 +389,9 @@ class BaseDLTrainer(ABC):
         }, p)
         if self.scaler is not None:
             joblib.dump(self.scaler, str(p) + ".scaler.joblib")
+        self.preprocessing_artifact = preprocessing_artifact
+        if preprocessing_artifact is not None:
+            joblib.dump(preprocessing_artifact, str(p) + ".preprocessor.joblib")
         logger.info("DL model saved → %s", p)
 
     def load(self, path: str):
@@ -398,6 +405,12 @@ class BaseDLTrainer(ABC):
         scaler_path = str(p) + ".scaler.joblib"
         if Path(scaler_path).exists():
             self.scaler = joblib.load(scaler_path)
+        preprocessing_path = str(p) + ".preprocessor.joblib"
+        self.preprocessing_artifact = (
+            joblib.load(preprocessing_path)
+            if Path(preprocessing_path).exists()
+            else None
+        )
 
     def load_for_inference(self, path: str) -> dict:
         """Build model from saved checkpoint metadata + load weights + scaler.
@@ -423,7 +436,18 @@ class BaseDLTrainer(ABC):
         if Path(scaler_path).exists():
             self.scaler = joblib.load(scaler_path)
 
-        return {"task_type": task_type, "feature_columns": feature_columns}
+        preprocessing_path = str(p) + ".preprocessor.joblib"
+        self.preprocessing_artifact = (
+            joblib.load(preprocessing_path)
+            if Path(preprocessing_path).exists()
+            else None
+        )
+
+        return {
+            "task_type": task_type,
+            "feature_columns": feature_columns,
+            "preprocessing_artifact": self.preprocessing_artifact,
+        }
 
     def predict(self, X: np.ndarray, task_type: str) -> tuple[np.ndarray, np.ndarray | None]:
         """Run inference on pre-processed input X.  Returns (predictions, probabilities)."""

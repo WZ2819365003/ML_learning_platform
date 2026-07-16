@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.evaluation_metrics import resolve_objective_metrics
 from app.models.database import (
     Dataset,
     DatasetVersion,
@@ -103,14 +104,8 @@ async def _get_run_or_404(db: AsyncSession, run_id: str) -> ExperimentRun:
 
 
 def _pick_metric(metrics: dict, metric_key: str) -> float | None:
-    """Extract a numeric metric value from a metrics dict."""
-    v = metrics.get(metric_key)
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
+    """Extract the model-selection value for an objective metric."""
+    return resolve_objective_metrics(metrics, metric_key).selection_value
 
 
 # ---------------------------------------------------------------------------

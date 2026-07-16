@@ -164,6 +164,200 @@ def test_baseline_preserves_deep_learning_family_and_nested_configs():
     assert params["train_config"]["epochs"] <= 10
 
 
+async def test_persist_trials_marks_only_ml_runs_as_selection_mode(db):
+    from sqlalchemy import select
+    from app.models.database import Dataset, ExperimentRun, ModelingTask, PlatformExperiment
+
+    ds = Dataset(name="sealed.csv", file_path="/tmp/sealed.csv", file_size=1, row_count=20)
+    db.add(ds)
+    await db.flush()
+    task = ModelingTask(
+        name="sealed-task",
+        dataset_id=ds.id,
+        target_column="label",
+        task_type="classification",
+        objective_metric="accuracy",
+    )
+    db.add(task)
+    await db.flush()
+    exp = PlatformExperiment(
+        modeling_task_id=task.id,
+        name="sealed-batch",
+        strategy_type="baseline",
+        dataset_id=ds.id,
+        objective_metric="accuracy",
+    )
+    db.add(exp)
+    await db.flush()
+
+    await svc._persist_trials(
+        db,
+        exp,
+        task,
+        [
+            {
+                "family": "ml",
+                "model_type": "logistic_regression",
+                "hyperparameters": {},
+                "trial_no": 1,
+                "search_meta": {"strategy": "baseline"},
+            },
+            {
+                "family": "dl",
+                "model_type": "mlp_dl",
+                "hyperparameters": {
+                    "arch_config": {}, "opt_config": {}, "train_config": {}
+                },
+                "trial_no": 2,
+                "search_meta": {"strategy": "baseline", "family": "dl"},
+            },
+        ],
+        ["accuracy"],
+    )
+
+    runs = (
+        await db.execute(select(ExperimentRun).order_by(ExperimentRun.trial_no))
+    ).scalars().all()
+    assert runs[0].search_meta["evaluation_mode"] == "selection"
+    assert "evaluation_mode" not in runs[1].search_meta
+    assert await training_svc._resolve_evaluation_mode(db, runs[0].task_id) == "selection"
+    assert await training_svc._resolve_evaluation_mode(db, runs[1].task_id) == "standard"
+
+
+async def test_finalise_batch_never_opens_sealed_holdout(
+    session_factory, monkeypatch
+):
+    from app.models.database import ExperimentRun, ModelingTask, PlatformExperiment
+
+    async with session_factory() as db:
+        task = ModelingTask(
+            name="finalise-task",
+            task_type="classification",
+            objective_metric="accuracy",
+            objective_direction="max",
+        )
+        db.add(task)
+        await db.flush()
+        exp = PlatformExperiment(
+            modeling_task_id=task.id,
+            name="done-batch",
+            status="RUNNING",
+            objective_metric="accuracy",
+            objective_direction="max",
+        )
+        db.add(exp)
+        await db.flush()
+        db.add(
+            ExperimentRun(
+                experiment_id=exp.id,
+                status="SUCCESS",
+                metrics={"selection_cv_mean_accuracy": 0.9},
+            )
+        )
+        await db.commit()
+        task_id, exp_id = task.id, exp.id
+
+    calls = []
+
+    async def fake_refresh(db, modeling_task_id):
+        calls.append(("summary", modeling_task_id))
+
+    async def fake_shap(experiment_id, top_k):
+        calls.append(("shap", experiment_id))
+
+    async def record_forbidden_evaluation(db, modeling_task_id):
+        calls.append(("final", modeling_task_id))
+        return {"status": "skipped"}
+
+    monkeypatch.setattr(svc, "async_session_factory", session_factory)
+    monkeypatch.setattr(svc, "refresh_task_summary", fake_refresh)
+    monkeypatch.setattr(
+        svc, "evaluate_task_winner", record_forbidden_evaluation, raising=False
+    )
+    monkeypatch.setattr(svc, "_schedule_shap_for_top_runs", fake_shap)
+
+    await svc._finalise_batch(exp_id, task_id)
+
+    assert calls == [
+        ("summary", task_id),
+        ("shap", exp_id),
+    ]
+
+
+@pytest.mark.parametrize("state", ["EVALUATING", "FINALIZED", "FAILED"])
+async def test_experiment_dispatch_lock_rejects_non_open_task(db, state):
+    from fastapi import HTTPException
+    from app.models.database import ModelingTask
+
+    task = ModelingTask(
+        name=f"sealed-{state.lower()}",
+        task_type="classification",
+        objective_metric="accuracy",
+        config={
+            "_final_evaluation": {
+                "state": state,
+                "version": 1,
+            }
+        },
+    )
+    db.add(task)
+    await db.flush()
+
+    with pytest.raises(HTTPException) as exc:
+        await svc._lock_task_for_experiment_dispatch(db, task.id)
+
+    assert exc.value.status_code == 409
+    assert "最终确认" in exc.value.detail
+
+
+async def test_experiment_dispatch_lock_allows_open_task(db):
+    from app.models.database import ModelingTask
+
+    task = ModelingTask(
+        name="open-task",
+        task_type="classification",
+        objective_metric="accuracy",
+    )
+    db.add(task)
+    await db.flush()
+
+    locked = await svc._lock_task_for_experiment_dispatch(db, task.id)
+
+    assert locked.id == task.id
+
+
+async def test_dispatch_experiment_batch_uses_task_finalization_lock(db):
+    from fastapi import HTTPException
+    from app.models.database import ModelingTask
+
+    task = ModelingTask(
+        name="finalized-dispatch",
+        task_type="classification",
+        objective_metric="accuracy",
+        config={
+            "_final_evaluation": {
+                "state": "FINALIZED",
+                "version": 1,
+            }
+        },
+    )
+    db.add(task)
+    await db.flush()
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.dispatch_experiment_batch(
+            db,
+            modeling_task_id=task.id,
+            name="must-not-start",
+            strategy_type="baseline",
+            selected_models=["logistic_regression"],
+            search_space={},
+            budget_config={},
+        )
+
+    assert exc.value.status_code == 409
+
+
 async def test_dispatch_experiment_bundle_creates_one_batch_per_strategy(db, monkeypatch):
     """A multi-strategy submission should persist separate experiment batches."""
     from app.models.database import Dataset, ModelingTask, PlatformExperiment
@@ -344,6 +538,84 @@ def test_sample_from_distribution_honours_types():
     assert 10 <= params["n_estimators"] <= 200
     assert params["n_estimators"] % 10 == 0
     assert params["kernel"] in ("rbf", "linear")
+
+
+async def test_bayesian_worker_loads_modeling_task(db, session_factory, monkeypatch):
+    """The background worker must not depend on an unimported route helper."""
+    from app.models.database import Dataset, ModelingTask, PlatformExperiment
+
+    ds = Dataset(name="bayes.csv", file_path="/tmp/bayes.csv", file_size=1, row_count=20)
+    db.add(ds)
+    await db.flush()
+    task = ModelingTask(
+        name="bayes-task",
+        dataset_id=ds.id,
+        target_column="Target",
+        task_type="classification",
+        objective_metric="accuracy",
+        objective_direction="max",
+    )
+    db.add(task)
+    await db.flush()
+    exp = PlatformExperiment(
+        name="bayes-exp",
+        modeling_task_id=task.id,
+        strategy_type="bayesian_search",
+        status="RUNNING",
+    )
+    db.add(exp)
+    await db.commit()
+
+    async def no_finalise(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(svc, "async_session_factory", session_factory)
+    monkeypatch.setattr(svc, "_finalise_batch", no_finalise)
+    await svc._run_bayesian_search(
+        experiment_id=exp.id,
+        modeling_task_id=task.id,
+        selected_models=[],
+        search_space={},
+        tuning_defaults={},
+        budget_config={},
+        eval_metrics=["accuracy"],
+    )
+
+
+async def test_bayesian_guard_marks_startup_failure(db, session_factory, monkeypatch):
+    """An uncaught background error must not strand the experiment in RUNNING."""
+    from app.models.database import Dataset, ModelingTask, PlatformExperiment
+
+    ds = Dataset(name="bayes.csv", file_path="/tmp/bayes.csv", file_size=1, row_count=20)
+    db.add(ds)
+    await db.flush()
+    task = ModelingTask(name="bayes-task", dataset_id=ds.id, status="RUNNING")
+    db.add(task)
+    await db.flush()
+    exp = PlatformExperiment(
+        name="bayes-exp",
+        modeling_task_id=task.id,
+        strategy_type="bayesian_search",
+        status="RUNNING",
+        config={"submitted_from": "test"},
+    )
+    db.add(exp)
+    await db.commit()
+
+    async def fail_worker(**_kwargs):
+        raise RuntimeError("worker startup failed")
+
+    monkeypatch.setattr(svc, "async_session_factory", session_factory)
+    monkeypatch.setattr(svc, "_run_bayesian_search", fail_worker)
+    await svc._run_bayesian_search_guarded(
+        experiment_id=exp.id,
+        modeling_task_id=task.id,
+    )
+
+    await db.refresh(exp)
+    assert exp.status == "FAILED"
+    assert exp.finished_at is not None
+    assert exp.config["worker_error"] == "worker startup failed"
 
 
 def test_sample_from_distribution_handles_list_choices():

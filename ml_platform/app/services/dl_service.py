@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 from app.config import get_settings
 from app.core.dl_registry import get_dl_trainer
 from app.core.logger import TrainingLogger, event_bus
+from app.core.model_artifact import fit_dl_preprocessing_artifact
 from app.models.database import (
     AsyncSession,
     Dataset,
@@ -33,7 +34,11 @@ from app.models.database import (
     DLTrainingTask,
     async_session_factory,
 )
-from app.services.prediction_service import load_dataframe, prepare_prediction_frame, prepare_training_frame
+from app.services.prediction_service import (
+    load_dataframe,
+    prepare_prediction_frame,
+    prepare_raw_training_frame,
+)
 from app.utils.storage_paths import resolve_runtime_path, to_portable_storage_path
 from app.services.object_storage import upload_training_artifacts
 
@@ -46,12 +51,24 @@ _running_tasks: dict[str, asyncio.Task] = {}
 # Task-type auto-detection
 # ---------------------------------------------------------------------------
 
-def _detect_task_type(y: np.ndarray, requested: str) -> str:
+def _detect_task_type(y, requested: str) -> str:
     if requested in ("classification", "regression"):
         return requested
-    # heuristic: ≤20 unique int-valued classes → classification
-    unique = np.unique(y)
-    if len(unique) <= 20 and np.issubdtype(y.dtype, np.integer):
+
+    series = pd.Series(y).dropna()
+    if series.empty:
+        raise ValueError("目标列没有可用于训练的非空值。")
+    if (
+        series.dtype == "object"
+        or series.dtype.name in {"category", "string", "bool", "boolean"}
+    ):
+        return "classification"
+
+    numeric = pd.to_numeric(series, errors="coerce")
+    if numeric.isna().any():
+        return "classification"
+    integer_like = np.allclose(numeric.to_numpy(), np.round(numeric.to_numpy()))
+    if series.nunique() <= 20 and integer_like:
         return "classification"
     return "regression"
 
@@ -62,9 +79,10 @@ def _detect_task_type(y: np.ndarray, requested: str) -> str:
 
 def _prepare_dl_data(file_path: str, target_column: str, test_size: float, task_type: str):
     df = load_dataframe(file_path)
-    X, y, _, _ = prepare_training_frame(df, target_column)
+    X, y = prepare_raw_training_frame(df, target_column)
+    resolved_task_type = _detect_task_type(y, task_type)
     stratify = None
-    if task_type == "classification":
+    if resolved_task_type == "classification":
         counts = pd.Series(y).value_counts(dropna=True)
         unique_count = int(counts.shape[0])
         min_class_count = int(counts.min()) if unique_count else 0
@@ -78,10 +96,48 @@ def _prepare_dl_data(file_path: str, target_column: str, test_size: float, task_
                 "无法进行分层切分；请不要选择 ID/序号列，改选真实标签列。"
             )
         stratify = y.values
-    X_train, X_val, y_train, y_val = train_test_split(
-        X.values, y.values, test_size=test_size, random_state=42, stratify=stratify
+    raw_X_train, raw_X_val, raw_y_train, raw_y_val = train_test_split(
+        X, y, test_size=test_size, random_state=42, stratify=stratify
     )
-    return X_train, X_val, y_train, y_val
+    artifact = fit_dl_preprocessing_artifact(
+        raw_X_train,
+        raw_y_train,
+        task_kind=resolved_task_type,
+    )
+    return (
+        artifact.transform_features(raw_X_train),
+        artifact.transform_features(raw_X_val),
+        artifact.encode_target(raw_y_train),
+        artifact.encode_target(raw_y_val),
+        artifact,
+        resolved_task_type,
+    )
+
+
+def _prepare_dl_prediction_input(
+    metadata: dict,
+    training_df: pd.DataFrame | None,
+    rows: list[dict],
+    target_column: str,
+) -> tuple[np.ndarray, list[str]]:
+    artifact = metadata.get("preprocessing_artifact")
+    if artifact is not None:
+        values = artifact.transform_features(pd.DataFrame(rows))
+        return values.astype(np.float32), artifact.feature_names
+
+    if training_df is None:
+        raise ValueError("Legacy DL inference requires the original training dataset")
+    prediction_frame = prepare_prediction_frame(
+        training_df,
+        rows,
+        target_column,
+    )
+    values = (
+        prediction_frame.apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .to_numpy(dtype=np.float32)
+    )
+    return values, list(prediction_frame.columns)
 
 
 def _format_dl_log_number(value: float) -> str:
@@ -217,18 +273,10 @@ def _run_dl_sync(
 
     logger.info("[DL %s] Starting %s | epochs=%d", task_id, model_type, epochs)
 
-    X_train, X_val, y_train, y_val = _prepare_dl_data(
+    X_train, X_val, y_train, y_val, preprocessing_artifact, task_type = _prepare_dl_data(
         file_path, target_column, test_size, task_type)
 
-    # Infer feature column names (best-effort from DataFrame)
-    try:
-        df = load_dataframe(file_path)
-        feature_columns = [c for c in df.columns if c != target_column]
-    except Exception:
-        feature_columns = []
-
-    # Resolve task_type from data if "auto"
-    task_type = _detect_task_type(y_train, task_type)
+    feature_columns = preprocessing_artifact.feature_names
     emit_log(
         "INFO",
         f"任务类型确认: {task_type}",
@@ -308,6 +356,7 @@ def _run_dl_sync(
         input_dim=X_train.shape[1],
         task_type=task_type,
         feature_columns=feature_columns,
+        preprocessing_artifact=preprocessing_artifact,
     )
     model_path = to_portable_storage_path(model_file)
     logger.info("[DL %s] Saved → %s", task_id, model_path)
@@ -319,11 +368,14 @@ def _run_dl_sync(
     # Upload artifacts to object storage (MinIO)
     settings = get_settings()
     scaler_file = Path(str(model_file) + ".scaler.joblib")
+    preprocessing_file = Path(str(model_file) + ".preprocessor.joblib")
     log_file = settings.storage_logs / f"{task_id}.log"
     metrics_file = settings.storage_logs / f"{task_id}_metrics.json"
     upload_training_artifacts(
         task_id=task_id,
-        model_files=[f for f in [model_file, scaler_file] if f.exists()],
+        model_files=[
+            f for f in [model_file, scaler_file, preprocessing_file] if f.exists()
+        ],
         log_files=[f for f in [log_file, metrics_file] if f.exists()],
     )
 
@@ -825,16 +877,20 @@ async def predict_dl_deployment(
     loop = asyncio.get_event_loop()
 
     def _load_and_predict():
-        # Build properly-encoded feature matrix (mirrors training preprocessing)
-        training_df = load_dataframe(dataset.file_path)
-        X_df = prepare_prediction_frame(training_df, rows, task.target_column)
-        # Explicitly coerce all columns to numeric (handles object dtype after label encoding)
-        X = X_df.apply(pd.to_numeric, errors='coerce').fillna(0).values.astype(np.float32)
-        feature_cols = list(X_df.columns)
-
         trainer = get_dl_trainer(task.model_type)
         meta = trainer.load_for_inference(str(resolve_runtime_path(task.model_path)))
         task_type = meta["task_type"]
+        training_df = (
+            load_dataframe(dataset.file_path)
+            if meta.get("preprocessing_artifact") is None
+            else None
+        )
+        X, feature_cols = _prepare_dl_prediction_input(
+            meta,
+            training_df,
+            rows,
+            task.target_column,
+        )
 
         preds, probas = trainer.predict(X, task_type)
         return task_type, preds.tolist(), probas, feature_cols
@@ -884,16 +940,20 @@ async def predict_dl_task_direct(
     loop = asyncio.get_event_loop()
 
     def _predict():
-        # Build properly-encoded feature matrix (mirrors training preprocessing)
-        training_df = load_dataframe(dataset.file_path)
-        X_df = prepare_prediction_frame(training_df, rows, task.target_column)
-        # Explicitly coerce all columns to numeric (handles object dtype after label encoding)
-        X = X_df.apply(pd.to_numeric, errors='coerce').fillna(0).values.astype(np.float32)
-        feature_cols = list(X_df.columns)
-
         trainer = get_dl_trainer(task.model_type)
         meta = trainer.load_for_inference(str(resolve_runtime_path(task.model_path)))
         task_type = meta["task_type"]
+        training_df = (
+            load_dataframe(dataset.file_path)
+            if meta.get("preprocessing_artifact") is None
+            else None
+        )
+        X, feature_cols = _prepare_dl_prediction_input(
+            meta,
+            training_df,
+            rows,
+            task.target_column,
+        )
 
         preds, probas = trainer.predict(X, task_type)
         return task_type, preds.tolist(), probas, feature_cols

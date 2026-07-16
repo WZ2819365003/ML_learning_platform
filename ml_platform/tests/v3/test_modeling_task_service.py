@@ -129,6 +129,33 @@ async def test_update_rejects_unknown_status(db, modeling_task):
         await svc.update_modeling_task(db, modeling_task.id, status="mystery")
 
 
+async def test_update_blocks_objective_changes_after_finalization(db, modeling_task):
+    modeling_task.config = {
+        "_final_evaluation": {
+            "state": "FINALIZED",
+            "version": 1,
+            "winner_run_id": "winner-1",
+        }
+    }
+    await db.flush()
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.update_modeling_task(
+            db,
+            modeling_task.id,
+            objective_metric="f1",
+            objective_direction="min",
+        )
+
+    assert exc.value.status_code == 409
+    assert "优化目标" in exc.value.detail
+
+    renamed = await svc.update_modeling_task(
+        db, modeling_task.id, name="finalized-renamed"
+    )
+    assert renamed["name"] == "finalized-renamed"
+
+
 async def test_delete_blocks_running(db, modeling_task):
     modeling_task.status = "RUNNING"
     await db.flush()
@@ -155,11 +182,14 @@ async def test_leaderboard_ranks_across_experiments(db, modeling_task):
     await db.flush()
 
     db.add_all([
-        ExperimentRun(experiment_id=exp_a.id, status="SUCCESS", metrics={"accuracy": 0.81},
+        ExperimentRun(experiment_id=exp_a.id, status="SUCCESS",
+                      metrics={"accuracy": 0.99, "cv_avg_accuracy": 0.81},
                       source_experiment_type="baseline"),
-        ExperimentRun(experiment_id=exp_b.id, status="SUCCESS", metrics={"accuracy": 0.93},
+        ExperimentRun(experiment_id=exp_b.id, status="SUCCESS",
+                      metrics={"accuracy": 0.70, "selection_cv_mean_accuracy": 0.93},
                       source_experiment_type="grid_search", trial_no=2),
-        ExperimentRun(experiment_id=exp_b.id, status="SUCCESS", metrics={"accuracy": 0.88},
+        ExperimentRun(experiment_id=exp_b.id, status="SUCCESS",
+                      metrics={"accuracy": 0.98, "cv_avg_accuracy": 0.88},
                       source_experiment_type="grid_search", trial_no=1),
         ExperimentRun(experiment_id=exp_b.id, status="FAILED",
                       source_experiment_type="grid_search"),
@@ -169,6 +199,9 @@ async def test_leaderboard_ranks_across_experiments(db, modeling_task):
     board = await svc.task_leaderboard(db, modeling_task.id, top_k=10)
     assert len(board) == 3  # failed excluded
     assert board[0]["objective_value"] == 0.93
+    assert board[0]["selection_metric_key"] == "selection_cv_mean_accuracy"
+    assert board[0]["selection_value"] == 0.93
+    assert board[0]["final_test_value"] == 0.70
     assert board[0]["strategy_type"] == "grid_search"
     assert board[0]["trial_no"] == 2
     assert board[-1]["objective_value"] == 0.81

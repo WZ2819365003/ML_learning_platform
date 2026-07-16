@@ -4,7 +4,8 @@ import numpy as np
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-from app.core.trainer import BaseTrainer
+from app.core.model_artifact import fit_tabular_artifact
+from app.core.trainer import BaseTrainer, _take_rows
 
 MetricsCallback = Callable[[int, int, dict], None] | None
 
@@ -32,17 +33,25 @@ class RegressionMixin:
         eval_metrics = eval_metrics or ["rmse", "mae", "r2"]
 
         kf = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
-
-        X_full = np.vstack([X_train, X_val]) if X_val is not None and len(X_val) > 0 else X_train
-        y_full = np.concatenate([y_train, y_val]) if y_val is not None and len(y_val) > 0 else y_train
+        tabular_input = hasattr(X_train, "iloc")
+        base_model = self.model
 
         fold_results = []
-        for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_full)):
-            X_f_tr, X_f_val = X_full[train_idx], X_full[val_idx]
-            y_f_tr, y_f_val = y_full[train_idx], y_full[val_idx]
+        for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_train)):
+            X_f_tr, X_f_val = _take_rows(X_train, train_idx), _take_rows(X_train, val_idx)
+            y_f_tr, y_f_val = _take_rows(y_train, train_idx), _take_rows(y_train, val_idx)
 
-            self.model.fit(X_f_tr, y_f_tr)
-            y_pred = self.model.predict(X_f_val)
+            fold_model = (
+                fit_tabular_artifact(
+                    base_model,
+                    X_f_tr,
+                    y_f_tr,
+                    task_kind="regression",
+                )
+                if tabular_input
+                else self.model.fit(X_f_tr, y_f_tr)
+            )
+            y_pred = fold_model.predict(X_f_val)
 
             fold_metrics = self._compute_regression_metrics(y_f_val, y_pred, eval_metrics)
             fold_metrics["fold"] = fold_idx + 1
@@ -52,7 +61,15 @@ class RegressionMixin:
                 callback(fold_idx + 1, cv_folds, fold_metrics)
 
         # Final fit on training split only
-        self.model.fit(X_train, y_train)
+        if tabular_input:
+            self.model = fit_tabular_artifact(
+                base_model,
+                X_train,
+                y_train,
+                task_kind="regression",
+            )
+        else:
+            self.model.fit(X_train, y_train)
 
         # Final eval on validation set
         final_metrics = {}
@@ -66,9 +83,16 @@ class RegressionMixin:
         for key in metric_keys:
             values = [fr[key] for fr in fold_results if fr[key] is not None]
             if values:
-                avg_metrics[f"cv_avg_{key}"] = round(float(np.mean(values)), 4)
-                avg_metrics[f"cv_std_{key}"] = round(float(np.std(values)), 4)
+                mean_value = round(float(np.mean(values)), 4)
+                std_value = round(float(np.std(values)), 4)
+                avg_metrics[f"cv_avg_{key}"] = mean_value
+                avg_metrics[f"cv_std_{key}"] = std_value
+                avg_metrics[f"selection_cv_mean_{key}"] = mean_value
+                avg_metrics[f"selection_cv_std_{key}"] = std_value
 
+        final_metrics.update({
+            f"final_test_{key}": value for key, value in final_metrics.items()
+        })
         final_metrics.update(avg_metrics)
         final_metrics["cv_folds"] = fold_results
         return final_metrics

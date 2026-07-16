@@ -2,8 +2,10 @@
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
+from app.services import training_service
 from app.services.training_service import _prepare_data
 
 
@@ -40,3 +42,43 @@ def test_prepare_data_excludes_failure_type_when_target_is_target(tmp_path: Path
     assert X_val.shape[1] == 1
     assert len(y_train) == 8
     assert len(y_val) == 2
+
+
+def test_prepare_data_splits_raw_rows_before_fitted_transforms(tmp_path: Path):
+    dataset_path = tmp_path / "raw_categories.csv"
+    df = pd.DataFrame(
+        {
+            "temperature": [1.0, np.nan, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            "kind": ["a", "a", "b", "b", "a", "a", "b", "b"],
+            "label": [0, 1, 0, 1, 0, 1, 0, 1],
+        }
+    )
+    df.to_csv(dataset_path, index=False)
+
+    X_train, X_val, y_train, y_val = _prepare_data(
+        str(dataset_path),
+        target_column="label",
+        test_size=0.25,
+    )
+
+    assert isinstance(X_train, pd.DataFrame)
+    assert isinstance(X_val, pd.DataFrame)
+    assert isinstance(y_train, pd.Series)
+    assert isinstance(y_val, pd.Series)
+    assert X_train["kind"].dtype == object
+    assert set(pd.concat([X_train["kind"], X_val["kind"]])) == {"a", "b"}
+    assert int(pd.concat([X_train["temperature"], X_val["temperature"]]).isna().sum()) == 1
+
+
+def test_selection_mode_hides_outer_holdout_from_trainer():
+    X_val = pd.DataFrame({"value": [9.0]})
+    y_val = pd.Series([1])
+
+    assert training_service._trainer_validation_inputs(
+        "selection", X_val, y_val
+    ) == (None, None)
+    standard_X, standard_y = training_service._trainer_validation_inputs(
+        "standard", X_val, y_val
+    )
+    assert standard_X is X_val
+    assert standard_y is y_val

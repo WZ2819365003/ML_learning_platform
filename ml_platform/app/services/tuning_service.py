@@ -48,6 +48,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dl_registry import build_default_dl_config, get_dl_model_spec
+from app.core.evaluation_metrics import resolve_objective_metrics
 from app.core.model_registry import resolve_model_family
 from app.models.database import (
     DLTrainingTask,
@@ -65,12 +66,13 @@ from app.scheduler.task_runner import (
     update_platform_task_status,
 )
 from app.services.modeling_task_service import (
-    _get_task_or_404,
     load_tuning_spaces,
     refresh_task_summary,
     serialize_experiment,
+    task_final_evaluation_state,
 )
 from app.services.training_service import create_training_task_record
+from app.services.task_lifecycle_lock import task_lifecycle_guard
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +213,65 @@ def _validate_search_space(
 # Entry point
 # ---------------------------------------------------------------------------
 
+async def _lock_task_for_experiment_dispatch(
+    db: AsyncSession,
+    modeling_task_id: str,
+) -> ModelingTask:
+    task = (
+        await db.execute(
+            select(ModelingTask)
+            .where(ModelingTask.id == modeling_task_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"ModelingTask {modeling_task_id!r} not found",
+        )
+    final_state = task_final_evaluation_state(task)
+    if final_state.get("state") != "OPEN":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "任务已进入最终确认流程，不能再启动新批次；"
+                "需要继续调参时请创建新的建模任务。"
+            ),
+        )
+    return task
+
+
 async def dispatch_experiment_batch(
+    db: AsyncSession,
+    *,
+    modeling_task_id: str,
+    name: str,
+    strategy_type: str,
+    selected_models: list[str],
+    search_space: dict[str, Any],
+    budget_config: dict[str, Any],
+    eval_metrics: list[str] | None = None,
+    description: str | None = None,
+    model_family: str | None = None,
+    dl_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    async with task_lifecycle_guard(modeling_task_id):
+        return await _dispatch_experiment_batch_locked(
+            db,
+            modeling_task_id=modeling_task_id,
+            name=name,
+            strategy_type=strategy_type,
+            selected_models=selected_models,
+            search_space=search_space,
+            budget_config=budget_config,
+            eval_metrics=eval_metrics,
+            description=description,
+            model_family=model_family,
+            dl_config=dl_config,
+        )
+
+
+async def _dispatch_experiment_batch_locked(
     db: AsyncSession,
     *,
     modeling_task_id: str,
@@ -240,7 +300,7 @@ async def dispatch_experiment_batch(
     by ``dl_service._run_dl_training_by_id``.  DL models are baseline-only in
     Phase 1; grid/bayesian requests that include DL tokens fail fast with 422.
     """
-    task = await _get_task_or_404(db, modeling_task_id)
+    task = await _lock_task_for_experiment_dispatch(db, modeling_task_id)
     if not task.dataset_id or not task.target_column:
         raise HTTPException(
             status_code=400,
@@ -683,6 +743,9 @@ async def _persist_trials(
             kind = "train"
             payload_ref = f"train:{domain_task.id}"
 
+        search_meta = dict(trial["search_meta"])
+        if family == "ml":
+            search_meta["evaluation_mode"] = "selection"
         run = ExperimentRun(
             experiment_id=exp.id,
             params={
@@ -696,7 +759,7 @@ async def _persist_trials(
             },
             status="PENDING",
             trial_no=trial["trial_no"],
-            search_meta=trial["search_meta"],
+            search_meta=search_meta,
             source_experiment_type=exp.strategy_type,
         )
         db.add(run)
@@ -953,8 +1016,11 @@ def _normalise_run_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "val_r2": "r2",
     }
     for source, target in aliases.items():
-        if target not in normalised and isinstance(normalised.get(source), (int, float)):
-            normalised[target] = float(normalised[source])
+        source_value = normalised.get(source)
+        if isinstance(source_value, (int, float)):
+            if target not in normalised:
+                normalised[target] = float(source_value)
+            normalised.setdefault(f"final_test_{target}", float(source_value))
     return normalised
 
 
@@ -1034,11 +1100,9 @@ async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> 
 
         def _score(run: ExperimentRun) -> float:
             metrics = run.metrics or {}
-            if objective_metric and objective_metric in metrics:
-                try:
-                    return float(metrics[objective_metric])
-                except (TypeError, ValueError):
-                    pass
+            resolved = resolve_objective_metrics(metrics, objective_metric)
+            if resolved.selection_value is not None:
+                return resolved.selection_value
             # Fallback: lowest trial_no first so order is deterministic.
             return float(run.trial_no or 0)
 
@@ -1111,7 +1175,7 @@ def _launch_bayesian(
     cv_folds: int = 5,
 ) -> None:
     asyncio.create_task(
-        _run_bayesian_search(
+        _run_bayesian_search_guarded(
             experiment_id=experiment_id,
             modeling_task_id=modeling_task_id,
             selected_models=selected_models,
@@ -1123,6 +1187,28 @@ def _launch_bayesian(
             cv_folds=cv_folds,
         )
     )
+
+
+async def _run_bayesian_search_guarded(**kwargs: Any) -> None:
+    """Run Bayesian search and persist fatal background-worker failures."""
+    experiment_id = kwargs["experiment_id"]
+    modeling_task_id = kwargs["modeling_task_id"]
+    try:
+        await _run_bayesian_search(**kwargs)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Bayesian worker failed for experiment %s", experiment_id)
+        async with async_session_factory() as db:
+            exp = await db.get(PlatformExperiment, experiment_id)
+            if exp:
+                exp.status = "FAILED"
+                exp.finished_at = datetime.now(timezone.utc)
+                exp.config = {
+                    **(exp.config or {}),
+                    "worker_error": str(exc),
+                }
+                await db.flush()
+            await refresh_task_summary(db, modeling_task_id)
+            await db.commit()
 
 
 async def _run_bayesian_search(
@@ -1153,7 +1239,9 @@ async def _run_bayesian_search(
     max_trials = budget_config.get("max_trials")
 
     async with async_session_factory() as db:
-        task = await _get_task_or_404(db, modeling_task_id)
+        task = await db.get(ModelingTask, modeling_task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Modeling task not found")
         direction = "maximize" if (task.objective_direction or "max") == "max" else "minimize"
         objective_metric = task.objective_metric or "accuracy"
         dataset_id = task.dataset_id
@@ -1216,7 +1304,10 @@ async def _run_bayesian_search(
                     experiment_id,
                     kind="train",
                 )
-                value = (outcome.get("metrics") or {}).get(objective_metric)
+                resolved = resolve_objective_metrics(
+                    outcome.get("metrics") or {}, objective_metric
+                )
+                value = resolved.selection_value
                 if value is None:
                     study.tell(trial, state=optuna.trial.TrialState.FAIL)
                 else:
@@ -1231,6 +1322,7 @@ async def _run_bayesian_search(
                         meta = dict(run.search_meta or {})
                         meta["optuna_state"] = trial.state.name if hasattr(trial, "state") else "COMPLETE"
                         meta["objective_value"] = value
+                        meta["selection_metric_key"] = resolved.selection_metric_key
                         run.search_meta = meta
                         await db.commit()
 
@@ -1312,6 +1404,7 @@ async def _persist_single_bayesian_trial(
             search_meta={
                 "strategy": "bayesian_search",
                 "optuna_trial_id": optuna_trial_id,
+                "evaluation_mode": "selection",
             },
             source_experiment_type="bayesian_search",
         )
