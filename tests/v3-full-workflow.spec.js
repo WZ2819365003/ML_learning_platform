@@ -101,11 +101,10 @@ function pickClassificationTarget(dataset) {
 }
 
 async function findAnyPlatformTask(request) {
-  // There's no public POST /platform/tasks/ endpoint, so we can't seed a bare
-  // orphan directly.  Instead we list what's there — earlier tests in the
-  // suite (Phase 4 / 5) dispatch baseline batches which materialize several
-  // PlatformTask rows (kind=train) that FlatView happily renders.
-  const res = await request.get(`${BASE_API}/platform/tasks/?page=1&page_size=20`);
+  // There's no public POST /platform/tasks/ endpoint, so use a real orphan if
+  // another workflow has created one. Linked training tasks must not leak into
+  // this panel.
+  const res = await request.get(`${BASE_API}/platform/tasks/?page=1&page_size=20&orphan_only=true`);
   if (!res.ok()) return null;
   const body = await res.json();
   return (body.items || [])[0] || null;
@@ -179,50 +178,17 @@ test.describe('Phase 2 — ModelingTask binds TrainingPlan + snapshot view', () 
     expect(datasetId, 'need at least one seeded dataset').toBeTruthy();
   });
 
-  test('create-task modal exposes TrainingPlanPicker and lists our plan', async ({ page }) => {
-    await page.goto(`${BASE_UI}/v3/tasks`);
+  test('workflow exposes plan management from the tuning strategy tab', async ({ page, request }) => {
+    const task = await createModelingTask(request, {
+      name: `e2e-plan-entry-${Date.now()}`,
+      dataset_id: datasetId,
+    });
 
-    // Prime a promise to catch the picker's list call triggered by modal open.
-    const plansResponsePromise = page.waitForResponse(
-      (r) => r.url().includes('/api/platform/training-plans') && r.status() === 200,
-      { timeout: 15000 },
-    );
-
-    await page.getByRole('button', { name: /新建建模任务/ }).click();
-
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible();
-
-    // The picker label "训练方案（可选）" is inside the form — locate the
-    // FormItem specifically, which both contains the label and the Select.
-    const formItem = dialog.locator('.ant-form-item').filter({ hasText: '训练方案' }).first();
-    await expect(formItem).toBeVisible();
-    // Visible placeholder text indicates the TrainingPlanPicker is mounted.
-    await expect(formItem.getByText(/选择训练方案|请选择/)).toBeVisible();
-
-    // Make sure the plan list has actually been fetched before opening the dropdown.
-    const plansResp = await plansResponsePromise;
-    const plansBody = await plansResp.json();
-    const items = plansBody?.items || [];
-    // Our seeded plan must be in the server response — otherwise the picker
-    // couldn't possibly render it as an option.
-    expect(items.map((p) => p.name)).toContain(seededPlan.name);
-
-    // Open the Select — AntD renders the clickable surface as .ant-select-selector.
-    const selector = formItem.locator('.ant-select-selector').first();
-    await selector.click();
-
-    // The dropdown renders in a portal in document.body; wait for it to be open.
-    const dropdown = page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').first();
-    await expect(dropdown).toBeVisible({ timeout: 5000 });
-
-    // Confirm our seeded plan appears as a selectable option.
-    const option = dropdown.getByText(seededPlan.name).first();
-    await expect(option).toBeVisible({ timeout: 5000 });
-
-    // Close modal — deterministic binding is verified in the next test via API.
-    await page.keyboard.press('Escape');
-    await page.keyboard.press('Escape');
+    await page.goto(`${BASE_UI}/v3/tasks/${task.id}/workflow?step=1`);
+    await expect(page.getByRole('tab', { name: '调参策略' })).toBeVisible({ timeout: 15000 });
+    await page.getByRole('tab', { name: '调参策略' }).click();
+    await expect(page.getByRole('button', { name: /管理训练方案/ })).toBeVisible();
+    await expect(page.getByText(/基线|网格|贝叶斯/).first()).toBeVisible();
   });
 
   test('API-bound task shows training_plan_snapshot panel on detail page', async ({ page, request }) => {
@@ -305,13 +271,33 @@ test.describe('Phase 4 — ProgressTree appears on the detail page', () => {
 // ── Phase 3: OrphanTaskDetailDrawer ──────────────────────────────────────────
 
 test.describe('Phase 3 — Orphan task detail drawer', () => {
-  test('TaskCenter 孤立任务 tab opens a drawer with 概览 / 源数据 / 日志 tabs', async ({ page, request }) => {
-    // Earlier phases have already dispatched baseline experiments that create
-    // one PlatformTask per run — pick the most-recent one as a subject.
-    const seed = await findAnyPlatformTask(request);
-    test.skip(!seed, 'no PlatformTasks in the DB yet — run this after Phase 4/5 dispatch');
+  test('运行诊断 孤立任务 tab opens a drawer with 概览 / 源数据 / 日志 tabs', async ({ page, request }) => {
+    let seed = await findAnyPlatformTask(request);
+    if (!seed) {
+      const datasets = await listDatasets(request);
+      const dataset = datasets[0];
+      expect(dataset, 'need a dataset to create an orphan PlatformTask').toBeTruthy();
+      const targetColumn = pickClassificationTarget(dataset);
+      expect(targetColumn, 'dataset needs a classification target').toBeTruthy();
 
-    await page.goto(`${BASE_UI}/tasks`);
+      const startResponse = await request.post(`${BASE_API}/training/start`, { data: {
+        dataset_id: dataset.id,
+        target_column: targetColumn,
+        model_type: 'logistic_regression',
+        hyperparameters: { max_iter: 200 },
+        test_size: 0.2,
+        eval_metrics: ['accuracy'],
+        cross_validation: { enabled: false, folds: 3 },
+      } });
+      expect(startResponse.ok(), `create orphan task: ${await startResponse.text()}`).toBeTruthy();
+      await expect.poll(async () => (await findAnyPlatformTask(request))?.id ?? null, {
+        timeout: 15_000,
+        intervals: [250, 500, 1000],
+      }).not.toBeNull();
+      seed = await findAnyPlatformTask(request);
+    }
+
+    await page.goto(`${BASE_UI}/v3/runs`);
 
     // Switch to the "孤立任务" tab.  It may be labelled "孤立任务视图" or
     // simply "孤立任务" depending on copy tweaks; match flexibly.
@@ -342,8 +328,8 @@ test.describe('Phase 3 — Orphan task detail drawer', () => {
 
 // ── Phase 5 + hierarchical view integration ─────────────────────────────────
 
-test.describe('Phase 5 — Scheduler path surfaces in TaskCenter tree view', () => {
-  test('new ModelingTask with baseline experiment appears in the tree', async ({ page, request }) => {
+test.describe('Phase 5 — Scheduler path surfaces in run diagnostics', () => {
+  test('new ModelingTask with baseline experiment appears in the Run list', async ({ page, request }) => {
     const datasets = await listDatasets(request);
     const dataset = datasets[0];
     test.skip(!dataset, 'need a dataset for baseline');
@@ -365,21 +351,12 @@ test.describe('Phase 5 — Scheduler path surfaces in TaskCenter tree view', () 
     );
     expect(batchRes.ok()).toBeTruthy();
 
-    await page.goto(`${BASE_UI}/tasks`);
-    await expect(page.getByRole('tab', { name: /建模任务视图/ })).toBeVisible({ timeout: 10000 });
-    // 建模任务视图 is the default tab.
+    await page.goto(`${BASE_UI}/v3/runs`);
+    await expect(page.getByRole('tab', { name: /全部 Run/ })).toBeVisible({ timeout: 10000 });
 
-    // Find our row by name in the tree table
+    // Find the run by its modeling-task name in the flat diagnostics table.
     const row = page.getByRole('row').filter({ hasText: task.name });
-    await expect(row).toBeVisible({ timeout: 15000 });
-
-    // Expand to reveal experiments.  AntD Table's expand icon is a <button>
-    // with aria-label "Expand row" / "展开行".
-    const expandBtn = row.locator('button[aria-label*="Expand"], button[aria-label*="展开"]').first();
-    if (await expandBtn.isVisible().catch(() => false)) {
-      await expandBtn.click();
-      // The experiment name should now appear in the expanded content.
-      await expect(page.getByText('sched-baseline').first()).toBeVisible({ timeout: 5000 });
-    }
+    await expect(row).toBeVisible({ timeout: 20000 });
+    await expect(row.getByText('sched-baseline')).toBeVisible();
   });
 });

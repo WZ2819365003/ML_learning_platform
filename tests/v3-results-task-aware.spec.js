@@ -11,19 +11,25 @@
 // (R²/RMSE/MAE/MAPE strip + residual histogram + Q-Q + residual scatter).
 
 const { test, expect } = require('@playwright/test');
+const { ensureSuccessfulTrainingTasks } = require('./helpers/training-tasks');
 
-const WEB_BASE = 'http://127.0.0.1:3000';
+const WEB_BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
 
-// Fixtures: task IDs that the storage/models registry resolves to. If your
-// local storage doesn't have these specific runs, either swap them out or
-// retrain the v3.1.1 demo bundle. They're kept inline so a reader can wire
-// the assertions back to the underlying data without chasing fixtures.
-const CLASSIFICATION_TASK_ID = '12d406cb-769c-42df-b047-09ff79475f90'; // xgboost
-const REGRESSION_TASK_ID     = 'e62e3196-aba7-4f39-8e6c-b49602bb1eb4'; // random_forest_regressor
+let classificationTaskId;
+let regressionTaskId;
 
 test.describe('Commit 12 — Results.jsx task-type-aware tabs', () => {
+  test.setTimeout(150_000);
+
+  test.beforeAll(async ({ request }) => {
+    const tasks = await ensureSuccessfulTrainingTasks(request);
+    classificationTaskId = tasks.classification?.id;
+    regressionTaskId = tasks.regression?.id;
+  });
+
   test('Classification task shows 性能 / 阈值与分布 tabs (no 预测对比 / 误差诊断)', async ({ page }) => {
-    await page.goto(`${WEB_BASE}/training/results?taskId=${CLASSIFICATION_TASK_ID}`);
+    test.skip(!classificationTaskId, 'no successful classification task with CV metrics');
+    await page.goto(`${WEB_BASE}/training/results?taskId=${classificationTaskId}`);
     // Wait for tab strip to render
     await expect(page.getByRole('tab', { name: /性能/ })).toBeVisible({ timeout: 15000 });
     await expect(page.getByRole('tab', { name: /训练过程/ })).toBeVisible();
@@ -35,7 +41,8 @@ test.describe('Commit 12 — Results.jsx task-type-aware tabs', () => {
   });
 
   test('Regression task shows 预测对比 / 误差诊断 tabs (no 性能 / 阈值与分布)', async ({ page }) => {
-    await page.goto(`${WEB_BASE}/training/results?taskId=${REGRESSION_TASK_ID}`);
+    test.skip(!regressionTaskId, 'no successful regression task with CV metrics');
+    await page.goto(`${WEB_BASE}/training/results?taskId=${regressionTaskId}`);
     await expect(page.getByRole('tab', { name: /预测对比/ })).toBeVisible({ timeout: 15000 });
     await expect(page.getByRole('tab', { name: /训练过程/ })).toBeVisible();
     await expect(page.getByRole('tab', { name: /解释性/ })).toBeVisible();
@@ -46,7 +53,8 @@ test.describe('Commit 12 — Results.jsx task-type-aware tabs', () => {
   });
 
   test('Regression 预测对比 tab renders chart with y=x diagonal + ±1σ band legend', async ({ page }) => {
-    await page.goto(`${WEB_BASE}/training/results?taskId=${REGRESSION_TASK_ID}`);
+    test.skip(!regressionTaskId, 'no successful regression task with CV metrics');
+    await page.goto(`${WEB_BASE}/training/results?taskId=${regressionTaskId}`);
     const comparisonTab = page.getByRole('tab', { name: /预测对比/ });
     await expect(comparisonTab).toBeVisible({ timeout: 15000 });
     await comparisonTab.click();
@@ -55,7 +63,8 @@ test.describe('Commit 12 — Results.jsx task-type-aware tabs', () => {
   });
 
   test('Regression 误差诊断 tab carries R²/RMSE/MAE/MAPE metric strip', async ({ page }) => {
-    await page.goto(`${WEB_BASE}/training/results?taskId=${REGRESSION_TASK_ID}`);
+    test.skip(!regressionTaskId, 'no successful regression task with CV metrics');
+    await page.goto(`${WEB_BASE}/training/results?taskId=${regressionTaskId}`);
     const diagTab = page.getByRole('tab', { name: /误差诊断/ });
     await expect(diagTab).toBeVisible({ timeout: 15000 });
     await diagTab.click();
@@ -70,11 +79,12 @@ test.describe('Commit 12 — Results.jsx task-type-aware tabs', () => {
   });
 
   test('Switching task type resets active tab (no stale «performance» key on regression)', async ({ page }) => {
+    test.skip(!classificationTaskId || !regressionTaskId, 'need both classification and regression tasks');
     // Simulate user navigating from a classification result to a regression one;
     // the second visit must not crash by trying to render the missing tab.
-    await page.goto(`${WEB_BASE}/training/results?taskId=${CLASSIFICATION_TASK_ID}`);
+    await page.goto(`${WEB_BASE}/training/results?taskId=${classificationTaskId}`);
     await expect(page.getByRole('tab', { name: /性能/ })).toBeVisible({ timeout: 15000 });
-    await page.goto(`${WEB_BASE}/training/results?taskId=${REGRESSION_TASK_ID}`);
+    await page.goto(`${WEB_BASE}/training/results?taskId=${regressionTaskId}`);
     await expect(page.getByRole('tab', { name: /预测对比/ })).toBeVisible({ timeout: 15000 });
     // The default-active tab on regression is 预测对比 (per the page's
     // defaultActiveKey + key={taskKind} re-keying).

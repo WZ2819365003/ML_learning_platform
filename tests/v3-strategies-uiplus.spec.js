@@ -15,7 +15,7 @@
 
 const { test, expect } = require('@playwright/test');
 
-const BASE_UI  = process.env.BASE_UI  || 'http://127.0.0.1';
+const BASE_UI  = process.env.BASE_UI  || 'http://127.0.0.1:3000';
 const BASE_API = process.env.BASE_API || 'http://127.0.0.1:8000/api';
 
 test.describe.configure({ mode: 'serial' });
@@ -152,7 +152,7 @@ test('UI — ModelingTaskDetail shows runs across all 3 strategies', async ({ pa
   }
 });
 
-test('UI — RunInspector renders 4 tabs with content', async ({ page, request }) => {
+test('UI — RunInspector renders all tabs and a non-blank SHAP chart', async ({ page, request }) => {
   const r = await request.get(`${BASE_API}/v3/tasks/${modelingTask.id}/runs`);
   const runs = (await r.json()).items || [];
   const success = runs.find((x) => x.status === 'SUCCESS');
@@ -161,9 +161,9 @@ test('UI — RunInspector renders 4 tabs with content', async ({ page, request }
   await page.goto(`${BASE_UI}/v3/tasks/${modelingTask.id}`);
   await expect(page.getByRole('heading', { name: modelingTask.name })).toBeVisible({ timeout: 15000 });
 
-  // The "Run 对比" tab has a runs table; "详情" button on each row opens the
+  // The consolidated "模型对比" tab has the runs table and inspector actions.
   // inspector drawer.
-  await page.getByRole('tab', { name: /Run 对比/ }).click();
+  await page.getByRole('tab', { name: /模型对比/ }).click();
 
   const detailBtn = page.getByRole('button', { name: '详情' }).first();
   await expect(detailBtn).toBeVisible({ timeout: 10000 });
@@ -182,24 +182,32 @@ test('UI — RunInspector renders 4 tabs with content', async ({ page, request }
   // Click each tab and ensure the body remains rendered (no error banner).
   for (const t of ['训练可视化', '上下文', '日志', 'SHAP']) {
     await drawer.getByRole('tab', { name: new RegExp(t) }).click();
-    // Inspector body should not show "加载失败" / generic error.
-    const errAlert = drawer.locator('.ant-alert-error');
-    if (await errAlert.count() > 0) {
-      const txt = await errAlert.first().textContent();
-      console.log(`tab "${t}" alert: ${txt}`);
+    await expect(drawer.locator('.ant-alert-error')).toHaveCount(0);
+
+    if (t === 'SHAP') {
+      const canvas = drawer.locator('.ant-tabs-tabpane-active canvas').first();
+      await expect(canvas).toBeVisible({ timeout: 15000 });
+      await expect.poll(async () => canvas.evaluate((node) => {
+        const ctx = node.getContext('2d');
+        if (!ctx || !node.width || !node.height) return 0;
+        const pixels = ctx.getImageData(0, 0, node.width, node.height).data;
+        const stride = Math.max(1, Math.floor((node.width * node.height) / 10000));
+        let painted = 0;
+        for (let p = 0; p < node.width * node.height; p += stride) {
+          const i = p * 4;
+          const [r, g, b, a] = [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]];
+          if (a > 0 && !(r > 248 && g > 248 && b > 248)) painted += 1;
+        }
+        return painted;
+      }), { timeout: 15000 }).toBeGreaterThan(20);
     }
   }
 });
 
 test('UI — strategy compare tab loads (when present)', async ({ page }) => {
   await page.goto(`${BASE_UI}/v3/tasks/${modelingTask.id}`);
-  const tab = page.getByRole('tab', { name: /策略对比/ });
-  if (!(await tab.isVisible().catch(() => false))) {
-    test.skip(true, 'strategy compare tab not present in this build');
-  }
-  await tab.click();
-  // Should render at least the page chrome — either the data or an empty state.
-  await expect(page.getByText(/策略|Baseline|Grid|Bayesian|对比/i).first()).toBeVisible({ timeout: 10000 });
+  await page.getByRole('tab', { name: /模型对比/ }).click();
+  await expect(page.getByText(/按策略对比/)).toBeVisible({ timeout: 10000 });
 });
 
 test('Diagnostic — at least one SHAP method is non-fallback', async ({ request }) => {

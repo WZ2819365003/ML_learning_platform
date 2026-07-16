@@ -1,5 +1,9 @@
 // @ts-check
 const { defineConfig, devices } = require('@playwright/test');
+const path = require('path');
+
+const e2eDatabaseUrl = process.env.E2E_DATABASE_URL
+  || `sqlite+aiosqlite:///${path.resolve(__dirname, 'ml_platform/storage/e2e-playwright.db')}`;
 
 /**
  * @see https://playwright.dev/docs/test-configuration
@@ -69,6 +73,11 @@ module.exports = defineConfig({
       command: `python -c "import uvicorn; uvicorn.run('app.main:app', host='127.0.0.1', port=8000, loop='asyncio', log_level='warning')"`,
       url: 'http://127.0.0.1:8000/health',
       cwd: './ml_platform',
+      env: {
+        ...process.env,
+        DATABASE_URL: e2eDatabaseUrl,
+        S3_ENABLED: 'false',
+      },
       timeout: 120000,
       reuseExistingServer: !process.env.CI,
     },
@@ -76,6 +85,10 @@ module.exports = defineConfig({
       command: 'npm run dev -- --host 127.0.0.1 --port 3000',
       url: 'http://127.0.0.1:3000',
       cwd: './ml_platform_web',
+      env: {
+        ...process.env,
+        VITE_API_TARGET: 'http://127.0.0.1:8000',
+      },
       timeout: 120000,
       reuseExistingServer: !process.env.CI,
     },

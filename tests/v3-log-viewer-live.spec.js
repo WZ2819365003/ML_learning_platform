@@ -2,17 +2,33 @@
 // We dispatch a slow-ish run (bayesian with more trials) and open the inspector
 // mid-flight to confirm the "LIVE" badge + auto-updating log list.
 const { test, expect } = require('@playwright/test');
-const BASE = 'http://127.0.0.1:3000';
-const API = 'http://127.0.0.1:8000';
-const TASK_ID = '9f5ce8a1-80b1-4b9d-a1c6-fe4fce39725e';
+const BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
+const API = (process.env.BASE_API || 'http://127.0.0.1:8000').replace(/\/api\/?$/, '');
 
-test('run inspector — live WS streaming', async ({ page }) => {
+test('run inspector — live batch is visible while logs stream', async ({ page }) => {
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  // Dispatch a new bayesian batch so we have a RUNNING run to watch
+  const datasetsResponse = await page.request.get(`${API}/api/data/list?page=1&page_size=100`);
+  expect(datasetsResponse.ok()).toBeTruthy();
+  const datasets = (await datasetsResponse.json()).items || [];
+  const dataset = datasets.find((item) => item.name?.includes('predictive'));
+  test.skip(!dataset, 'predictive maintenance dataset is unavailable');
+
+  const taskResponse = await page.request.post(`${API}/api/v3/tasks/`, { data: {
+    name: `live-logs-${Date.now()}`,
+    task_type: 'classification',
+    dataset_id: dataset.id,
+    target_column: 'Target',
+    objective_metric: 'accuracy',
+    objective_direction: 'max',
+  } });
+  expect(taskResponse.ok()).toBeTruthy();
+  const task = await taskResponse.json();
+
+  // Dispatch a new bayesian batch so we have fresh runs to inspect.
   const resp = await page.request.post(
-    `${API}/api/v3/tasks/${TASK_ID}/experiments`,
+    `${API}/api/v3/tasks/${task.id}/experiments`,
     {
       data: {
         name: `live-${Date.now()}`,
@@ -30,12 +46,13 @@ test('run inspector — live WS streaming', async ({ page }) => {
   );
   expect(resp.ok()).toBeTruthy();
 
-  await page.goto(`${BASE}/v3/tasks/${TASK_ID}`);
-  await page.getByRole('tab', { name: /Run 对比/ }).click();
+  await page.goto(`${BASE}/v3/tasks/${task.id}`);
+  await page.getByRole('tab', { name: /模型对比/ }).click();
 
   // The newly created runs start at the bottom of leaderboard but the
   // Live WS should show at least one run is RUNNING. Instead of racing the
   // UI, just screenshot the 5-second-old state.
+  await expect(page.getByText(/模型对比/).first()).toBeVisible();
   await page.waitForTimeout(2500);
   await page.screenshot({ path: 'screenshots/v3-audit/10-live-batch-runs.png', fullPage: true });
 });

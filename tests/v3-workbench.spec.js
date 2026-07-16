@@ -6,16 +6,69 @@
 //
 // Scope:
 //   1. Workbench list page renders and pagination is visible
-//   2. Create-task modal validates and produces a new entry that navigates to detail
-//   3. Detail page exposes 4 tabs (任务概览 / 实验编排 / Run 对比 / 模型解释)
+//   2. Create-task workflow renders its required fields
+//   3. Detail page exposes the three consolidated tabs
 //   4. "启动新批次" modal switches strategy and reveals per-model tabs
 //
 // We deliberately stop short of actually running training — that path is
 // covered by backend pytest (tests/v3/test_tuning_service.py).
 
 const { test, expect } = require('@playwright/test');
+const fs = require('fs');
+const path = require('path');
 
-const BASE = 'http://127.0.0.1:3000';
+const BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
+const API = process.env.BASE_API || 'http://127.0.0.1:8000';
+const DATASET_PATH = path.resolve(__dirname, '..', 'examples', 'data', 'predictive_maintenance.csv');
+
+async function ensureTaskWithSuccessfulRun(request) {
+  const tasksResponse = await request.get(`${API}/api/v3/tasks/?page=1&page_size=100`);
+  expect(tasksResponse.ok()).toBeTruthy();
+  const existing = ((await tasksResponse.json()).items || [])
+    .find((task) => (task.successful_run_count || 0) > 0);
+  if (existing) return existing;
+
+  const datasetsResponse = await request.get(`${API}/api/data/list?page=1&page_size=100`);
+  expect(datasetsResponse.ok()).toBeTruthy();
+  let dataset = ((await datasetsResponse.json()).items || [])
+    .find((item) => item.name?.includes('predictive_maintenance'));
+  if (!dataset) {
+    const uploadResponse = await request.post(`${API}/api/data/upload`, {
+      multipart: { file: fs.createReadStream(DATASET_PATH) },
+    });
+    const uploadPayload = await uploadResponse.json();
+    expect(uploadResponse.ok(), JSON.stringify(uploadPayload)).toBeTruthy();
+    dataset = uploadPayload;
+  }
+
+  const taskResponse = await request.post(`${API}/api/v3/tasks/`, { data: {
+    name: `workbench-inspector-${Date.now()}`,
+    task_type: 'classification',
+    dataset_id: dataset.id,
+    target_column: 'Target',
+    objective_metric: 'accuracy',
+    objective_direction: 'max',
+  } });
+  const task = await taskResponse.json();
+  expect(taskResponse.ok(), JSON.stringify(task)).toBeTruthy();
+
+  const experimentResponse = await request.post(`${API}/api/v3/tasks/${task.id}/experiments`, { data: {
+    name: 'workbench-inspector-baseline',
+    strategy_type: 'baseline',
+    selected_models: ['random_forest'],
+  } });
+  expect(experimentResponse.ok(), await experimentResponse.text()).toBeTruthy();
+
+  await expect.poll(async () => {
+    const runsResponse = await request.get(`${API}/api/v3/tasks/${task.id}/runs`);
+    if (!runsResponse.ok()) return 'REQUEST_FAILED';
+    const runs = (await runsResponse.json()).items || [];
+    if (runs.some((run) => run.status === 'SUCCESS')) return 'SUCCESS';
+    if (runs.length && runs.every((run) => ['FAILED', 'CANCELED'].includes(run.status))) return 'FAILED';
+    return 'RUNNING';
+  }, { timeout: 120_000, intervals: [1000, 2000, 5000] }).toBe('SUCCESS');
+  return task;
+}
 
 test.describe('V3 Modeling Workbench', () => {
   test('workbench list page is reachable and has pagination', async ({ page }) => {
@@ -39,46 +92,59 @@ test.describe('V3 Modeling Workbench', () => {
     await expect(page.getByRole('columnheader', { name: '优化目标' })).toBeVisible();
   });
 
-  test('create-task modal validates and shows form', async ({ page }) => {
+  test('create-task workflow validates and shows form', async ({ page }) => {
     await page.goto(`${BASE}/v3/tasks`);
 
     await page.getByRole('button', { name: /新建建模任务/ }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible();
-    // Dialog title scoped within the dialog, avoiding collision with the header button
-    await expect(dialog.getByText('新建建模任务')).toBeVisible();
-
-    // Required fields present (scoped within the dialog)
-    await expect(dialog.getByLabel('任务名称')).toBeVisible();
-    await expect(dialog.getByLabel('任务类型')).toBeVisible();
-    await expect(dialog.getByLabel('优化目标指标')).toBeVisible();
-
-    // Close via AntD modal X button (stable selector)
-    await page.locator('.ant-modal-close').first().click();
-    await expect(dialog).toBeHidden({ timeout: 5000 });
+    await expect(page).toHaveURL(/\/v3\/tasks\/new\/workflow/);
+    await expect(page.getByRole('heading', { name: '新建建模任务' })).toBeVisible();
+    await expect(page.getByLabel('任务名称')).toBeVisible();
+    await expect(page.getByLabel('任务类型')).toBeVisible();
+    await expect(page.getByLabel('优化目标')).toBeVisible();
+    await expect(page.getByRole('button', { name: /创建并继续/ })).toBeVisible();
   });
 
-  test('sidebar surfaces 建模工作台 under V3 platform', async ({ page }) => {
-    await page.goto(`${BASE}/dashboard`);
+  test('sidebar surfaces task list under 建模', async ({ page }) => {
+    await page.goto(`${BASE}/v3/tasks`);
 
     // V3 menu group expanded by default
-    await expect(page.getByRole('link', { name: '建模工作台' })).toBeVisible();
+    const link = page.getByRole('link', { name: '任务列表' }).first();
+    await expect(link).toBeVisible();
 
     // Clicking it takes us to /v3/tasks
-    await page.getByRole('link', { name: '建模工作台' }).click();
+    await link.click();
     await expect(page).toHaveURL(/\/v3\/tasks/);
     await expect(page.getByText('建模任务工作台')).toBeVisible();
   });
 
-  test('task detail page renders 4 tabs when a task exists', async ({ page }) => {
+  test('mobile sidebar overlays content without horizontal overflow', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${BASE}/dashboard`);
+
+    await page.locator('.anticon-menu-unfold').click();
+    await expect(page.getByRole('link', { name: '任务列表' }).first()).toBeVisible();
+
+    const viewport = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(viewport.scrollWidth).toBe(viewport.clientWidth);
+
+    await page.getByRole('link', { name: '模型管理' }).click();
+    await expect(page).toHaveURL(/\/models/);
+    await expect(page.locator('.anticon-menu-unfold')).toBeVisible();
+  });
+
+  test('task detail page renders 3 consolidated tabs when a task exists', async ({ page }) => {
     await page.goto(`${BASE}/v3/tasks`);
 
     // If there is no task row yet, create one via the API to avoid coupling to seed state
-    const hasRow = await page.locator('tbody tr').first().isVisible().catch(() => false);
+    const taskLinks = page.locator('tbody a[href^="/v3/tasks/"]');
+    const hasTask = await taskLinks.count() > 0;
 
-    if (!hasRow) {
+    if (!hasTask) {
       // Create via backend API directly — keeps the test self-sufficient
-      const created = await page.request.post('http://127.0.0.1:8000/api/v3/tasks/', {
+      const created = await page.request.post(`${API}/api/v3/tasks/`, {
         data: {
           name: `smoke-${Date.now()}`,
           task_type: 'classification',
@@ -90,19 +156,17 @@ test.describe('V3 Modeling Workbench', () => {
       await page.reload();
     }
 
-    // Click the first task row's "详情" button
-    const detailBtn = page.getByRole('button', { name: /详情/ }).first();
-    await expect(detailBtn).toBeVisible({ timeout: 10000 });
-    await detailBtn.click();
+    const taskLink = page.locator('tbody a[href^="/v3/tasks/"]').first();
+    await expect(taskLink).toBeVisible({ timeout: 10000 });
+    await taskLink.click();
 
     // Detail URL
     await expect(page).toHaveURL(/\/v3\/tasks\/[\w-]+/);
 
-    // 4 tabs visible
+    // Comparison and explanation are consolidated into one shared surface.
     await expect(page.getByRole('tab', { name: /任务概览/ })).toBeVisible();
     await expect(page.getByRole('tab', { name: /实验编排/ })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /Run 对比/ })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /模型解释/ })).toBeVisible();
+    await expect(page.getByRole('tab', { name: /模型对比/ })).toBeVisible();
 
     // Overview tab content (task info card)
     await expect(page.getByText('任务信息')).toBeVisible();
@@ -129,25 +193,15 @@ test.describe('V3 Modeling Workbench', () => {
     await expect(batchDialog).toBeHidden({ timeout: 5000 });
   });
 
-  test('run inspector drawer opens for best run if one exists', async ({ page }) => {
-    await page.goto(`${BASE}/v3/tasks`);
+  test('run inspector drawer opens for a successful baseline run', async ({ page }) => {
+    test.setTimeout(150_000);
+    const task = await ensureTaskWithSuccessfulRun(page.request);
+    await page.goto(`${BASE}/v3/tasks/${task.id}`);
+    await page.getByRole('tab', { name: /模型对比/ }).click();
 
-    // Need a task first
-    const firstRow = page.locator('tbody tr').first();
-    if (!(await firstRow.isVisible().catch(() => false))) test.skip(true, 'no tasks seeded');
-
-    await page.getByRole('button', { name: /详情/ }).first().click();
-    await page.getByRole('tab', { name: /Run 对比/ }).click();
-
-    // If any row is visible, open inspector
-    const runRow = page.locator('tbody tr').first();
-    if (await runRow.isVisible().catch(() => false)) {
-      const detailLink = page.getByRole('button', { name: /详情/ }).first();
-      if (await detailLink.isVisible().catch(() => false)) {
-        await detailLink.click();
-        // Drawer title shows "Run 诊断"
-        await expect(page.getByText('Run 诊断')).toBeVisible({ timeout: 5000 });
-      }
-    }
+    const detailButton = page.getByRole('button', { name: /详情/ }).first();
+    await expect(detailButton).toBeVisible({ timeout: 15_000 });
+    await detailButton.click();
+    await expect(page.getByText('Run 诊断')).toBeVisible({ timeout: 5000 });
   });
 });
