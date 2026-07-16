@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import case, func, select
+from sqlalchemy import case, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -291,6 +291,7 @@ async def list_platform_tasks(
     page_size: int = Query(20, ge=1, le=200),
     kind: str | None = Query(None),
     status: str | None = Query(None),
+    orphan_only: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     stmt = select(PlatformTask)
@@ -302,6 +303,12 @@ async def list_platform_tasks(
     if status:
         stmt = stmt.where(PlatformTask.status == status.upper())
         count_stmt = count_stmt.where(PlatformTask.status == status.upper())
+    if orphan_only:
+        linked_to_run = exists(
+            select(ExperimentRun.id).where(ExperimentRun.task_id == PlatformTask.id)
+        )
+        stmt = stmt.where(~linked_to_run)
+        count_stmt = count_stmt.where(~linked_to_run)
 
     total = (await db.execute(count_stmt)).scalar_one()
     rows = await db.execute(

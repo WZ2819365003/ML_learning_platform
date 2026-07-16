@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import InferenceJob, ModelDeployment, TrainingTask, Dataset
-from app.services.prediction_service import load_dataframe, prepare_prediction_frame, prepare_training_frame
+from app.services.prediction_service import load_dataframe, predict_with_model
 from app.utils.storage_paths import resolve_runtime_path
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _deployment_endpoints(deployment_id: str) -> dict[str, str]:
+    """Return gateway-safe paths without assuming a host or backend port."""
+    return {
+        "predict": f"/inference/{deployment_id}/predict",
+        "result": f"/inference/{deployment_id}/result/{{job_id}}",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -85,12 +93,6 @@ async def create_deployment(
     await db.flush()
     await db.refresh(deployment)
 
-    base = "http://127.0.0.1:8000"
-    endpoints = {
-        "predict": f"{base}/inference/{deployment.id}/predict",
-        "result": f"{base}/inference/{deployment.id}/result/{{job_id}}",
-    }
-
     return {
         "deployment_id": deployment.id,
         "task_id": task_id,
@@ -98,7 +100,7 @@ async def create_deployment(
         "status": deployment.status,
         "request_count": deployment.request_count,
         "created_at": deployment.created_at,
-        "endpoints": endpoints,
+        "endpoints": _deployment_endpoints(deployment.id),
     }
 
 
@@ -115,7 +117,6 @@ async def list_deployments(db: AsyncSession, page: int = 1, page_size: int = 20)
     )
     deployments = result.scalars().all()
 
-    base = "http://127.0.0.1:8000"
     items = [
         {
             "deployment_id": d.id,
@@ -124,10 +125,7 @@ async def list_deployments(db: AsyncSession, page: int = 1, page_size: int = 20)
             "status": d.status,
             "request_count": d.request_count,
             "created_at": d.created_at,
-            "endpoints": {
-                "predict": f"{base}/inference/{d.id}/predict",
-                "result": f"{base}/inference/{d.id}/result/{{job_id}}",
-            },
+            "endpoints": _deployment_endpoints(d.id),
         }
         for d in deployments
     ]
@@ -185,34 +183,22 @@ async def run_inference(
 
     model = _model_cache.get(deployment_id, str(resolve_runtime_path(task.model_path)))
 
-    # Load training data for prepare_prediction_frame
+    # Legacy estimators still need their training dataframe; new artifacts do not refit it.
     ds_result = await db.execute(select(Dataset).where(Dataset.id == task.dataset_id))
     dataset = ds_result.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     training_df = load_dataframe(dataset.file_path)
-    X_pred = prepare_prediction_frame(training_df, rows, task.target_column)
-    predictions_raw = model.predict(X_pred.values).tolist()
-
-    # Decode classification labels if applicable
-    _, _, _, target_encoder = prepare_training_frame(training_df, task.target_column)
-    if target_encoder is not None:
-        try:
-            predictions = target_encoder.inverse_transform(
-                [int(p) for p in predictions_raw]
-            ).tolist()
-        except Exception:
-            predictions = predictions_raw
-    else:
-        predictions = predictions_raw
-
-    probabilities = None
-    if include_probabilities and hasattr(model, "predict_proba"):
-        try:
-            probabilities = model.predict_proba(X_pred).tolist()
-        except Exception:
-            pass
+    prediction = predict_with_model(
+        model,
+        training_df,
+        rows,
+        task.target_column,
+        include_probabilities=include_probabilities,
+    )
+    predictions = prediction["predictions"]
+    probabilities = prediction["probabilities"]
 
     # Update request count
     deployment.request_count = (deployment.request_count or 0) + 1

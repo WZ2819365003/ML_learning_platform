@@ -90,6 +90,7 @@ async def test_deploy_run_ml_success(db, tmp_path):
     assert result["family"] == "ml"
     assert result["deployment_id"]
     assert "predict" in result["endpoints"]
+    assert result["endpoints"]["predict"] == f"/inference/{result['deployment_id']}/predict"
     assert result["status"] == "active"
 
 
