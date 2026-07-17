@@ -29,6 +29,17 @@ def test_backend_dockerfile_uses_reachable_debian_mirror():
     assert "mirrors.aliyun.com" in dockerfile
 
 
+def test_backend_image_installs_only_required_native_runtime_library():
+    dockerfile = (
+        Path(__file__).resolve().parents[2] / "docker" / "Dockerfile.backend"
+    ).read_text()
+
+    assert "libgomp1" in dockerfile
+    assert "build-essential" not in dockerfile
+    assert "    gcc " not in dockerfile
+    assert "    g++ " not in dockerfile
+
+
 def test_production_torch_wheel_does_not_compete_as_an_extra_index():
     requirements = (
         Path(__file__).resolve().parents[1] / "requirements.txt"
