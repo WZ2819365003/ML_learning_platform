@@ -40,11 +40,12 @@ def test_production_torch_wheel_does_not_compete_as_an_extra_index():
 
 
 def test_backend_build_parallelizes_and_verifies_the_torch_wheel():
+    repository_root = Path(__file__).resolve().parents[2]
     dockerfile = (
-        Path(__file__).resolve().parents[2] / "docker" / "Dockerfile.backend"
+        repository_root / "docker" / "Dockerfile.backend"
     ).read_text()
 
-    assert "aria2c" in dockerfile
-    assert "--max-connection-per-server=16" in dockerfile
-    assert "sha256sum -c -" in dockerfile
+    assert (repository_root / "docker" / "download_verified_file.py").is_file()
+    assert "python /app/download_verified_file.py" in dockerfile
+    assert "--workers 16" in dockerfile
     assert "file:///tmp/torch.whl#sha256=" in dockerfile
