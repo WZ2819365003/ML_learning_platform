@@ -9,8 +9,11 @@ def _settings(monkeypatch, env: dict[str, str]) -> Settings:
     for key in (
         "ENVIRONMENT", "DATABASE_URL", "S3_ENABLED",
         "S3_ACCESS_KEY", "S3_SECRET_KEY",
+        "AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD", "AUTH_SECRET_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
+    # These tests target DB/S3 validation; auth has its own suite (test_auth).
+    monkeypatch.setenv("AUTH_ENABLED", "false")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     return Settings()

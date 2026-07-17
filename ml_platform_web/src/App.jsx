@@ -5,6 +5,7 @@ import Sidebar from './components/layout/Sidebar'
 import Header from './components/layout/Header'
 import ErrorBoundary from './components/ErrorBoundary'
 
+const Login = lazy(() => import('./pages/Login'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const DataManagement = lazy(() => import('./pages/DataManagement'))
 const TrainingConfig = lazy(() => import('./pages/TrainingConfig'))
@@ -61,23 +62,23 @@ const antTheme = {
   },
 }
 
-function App() {
+/* Everything except /login renders inside the app chrome. Access control is
+   server-side (401 → axios interceptor redirects to /login), so this shell
+   needs no client-side token check of its own. */
+function AppShell() {
   return (
-    <ConfigProvider theme={antTheme}>
-    <AntApp>
-    <Router>
-      <Layout style={{ minHeight: '100vh', background: '#f0f5fb' }}>
-        <Sidebar />
-        <Layout style={{ background: 'transparent' }}>
-          <Header />
-          <Content style={{ margin: '0 20px 20px', padding: 0, background: 'transparent' }}>
-            <Suspense fallback={(
-              <div style={{ display: 'grid', placeItems: 'center', minHeight: 320 }}>
-                <Spin size="large" tip="页面加载中" />
-              </div>
-            )}>
-            <Routes>
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+    <Layout style={{ minHeight: '100vh', background: '#f0f5fb' }}>
+      <Sidebar />
+      <Layout style={{ background: 'transparent' }}>
+        <Header />
+        <Content style={{ margin: '0 20px 20px', padding: 0, background: 'transparent' }}>
+          <Suspense fallback={(
+            <div style={{ display: 'grid', placeItems: 'center', minHeight: 320 }}>
+              <Spin size="large" tip="页面加载中" />
+            </div>
+          )}>
+          <Routes>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/data" element={<DataManagement />} />
               <Route path="/training/config" element={<TrainingConfig />} />
@@ -126,14 +127,28 @@ function App() {
                   <ModelingTaskDetail />
                 </ErrorBoundary>
               } />
-              <Route path="/v3/training-plans" element={<TrainingPlans />} />
-              <Route path="/v3/runs" element={<V3Runs />} />
-              <Route path="/v3" element={<Navigate to="/v3/tasks" replace />} />
-            </Routes>
-            </Suspense>
-          </Content>
-        </Layout>
+            <Route path="/v3/training-plans" element={<TrainingPlans />} />
+            <Route path="/v3/runs" element={<V3Runs />} />
+            <Route path="/v3" element={<Navigate to="/v3/tasks" replace />} />
+          </Routes>
+          </Suspense>
+        </Content>
       </Layout>
+    </Layout>
+  )
+}
+
+function App() {
+  return (
+    <ConfigProvider theme={antTheme}>
+    <AntApp>
+    <Router>
+      <Suspense fallback={null}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/*" element={<AppShell />} />
+        </Routes>
+      </Suspense>
     </Router>
     </AntApp>
     </ConfigProvider>

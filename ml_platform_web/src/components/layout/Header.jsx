@@ -2,6 +2,7 @@ import React from 'react'
 import { Layout, Avatar, Dropdown, Space, Badge, Typography, Tag } from 'antd'
 import { BellOutlined, UserOutlined, QuestionCircleOutlined, HomeOutlined } from '@ant-design/icons'
 import { useLocation } from 'react-router-dom'
+import { clearAuthToken } from '../../services/api'
 
 const { Header: AntHeader } = Layout
 const { Text } = Typography
@@ -62,6 +63,13 @@ const userMenu = [
 const Header = () => {
   const location = useLocation()
   const crumbs = getBreadcrumb(location.pathname)
+
+  const onUserMenuClick = ({ key }) => {
+    if (key === 'logout') {
+      clearAuthToken()
+      window.location.assign('/login')
+    }
+  }
 
   return (
     <AntHeader
@@ -151,7 +159,7 @@ const Header = () => {
         </div>
 
         {/* User avatar */}
-        <Dropdown menu={{ items: userMenu }} placement="bottomRight" trigger={['click']}>
+        <Dropdown menu={{ items: userMenu, onClick: onUserMenuClick }} placement="bottomRight" trigger={['click']}>
           <Space
             style={{ cursor: 'pointer', padding: '4px 8px', borderRadius: 8, transition: 'background 0.2s' }}
             onMouseEnter={e => e.currentTarget.style.background = 'rgba(59,130,246,0.08)'}

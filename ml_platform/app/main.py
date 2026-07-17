@@ -9,11 +9,14 @@ from typing import Any
 import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from app.config import get_settings
+from app.core.auth import request_is_authorized
 from app.models.database import Base, async_engine, Dataset, ModelTagLibrary, async_session_factory
 from app.api.routes import data, training, logs, experiment, visualization, model_mgmt
+from app.api.routes.auth import router as auth_router
 from app.api.routes.deploy import deploy_router, inference_router
 from app.api.routes.dl import router as dl_router
 from app.api.routes.timesfm import router as timesfm_router, ts_router
@@ -143,6 +146,12 @@ async def lifespan(app: FastAPI):
     # A0: fail fast (before any table create / seed) when production is about
     # to boot with development defaults — misconfig must not start silently.
     settings.validate_for_production()
+    if settings.is_production and not settings.auth_enabled:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "⚠️ 生产环境显式关闭了鉴权（AUTH_ENABLED=false）——平台对公网完全裸奔，请确认这是有意为之。"
+        )
     # Ensure storage directories exist
     settings.ensure_storage_dirs()
 
@@ -189,7 +198,22 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Auth guard (single-admin). Everything under /api and /inference needs a
+    # bearer token when AUTH_ENABLED=true; login itself is the only exception.
+    # WebSocket routes are guarded separately at the handshake (?token=).
+    _AUTH_PUBLIC_PATHS = {"/api/auth/login"}
+
+    @app.middleware("http")
+    async def auth_guard(request, call_next):
+        path = request.url.path
+        guarded = path.startswith("/api") or path.startswith("/inference")
+        if guarded and path not in _AUTH_PUBLIC_PATHS and request.method != "OPTIONS":
+            if not request_is_authorized(request.headers.get("authorization")):
+                return JSONResponse(status_code=401, content={"detail": "未登录或登录已过期"})
+        return await call_next(request)
+
     # Register routers under /api prefix
+    app.include_router(auth_router, prefix="/api")          # → /api/auth/...
     app.include_router(data.router, prefix="/api")
     app.include_router(training.router, prefix="/api")
     app.include_router(logs.router, prefix="/api")

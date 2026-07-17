@@ -10,7 +10,7 @@ import {
   PlusOutlined, ReloadOutlined, StopOutlined, TrophyOutlined,
 } from '@ant-design/icons';
 import EChart from '../components/EChart';
-import { dlApi } from '../services/api';
+import { dlApi, withWsToken } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -472,7 +472,7 @@ function DLTaskDetailView({ taskId, navigate }) {
 
   function openWebSocket() {
     if (wsRef.current) return;
-    const ws = new WebSocket(`${wsBase}/api/dl/ws/${taskId}`);
+    const ws = new WebSocket(withWsToken(`${wsBase}/api/dl/ws/${taskId}`));
     wsRef.current = ws;
     ws.onopen = () => setWsConnected(true);
     ws.onmessage = (event) => {
@@ -511,7 +511,7 @@ function DLTaskDetailView({ taskId, navigate }) {
 
   function openLogWebSocket() {
     if (logWsRef.current) return;
-    const ws = new WebSocket(`${wsBase}/ws/logs/${taskId}`);
+    const ws = new WebSocket(withWsToken(`${wsBase}/ws/logs/${taskId}`));
     logWsRef.current = ws;
     ws.onmessage = (event) => {
       try {

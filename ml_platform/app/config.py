@@ -140,6 +140,27 @@ class Settings:
         default_factory=lambda: os.getenv("S3_ENABLED", "false").lower() == "true"
     )
 
+    # Authentication (single-admin). Env-configurable with an environment-aware
+    # default: production defaults ON, everything else defaults OFF — local
+    # dev and the test suite stay unauthenticated with zero config. An
+    # explicit AUTH_ENABLED always wins.
+    auth_enabled: bool = field(
+        default_factory=lambda: (
+            os.getenv("AUTH_ENABLED").lower() == "true"
+            if os.getenv("AUTH_ENABLED") is not None
+            else os.getenv("ENVIRONMENT", "development").lower() == "production"
+        )
+    )
+    auth_username: str = field(
+        default_factory=lambda: os.getenv("AUTH_USERNAME", "admin")
+    )
+    auth_password: str = field(
+        default_factory=lambda: os.getenv("AUTH_PASSWORD", "")
+    )
+    auth_secret_key: str = field(
+        default_factory=lambda: os.getenv("AUTH_SECRET_KEY", "dev-secret-not-for-production")
+    )
+
     # User-code executor sandboxes (A3) — wall-clock limits for the
     # 代码配置 / 数据 Pipeline subprocesses. Pipeline gets a longer budget
     # because it crunches real DataFrames.
@@ -177,6 +198,13 @@ class Settings:
             or self.s3_secret_key == _DEV_S3_SECRET_KEY
         ):
             problems.append("S3_ENABLED=true 但 S3_ACCESS_KEY/S3_SECRET_KEY 仍是开发默认密钥")
+        # Auth defaults ON in production; explicitly disabling it is allowed
+        # (env-configurable by design) but the enabled path must be complete.
+        if self.auth_enabled:
+            if not self.auth_password:
+                problems.append("AUTH_PASSWORD 未配置")
+            if len(self.auth_secret_key) < 32 or self.auth_secret_key == "dev-secret-not-for-production":
+                problems.append("AUTH_SECRET_KEY 缺失或过短（需 ≥32 位随机串）")
         if problems:
             raise RuntimeError(
                 "生产环境配置校验失败（ENVIRONMENT=production）:\n  - "

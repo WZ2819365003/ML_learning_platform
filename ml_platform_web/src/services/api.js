@@ -1,5 +1,24 @@
 import axios from 'axios';
 
+// ── Auth token helpers (single-admin bearer token, see backend app/core/auth) ──
+const TOKEN_KEY = 'ml_platform_token';
+export const getAuthToken = () => localStorage.getItem(TOKEN_KEY) || '';
+export const setAuthToken = (token) => localStorage.setItem(TOKEN_KEY, token);
+export const clearAuthToken = () => localStorage.removeItem(TOKEN_KEY);
+/** Append ?token= for WebSocket URLs (browsers can't set WS headers). */
+export const withWsToken = (url) => {
+  const token = getAuthToken();
+  if (!token) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+};
+
+const redirectToLogin = () => {
+  if (window.location.pathname !== '/login') {
+    clearAuthToken();
+    window.location.assign('/login');
+  }
+};
+
 // Use relative path for API to work in both dev and Docker environments
 const api = axios.create({
   baseURL: '/api',
@@ -11,9 +30,19 @@ const inferenceApi = axios.create({
   baseURL: '/',
   timeout: 30000,
 });
+
+const attachToken = (config) => {
+  const token = getAuthToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+};
+api.interceptors.request.use(attachToken);
+inferenceApi.interceptors.request.use(attachToken);
+
 inferenceApi.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    if (error?.response?.status === 401) redirectToLogin();
     console.error('Inference API请求错误:', error);
     return Promise.reject(error);
   }
@@ -22,10 +51,23 @@ inferenceApi.interceptors.response.use(
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    // 登录接口自身的 401 交给登录页展示错误，不做跳转循环
+    if (error?.response?.status === 401 && !String(error?.config?.url).includes('/auth/login')) {
+      redirectToLogin();
+    }
     console.error('API请求错误:', error);
     return Promise.reject(error);
   }
 );
+
+export const authApi = {
+  login(username, password) {
+    return api.post('/auth/login', { username, password });
+  },
+  me() {
+    return api.get('/auth/me');
+  },
+};
 
 export const dataApi = {
   listDatasets(params) {

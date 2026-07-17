@@ -241,6 +241,10 @@ async def dl_ws(websocket: WebSocket, task_id: str):
       {"type": "epoch", "epoch": N, "total": M, "train_loss": …, "val_loss": …, …}
       {"type": "done",  "status": "SUCCESS"|"FAILED", "metrics": {…}}
     """
+    from app.api.websocket import ws_authorized
+
+    if not await ws_authorized(websocket):
+        return
     await websocket.accept()
     queue = event_bus.subscribe(f"dl:{task_id}")
     try:
