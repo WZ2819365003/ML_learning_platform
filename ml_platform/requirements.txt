@@ -1,7 +1,5 @@
-# PyTorch CPU wheels — kept off PyPI to avoid pulling 2GB GPU build by default.
-# Listed here (not in Dockerfile) so `pip install -r requirements.txt` works
-# locally and in CI without extra flags.
---extra-index-url https://download.pytorch.org/whl/cpu
+# PyTorch CPU wheels stay explicit so the Linux production build cannot pull
+# GPU dependencies or let a secondary index supply unrelated packages.
 
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
@@ -34,9 +32,8 @@ matplotlib==3.9.2
 seaborn==0.13.2
 numpy==2.0.2
 
-# Deep learning — CPU-only build resolved via --extra-index-url above.
-# 2.6.0+cpu chosen because the +cpu local version naming on the PyTorch
-# CPU wheel index was dropped for 2.4.x/2.5.x and reintroduced at 2.6.0.
-# numpy 2.x compatible (matches our numpy==2.0.2). CPU wheel ~200 MB.
-torch==2.6.0+cpu
+# Linux production is Python 3.11/x86_64. Pin the mirrored CPU wheel by hash;
+# non-Linux development uses the native PyPI package.
+torch @ https://mirrors.aliyun.com/pytorch-wheels/cpu/torch-2.6.0%2Bcpu-cp311-cp311-linux_x86_64.whl#sha256=5b6ae523bfb67088a17ca7734d131548a2e60346c622621e4248ed09dd0790cc ; python_version == "3.11" and sys_platform == "linux" and platform_machine == "x86_64"
+torch==2.6.0 ; sys_platform != "linux"
 statsmodels==0.14.4

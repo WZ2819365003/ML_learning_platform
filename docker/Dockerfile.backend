@@ -13,10 +13,9 @@ RUN apt-get update && apt-get install -y \
 # 复制 requirements.txt
 COPY ml_platform/requirements.txt /app/requirements.txt
 
-# requirements.txt is the single dependency source. Its extra index resolves
-# PyTorch CPU wheels; the primary mirror avoids slow, incomplete PyPI index
-# responses on the production host. Fail the image build instead of silently
-# installing a stale fallback dependency set.
+# requirements.txt is the single dependency source. It pins the production
+# PyTorch CPU wheel directly; the primary mirror avoids slow, incomplete PyPI
+# index responses. Fail the build instead of installing a stale fallback set.
 ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 RUN pip install --no-cache-dir --retries 10 --timeout 120 \
     --index-url "$PYPI_INDEX_URL" \

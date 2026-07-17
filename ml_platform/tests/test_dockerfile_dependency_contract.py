@@ -17,3 +17,13 @@ def test_backend_dockerfile_uses_reachable_python_mirror():
     ).read_text()
 
     assert "https://pypi.tuna.tsinghua.edu.cn/simple" in dockerfile
+
+
+def test_production_torch_wheel_does_not_compete_as_an_extra_index():
+    requirements = (
+        Path(__file__).resolve().parents[1] / "requirements.txt"
+    ).read_text()
+
+    assert "--extra-index-url" not in requirements
+    assert "torch @ https://mirrors.aliyun.com/pytorch-wheels/cpu/" in requirements
+    assert "#sha256=" in requirements
