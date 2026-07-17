@@ -21,6 +21,14 @@ def test_backend_dockerfile_uses_reachable_python_mirror():
     assert "https://pypi.tuna.tsinghua.edu.cn/simple" in dockerfile
 
 
+def test_backend_dockerfile_uses_reachable_debian_mirror():
+    dockerfile = (
+        Path(__file__).resolve().parents[2] / "docker" / "Dockerfile.backend"
+    ).read_text()
+
+    assert "mirrors.aliyun.com" in dockerfile
+
+
 def test_production_torch_wheel_does_not_compete_as_an_extra_index():
     requirements = (
         Path(__file__).resolve().parents[1] / "requirements.txt"

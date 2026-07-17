@@ -1,6 +1,11 @@
 # ML Platform Backend - FastAPI
 FROM python:3.11-slim
 
+ARG DEBIAN_MIRROR=mirrors.aliyun.com
+RUN sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" \
+      /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+    || sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list
+
 WORKDIR /app
 
 # 安装系统依赖
