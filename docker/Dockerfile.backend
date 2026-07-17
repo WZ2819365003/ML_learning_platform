@@ -25,14 +25,15 @@ RUN set -eux; \
     torch_ref="$(awk '/^torch @ https:\/\/.*linux_x86_64/ {print $3; exit}' requirements.txt)"; \
     torch_url="${torch_ref%%#sha256=*}"; \
     torch_sha="${torch_ref##*#sha256=}"; \
+    torch_filename="$(python -c 'import sys; from urllib.parse import unquote; print(unquote(sys.argv[1].rsplit("/", 1)[-1]))' "$torch_url")"; \
     python /app/download_verified_file.py \
-      "$torch_url" /tmp/torch.whl "$torch_sha" --workers 16; \
-    sed "s|$torch_ref|file:///tmp/torch.whl#sha256=$torch_sha|" \
+      "$torch_url" "/tmp/$torch_filename" "$torch_sha" --workers 16; \
+    sed "s|$torch_ref|file:///tmp/$torch_filename#sha256=$torch_sha|" \
       requirements.txt > /tmp/requirements-docker.txt; \
     pip install --no-cache-dir --retries 10 --timeout 120 \
       --index-url "$PYPI_INDEX_URL" \
       -r /tmp/requirements-docker.txt; \
-    rm -f /tmp/torch.whl /tmp/requirements-docker.txt
+    rm -f "/tmp/$torch_filename" /tmp/requirements-docker.txt
 
 # 复制后端代码
 COPY ml_platform /app

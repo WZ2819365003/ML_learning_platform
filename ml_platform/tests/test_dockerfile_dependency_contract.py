@@ -59,4 +59,5 @@ def test_backend_build_parallelizes_and_verifies_the_torch_wheel():
     assert (repository_root / "docker" / "download_verified_file.py").is_file()
     assert "python /app/download_verified_file.py" in dockerfile
     assert "--workers 16" in dockerfile
-    assert "file:///tmp/torch.whl#sha256=" in dockerfile
+    assert "from urllib.parse import unquote" in dockerfile
+    assert "file:///tmp/$torch_filename#sha256=" in dockerfile
