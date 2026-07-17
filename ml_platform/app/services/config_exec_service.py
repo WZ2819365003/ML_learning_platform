@@ -1,8 +1,7 @@
 """Execute user Python code to produce a V3 experiment-batch config.
 
 Powers the workflow 模型配置 step's 「代码配置」 button (esp. 混合策略). The user's
-code runs in a restricted namespace and must assign a dict named ``config``
-describing the experiment batch, e.g.::
+code must assign a dict named ``config`` describing the experiment batch, e.g.::
 
     config = {
         "name": "我的混合实验",
@@ -15,48 +14,35 @@ describing the experiment batch, e.g.::
         "budget_config": {"cv_folds": 5, "test_size": 0.2},
     }
 
-Only a safe subset of builtins is exposed; ``import``, filesystem and process
-access are blocked. This is a dev-tool convenience on the user's own platform,
-not a hardened sandbox — do not expose it to untrusted callers.
+A3: the code runs in a fresh short-lived subprocess (restricted builtins, no
+import, wall-clock timeout with SIGKILL) via app.core.user_code_executor —
+a ``while True`` can no longer block the FastAPI event loop.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-# Whitelisted builtins — enough to build configs (comprehensions, ranges,
-# arithmetic) without exposing import/open/eval/exec/getattr etc.
-_SAFE_BUILTIN_NAMES = [
-    "range", "len", "list", "dict", "tuple", "set", "str", "int", "float",
-    "bool", "min", "max", "sum", "sorted", "enumerate", "zip", "round", "abs",
-    "map", "filter", "any", "all", "print", "True", "False", "None",
-]
+from app.config import get_settings
+from app.core.user_code_executor import run_user_code
 
 
-def _safe_builtins() -> dict[str, Any]:
-    import builtins
+async def execute_config_code(code: str, timeout_s: float | None = None) -> dict[str, Any]:
+    """Run ``code`` in the sandbox subprocess and return the ``config`` dict.
 
-    return {name: getattr(builtins, name) for name in _SAFE_BUILTIN_NAMES if hasattr(builtins, name)}
-
-
-def execute_config_code(code: str) -> dict[str, Any]:
-    """Run ``code`` in a restricted namespace and return the ``config`` dict.
-
-    Raises ValueError with an actionable message on empty code, execution
-    error, or a missing/mistyped ``config`` variable.
+    Raises ValueError (incl. UserCodeTimeout/UserCodeError subclasses) with an
+    actionable message on empty code, execution error, timeout, or a
+    missing/mistyped ``config`` variable.
     """
     if not code or not code.strip():
         raise ValueError("代码为空")
 
-    sandbox_globals: dict[str, Any] = {"__builtins__": _safe_builtins()}
-    sandbox_locals: dict[str, Any] = {}
-    try:
-        compiled = compile(code, "<config-code>", "exec")
-        exec(compiled, sandbox_globals, sandbox_locals)  # noqa: S102 — intentional, restricted builtins
-    except Exception as exc:  # surface the real error to the editor
-        raise ValueError(f"代码执行失败: {type(exc).__name__}: {exc}") from exc
-
-    cfg = sandbox_locals.get("config", sandbox_globals.get("config"))
+    payload = await run_user_code(
+        mode="config",
+        code=code,
+        timeout_s=timeout_s if timeout_s is not None else get_settings().user_code_timeout_s,
+    )
+    cfg = payload.get("config")
     if not isinstance(cfg, dict):
         raise ValueError("代码需定义一个名为 config 的 dict（至少含 selected_models 字段）")
     if not cfg.get("selected_models"):

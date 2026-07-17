@@ -5,39 +5,26 @@ receives the source dataset as ``df`` (pandas.DataFrame) with ``pd``/``np``
 available, transforms it, and the resulting DataFrame (either the reassigned
 ``df`` or a ``result`` variable) is saved as a NEW dataset for training.
 
-Restricted builtins; ``import`` / filesystem / process access are blocked
-(pandas & numpy are pre-injected). Dev-tool convenience on the user's own
-platform — not a hardened sandbox.
+A3: execution happens in a fresh short-lived subprocess (restricted builtins,
+no import, wall-clock timeout with SIGKILL) via app.core.user_code_executor.
+The child loads the source file and writes the transformed CSV itself, so
+DataFrames never cross the process boundary — only a small JSON summary does.
 """
 
 from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Any
 
-import numpy as np
-import pandas as pd
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.user_code_executor import run_user_code
 from app.models.database import Dataset
 from app.services.data_service import _build_columns_info
 from app.services.prediction_service import load_dataframe
-from app.utils.storage_paths import to_portable_storage_path
-
-_SAFE_BUILTIN_NAMES = [
-    "range", "len", "list", "dict", "tuple", "set", "str", "int", "float", "bool",
-    "min", "max", "sum", "sorted", "enumerate", "zip", "round", "abs", "map",
-    "filter", "any", "all", "print", "True", "False", "None",
-]
-
-
-def _safe_builtins() -> dict[str, Any]:
-    import builtins
-
-    return {n: getattr(builtins, n) for n in _SAFE_BUILTIN_NAMES if hasattr(builtins, n)}
+from app.utils.storage_paths import resolve_runtime_path, to_portable_storage_path
 
 
 async def run_data_pipeline(
@@ -55,31 +42,30 @@ async def run_data_pipeline(
     if src is None:
         raise HTTPException(status_code=404, detail="源数据集不存在")
 
-    try:
-        df = load_dataframe(src.file_path)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"无法读取源数据集: {exc}") from exc
-
-    sandbox_globals: dict[str, Any] = {"__builtins__": _safe_builtins(), "pd": pd, "np": np}
-    sandbox_locals: dict[str, Any] = {"df": df.copy()}
-    try:
-        exec(compile(code, "<data-pipeline>", "exec"), sandbox_globals, sandbox_locals)  # noqa: S102
-    except Exception as exc:  # surface real error to the editor
-        raise HTTPException(status_code=400, detail=f"Pipeline 执行失败: {type(exc).__name__}: {exc}") from exc
-
-    out = sandbox_locals.get("result", sandbox_locals.get("df"))
-    if not isinstance(out, pd.DataFrame):
-        raise HTTPException(status_code=400, detail="Pipeline 需产出一个 DataFrame（重新赋值 df 或定义 result）")
-    if out.empty:
-        raise HTTPException(status_code=400, detail="Pipeline 产出的数据为空")
-
     settings = get_settings()
     base = save_as or f"{Path(src.name).stem}_pipeline"
     name = base if base.endswith(".csv") else f"{base}.csv"
     unique_name = f"{uuid.uuid4().hex[:12]}-{name}"
     dest = settings.storage_uploads / unique_name
     dest.parent.mkdir(parents=True, exist_ok=True)
-    out.to_csv(dest, index=False)
+
+    try:
+        await run_user_code(
+            mode="pipeline",
+            code=code,
+            timeout_s=settings.pipeline_code_timeout_s,
+            input_path=str(resolve_runtime_path(src.file_path)),
+            output_path=str(dest),
+        )
+    except ValueError as exc:  # UserCodeError/UserCodeTimeout included
+        dest.unlink(missing_ok=True)  # never leave a half-written dataset
+        raise HTTPException(status_code=400, detail=f"Pipeline 执行失败: {exc}") from exc
+
+    try:
+        out = load_dataframe(dest)
+    except Exception as exc:  # noqa: BLE001
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Pipeline 输出无法读取: {exc}") from exc
 
     dataset = Dataset(
         name=name,

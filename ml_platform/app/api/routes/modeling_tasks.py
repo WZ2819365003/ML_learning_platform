@@ -380,7 +380,7 @@ async def config_exec_route(
     from app.services.config_exec_service import execute_config_code
 
     try:
-        cfg = execute_config_code(body.code)
+        cfg = await execute_config_code(body.code)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
