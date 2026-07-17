@@ -140,6 +140,9 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
 
     # --- Startup ---
+    # A0: fail fast (before any table create / seed) when production is about
+    # to boot with development defaults — misconfig must not start silently.
+    settings.validate_for_production()
     # Ensure storage directories exist
     settings.ensure_storage_dirs()
 

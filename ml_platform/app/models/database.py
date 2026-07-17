@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import AsyncGenerator
@@ -36,16 +35,33 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-DATABASE_URL: str = os.getenv(
-    "DATABASE_URL",
-    "mysql+aiomysql://root:123456@localhost:3307/ml_platform",
-)
+# Single config source (A0): the URL comes from app.config.Settings, which
+# loads .env once and applies the development default. No second getenv with
+# its own (previously MySQL root:123456) fallback lives here anymore.
+from app.config import get_settings
 
-async_engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,
-    future=True,
-)
+DATABASE_URL: str = get_settings().database_url
+
+
+def _async_engine_kwargs(database_url: str) -> dict:
+    """Engine kwargs with pool keepalive (A1) for real DB servers.
+
+    MySQL closes idle connections after ``wait_timeout``; without
+    ``pool_pre_ping`` the first request after an idle period gets a stale
+    connection and 500s. SQLite ignores pooling, so skip the params there.
+    """
+    kwargs: dict = {"echo": False, "future": True}
+    if not database_url.startswith("sqlite"):
+        kwargs.update(
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            pool_size=10,
+            max_overflow=20,
+        )
+    return kwargs
+
+
+async_engine = create_async_engine(DATABASE_URL, **_async_engine_kwargs(DATABASE_URL))
 
 async_session_factory = async_sessionmaker(
     bind=async_engine,

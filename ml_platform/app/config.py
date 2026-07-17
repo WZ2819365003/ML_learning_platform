@@ -28,16 +28,26 @@ def _resolve_path(raw: str) -> Path:
     return p.resolve()
 
 
+# Development-only fallbacks. They are recognisable so production validation
+# can refuse to start when one of them leaks into a prod deployment.
+_DEV_DATABASE_URL = "sqlite+aiosqlite:///./storage/ml_platform.db"
+_DEV_S3_ACCESS_KEY = "mlplatform"
+_DEV_S3_SECRET_KEY = "mlplatform123"
+
+
 @dataclass(frozen=True)
 class Settings:
     """Application settings populated from environment variables."""
 
+    # Deployment profile: development | test | production.
+    # Production enables strict startup validation (validate_for_production).
+    environment: str = field(
+        default_factory=lambda: os.getenv("ENVIRONMENT", "development").lower()
+    )
+
     # Database
     database_url: str = field(
-        default_factory=lambda: os.getenv(
-            "DATABASE_URL",
-            "sqlite+aiosqlite:///./storage/ml_platform.db",
-        )
+        default_factory=lambda: os.getenv("DATABASE_URL", _DEV_DATABASE_URL)
     )
 
     # Redis
@@ -117,10 +127,10 @@ class Settings:
         default_factory=lambda: os.getenv("S3_ENDPOINT_URL", "http://127.0.0.1:9000")
     )
     s3_access_key: str = field(
-        default_factory=lambda: os.getenv("S3_ACCESS_KEY", "mlplatform")
+        default_factory=lambda: os.getenv("S3_ACCESS_KEY", _DEV_S3_ACCESS_KEY)
     )
     s3_secret_key: str = field(
-        default_factory=lambda: os.getenv("S3_SECRET_KEY", "mlplatform123")
+        default_factory=lambda: os.getenv("S3_SECRET_KEY", _DEV_S3_SECRET_KEY)
     )
     s3_bucket: str = field(
         default_factory=lambda: os.getenv("S3_BUCKET", "ml-platform")
@@ -130,8 +140,48 @@ class Settings:
         default_factory=lambda: os.getenv("S3_ENABLED", "false").lower() == "true"
     )
 
+    # User-code executor sandboxes (A3) — wall-clock limits for the
+    # 代码配置 / 数据 Pipeline subprocesses. Pipeline gets a longer budget
+    # because it crunches real DataFrames.
+    user_code_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("USER_CODE_TIMEOUT_S", "5"))
+    )
+    pipeline_code_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("PIPELINE_CODE_TIMEOUT_S", "60"))
+    )
+
     # Convenience: project root
     project_root: Path = field(default_factory=lambda: _PROJECT_ROOT)
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+    def validate_for_production(self) -> None:
+        """Refuse to start production with dev defaults (blueprint A0).
+
+        Raises RuntimeError listing every violation so ops can fix them in
+        one pass instead of whack-a-mole restarts. No-op outside production.
+        """
+        if not self.is_production:
+            return
+        problems: list[str] = []
+        if not os.getenv("DATABASE_URL"):
+            problems.append("DATABASE_URL 未显式配置（生产不允许回退到开发 SQLite 默认值）")
+        elif self.database_url == _DEV_DATABASE_URL:
+            problems.append("DATABASE_URL 仍是开发默认值")
+        elif "root:123456" in self.database_url:
+            problems.append("DATABASE_URL 使用开发默认凭据 root:123456")
+        if self.s3_enabled and (
+            self.s3_access_key == _DEV_S3_ACCESS_KEY
+            or self.s3_secret_key == _DEV_S3_SECRET_KEY
+        ):
+            problems.append("S3_ENABLED=true 但 S3_ACCESS_KEY/S3_SECRET_KEY 仍是开发默认密钥")
+        if problems:
+            raise RuntimeError(
+                "生产环境配置校验失败（ENVIRONMENT=production）:\n  - "
+                + "\n  - ".join(problems)
+            )
 
     def ensure_storage_dirs(self) -> None:
         """Create storage directories if they do not exist."""
