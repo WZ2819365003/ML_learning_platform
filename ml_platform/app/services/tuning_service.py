@@ -744,7 +744,10 @@ async def _persist_trials(
             payload_ref = f"train:{domain_task.id}"
 
         search_meta = dict(trial["search_meta"])
-        if family == "ml":
+        # B1: every V3 run (ML and DL alike) trains in selection mode — the
+        # outer hold-out stays sealed until POST /final-evaluation opens it
+        # once for the confirmed winner.
+        if family in ("ml", "dl"):
             search_meta["evaluation_mode"] = "selection"
         run = ExperimentRun(
             experiment_id=exp.id,
@@ -921,7 +924,10 @@ async def _execute_single_trial(
     try:
         executor = get_executor(kind)
         result = await executor(domain_task_id, platform_task_id)
-        metrics = _normalise_run_metrics(result.get("metrics") or {})
+        metrics = _normalise_run_metrics(
+            result.get("metrics") or {},
+            evaluation_mode=result.get("evaluation_mode", "standard"),
+        )
         async with async_session_factory() as db:
             await update_run_metrics(db, run_id, metrics, status="SUCCESS")
             await db.commit()
@@ -996,8 +1002,18 @@ async def _mirror_logs_to_v3(*, domain_task_id: str, run_id: str) -> None:
         )
 
 
-def _normalise_run_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
-    """Expose common leaderboard metric keys for both ML and DL runs."""
+def _normalise_run_metrics(
+    metrics: dict[str, Any],
+    evaluation_mode: str = "standard",
+) -> dict[str, Any]:
+    """Expose common leaderboard metric keys for both ML and DL runs.
+
+    B1 semantics: in ``selection`` mode the DL val metrics come from an INNER
+    validation split (the outer hold-out is sealed), so they map to
+    ``selection_val_{metric}`` — never pre-stamped as ``final_test_*``.
+    ``final_test_*`` for selection runs is written exclusively by
+    final_evaluation_service after the winner is confirmed.
+    """
     normalised: dict[str, Any] = {}
     for key, value in (metrics or {}).items():
         if hasattr(value, "item"):
@@ -1017,7 +1033,11 @@ def _normalise_run_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     }
     for source, target in aliases.items():
         source_value = normalised.get(source)
-        if isinstance(source_value, (int, float)):
+        if not isinstance(source_value, (int, float)):
+            continue
+        if evaluation_mode == "selection":
+            normalised.setdefault(f"selection_val_{target}", float(source_value))
+        else:
             if target not in normalised:
                 normalised[target] = float(source_value)
             normalised.setdefault(f"final_test_{target}", float(source_value))

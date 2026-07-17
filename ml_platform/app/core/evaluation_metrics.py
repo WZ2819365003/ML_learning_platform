@@ -36,7 +36,10 @@ def resolve_objective_metrics(
     selection_default = f"selection_cv_mean_{metric}"
     selection_key, selection_value = _first_numeric(
         values,
-        (selection_default, f"cv_avg_{metric}", metric),
+        # selection_val_* is the DL selection score (inner validation split);
+        # CV means are the classic-ML equivalent. Bare metric stays last for
+        # legacy/standard runs.
+        (selection_default, f"selection_val_{metric}", f"cv_avg_{metric}", metric),
         default_key=selection_default,
     )
     final_default = f"final_test_{metric}"

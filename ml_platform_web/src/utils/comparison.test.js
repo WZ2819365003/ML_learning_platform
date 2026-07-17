@@ -61,6 +61,27 @@ describe('buildComparisonVM', () => {
     expect(vm.metricKeys).toEqual(['accuracy', 'cv_avg_accuracy'])
   })
 
+  it('resolves DL selection_val_* scores and hides them from metric columns (B1)', () => {
+    const vm = buildComparisonVM([{
+      run_id: 'dl-selection',
+      status: 'SUCCESS',
+      params: { model_type: 'mlp_dl', eval_metrics: ['accuracy', 'f1'] },
+      metrics: {
+        selection_val_accuracy: 0.87,
+        selection_val_f1: 0.85,
+        val_loss: 0.4,
+      },
+      selection_metric_key: 'selection_val_accuracy',
+      selection_value: 0.87,
+      domain_task_id: 'dl1',
+      family: 'dl',
+    }], task)
+
+    expect(vm.rows[0].metrics.accuracy).toBe(0.87)
+    expect(vm.rows[0].metrics.f1).toBe(0.85)
+    expect(vm.metricKeys).not.toContain('selection_val_accuracy')
+  })
+
   it('uses requested eval_metrics and maps CV aliases to display metrics', () => {
     const vm = buildComparisonVM([{
       run_id: 'requested-metrics',
@@ -166,14 +187,20 @@ describe('buildFinalizationVM', () => {
     expect(vm.reason).toContain('运行结束')
   })
 
-  it('blocks DL winners', () => {
-    const vm = buildFinalizationVM({
+  it('allows DL winners (B1) and blocks unknown families', () => {
+    const dlVm = buildFinalizationVM({
       final_evaluation: { state: 'OPEN', version: 1 },
       run_stats: { running: 0 },
     }, { ...bestRun, family: 'dl' })
+    expect(dlVm.disabled).toBe(false)
+    expect(dlVm.reason).toBeNull()
 
-    expect(vm.disabled).toBe(true)
-    expect(vm.reason).toContain('深度学习')
+    const unknownVm = buildFinalizationVM({
+      final_evaluation: { state: 'OPEN', version: 1 },
+      run_stats: { running: 0 },
+    }, { ...bestRun, family: null })
+    expect(unknownVm.disabled).toBe(true)
+    expect(unknownVm.reason).toContain('模型族')
   })
 
   it('represents an in-progress claim', () => {

@@ -26,7 +26,9 @@ export function buildComparisonVM(rawRows = [], task = {}) {
   const metricValue = (raw, key, objectiveValue) => {
     if (key === objective_metric && typeof objectiveValue === 'number') return objectiveValue
     const metrics = raw.metrics || {}
-    for (const candidate of [key, `selection_cv_mean_${key}`, `cv_avg_${key}`]) {
+    // selection_cv_mean_* = classic-ML CV selection score;
+    // selection_val_*    = DL inner-validation selection score (B1)
+    for (const candidate of [key, `selection_cv_mean_${key}`, `selection_val_${key}`, `cv_avg_${key}`]) {
       if (typeof metrics[candidate] === 'number') return metrics[candidate]
     }
     return null
@@ -73,7 +75,8 @@ export function buildComparisonVM(rawRows = [], task = {}) {
     : (() => {
       const keys = new Set([objective_metric])
       rows.forEach(r => Object.entries(r.metrics).forEach(([key, value]) => {
-        const internal = key.startsWith('selection_cv_') || key.startsWith('final_test_') || key === 'cv_folds'
+        const internal = key.startsWith('selection_cv_') || key.startsWith('selection_val_')
+          || key.startsWith('final_test_') || key === 'cv_folds'
         if (!internal && typeof value === 'number') keys.add(key)
       }))
       return [objective_metric, ...[...keys].filter(k => k !== objective_metric).sort()]
@@ -135,7 +138,8 @@ export function buildFinalizationVM(task = {}, bestRun = null) {
   let reason = null
   if (!bestRun) reason = '还没有可确认的成功 Run'
   else if (hasActiveRuns) reason = '请等待所有 Run 运行结束'
-  else if (bestRun.family !== 'ml') reason = '深度学习模型暂不支持最终确认'
+  // B1: DL winners are finalizable — only unknown families stay blocked.
+  else if (bestRun.family !== 'ml' && bestRun.family !== 'dl') reason = '该模型族暂不支持最终确认'
 
   return {
     state,

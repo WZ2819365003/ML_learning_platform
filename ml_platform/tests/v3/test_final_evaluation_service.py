@@ -544,7 +544,9 @@ async def test_finalize_task_winner_persists_failed_claim_for_retry(
 @pytest.mark.parametrize(
     ("winner_kind", "evaluation_mode", "detail_fragment"),
     [
-        ("dl_train", "selection", "深度学习"),
+        # B1: DL winners are now finalizable — only non-train families and
+        # standard-mode (holdout-contaminated) winners stay rejected.
+        ("explain", "selection", "不支持最终确认的模型族"),
         ("train", "standard", "selection-only"),
     ],
 )

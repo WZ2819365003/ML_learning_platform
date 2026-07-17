@@ -164,7 +164,7 @@ def test_baseline_preserves_deep_learning_family_and_nested_configs():
     assert params["train_config"]["epochs"] <= 10
 
 
-async def test_persist_trials_marks_only_ml_runs_as_selection_mode(db):
+async def test_persist_trials_marks_ml_and_dl_runs_as_selection_mode(db):
     from sqlalchemy import select
     from app.models.database import Dataset, ExperimentRun, ModelingTask, PlatformExperiment
 
@@ -218,10 +218,11 @@ async def test_persist_trials_marks_only_ml_runs_as_selection_mode(db):
     runs = (
         await db.execute(select(ExperimentRun).order_by(ExperimentRun.trial_no))
     ).scalars().all()
+    # B1: DL runs are selection-mode peers of ML — both seal the hold-out.
     assert runs[0].search_meta["evaluation_mode"] == "selection"
-    assert "evaluation_mode" not in runs[1].search_meta
+    assert runs[1].search_meta["evaluation_mode"] == "selection"
     assert await training_svc._resolve_evaluation_mode(db, runs[0].task_id) == "selection"
-    assert await training_svc._resolve_evaluation_mode(db, runs[1].task_id) == "standard"
+    assert await training_svc._resolve_evaluation_mode(db, runs[1].task_id) == "selection"
 
 
 async def test_finalise_batch_never_opens_sealed_holdout(

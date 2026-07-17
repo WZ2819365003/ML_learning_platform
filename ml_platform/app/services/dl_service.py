@@ -77,28 +77,94 @@ def _detect_task_type(y, requested: str) -> str:
 # Data preparation
 # ---------------------------------------------------------------------------
 
-def _prepare_dl_data(file_path: str, target_column: str, test_size: float, task_type: str):
+# Inner validation ratio used in selection mode — carved out of the OUTER
+# training portion so the sealed hold-out is never touched during selection.
+_SELECTION_INNER_VAL_RATIO = 0.2
+
+
+def _classification_stratify(y, resolved_task_type: str, target_column: str):
+    """Stratify labels for the OUTER split, with actionable validation errors."""
+    if resolved_task_type != "classification":
+        return None
+    counts = pd.Series(y).value_counts(dropna=True)
+    unique_count = int(counts.shape[0])
+    min_class_count = int(counts.min()) if unique_count else 0
+    if unique_count < 2:
+        raise ValueError(
+            f"分类目标列 {target_column!r} 只有 {unique_count} 个类别，至少需要 2 个类别。"
+        )
+    if min_class_count < 2:
+        raise ValueError(
+            f"分类目标列 {target_column!r} 的最小类别样本数为 {min_class_count}，"
+            "无法进行分层切分；请不要选择 ID/序号列，改选真实标签列。"
+        )
+    return y.values
+
+
+def _outer_split(file_path: str, target_column: str, test_size: float, task_type: str):
+    """The canonical OUTER split (seed 42) shared by training AND finalize.
+
+    final_evaluation_service replays this exact function to recover the sealed
+    hold-out, so split parity is guaranteed by construction — never inline a
+    second train_test_split with the same arguments elsewhere.
+    """
     df = load_dataframe(file_path)
     X, y = prepare_raw_training_frame(df, target_column)
     resolved_task_type = _detect_task_type(y, task_type)
-    stratify = None
-    if resolved_task_type == "classification":
-        counts = pd.Series(y).value_counts(dropna=True)
-        unique_count = int(counts.shape[0])
-        min_class_count = int(counts.min()) if unique_count else 0
-        if unique_count < 2:
-            raise ValueError(
-                f"分类目标列 {target_column!r} 只有 {unique_count} 个类别，至少需要 2 个类别。"
-            )
-        if min_class_count < 2:
-            raise ValueError(
-                f"分类目标列 {target_column!r} 的最小类别样本数为 {min_class_count}，"
-                "无法进行分层切分；请不要选择 ID/序号列，改选真实标签列。"
-            )
-        stratify = y.values
+    stratify = _classification_stratify(y, resolved_task_type, target_column)
     raw_X_train, raw_X_val, raw_y_train, raw_y_val = train_test_split(
         X, y, test_size=test_size, random_state=42, stratify=stratify
     )
+    return raw_X_train, raw_X_val, raw_y_train, raw_y_val, resolved_task_type
+
+
+def split_raw_holdout(file_path: str, target_column: str, test_size: float, task_type: str):
+    """Return (raw_X_holdout, raw_y_holdout, resolved_task_type) — the sealed
+    outer hold-out, untouched by selection-mode training."""
+    _, raw_X_val, _, raw_y_val, resolved = _outer_split(
+        file_path, target_column, test_size, task_type
+    )
+    return raw_X_val, raw_y_val, resolved
+
+
+def _prepare_dl_data(
+    file_path: str,
+    target_column: str,
+    test_size: float,
+    task_type: str,
+    evaluation_mode: str = "standard",
+):
+    """Split + transform for DL training.
+
+    standard  — legacy V2 behaviour: outer split (seed 42), per-epoch
+                validation AND final metrics on the outer val set.
+    selection — B1 semantics: the outer val set is the SEALED hold-out and is
+                discarded here; an inner split of the training portion serves
+                early stopping + selection metrics. final_evaluation_service
+                replays the same outer split at finalize time.
+    """
+    raw_X_train, raw_X_val, raw_y_train, raw_y_val, resolved_task_type = _outer_split(
+        file_path, target_column, test_size, task_type
+    )
+
+    if evaluation_mode == "selection":
+        # Seal the outer hold-out: replace (train, val) with an inner split of
+        # the training portion. Stratify when possible; tiny classes fall back
+        # to a plain split rather than failing the whole run.
+        inner_stratify = (
+            raw_y_train.values
+            if resolved_task_type == "classification"
+            and pd.Series(raw_y_train).value_counts(dropna=True).min() >= 2
+            else None
+        )
+        raw_X_train, raw_X_val, raw_y_train, raw_y_val = train_test_split(
+            raw_X_train,
+            raw_y_train,
+            test_size=_SELECTION_INNER_VAL_RATIO,
+            random_state=42,
+            stratify=inner_stratify,
+        )
+
     artifact = fit_dl_preprocessing_artifact(
         raw_X_train,
         raw_y_train,
@@ -250,6 +316,7 @@ def _run_dl_sync(
     model_save_dir: str,
     loop: asyncio.AbstractEventLoop,
     platform_task_id: str | None = None,
+    evaluation_mode: str = "standard",
 ) -> dict:
     epochs    = int(train_config.get("epochs", 50))
     test_size = float(train_config.get("test_size", 0.2))
@@ -274,12 +341,14 @@ def _run_dl_sync(
     logger.info("[DL %s] Starting %s | epochs=%d", task_id, model_type, epochs)
 
     X_train, X_val, y_train, y_val, preprocessing_artifact, task_type = _prepare_dl_data(
-        file_path, target_column, test_size, task_type)
+        file_path, target_column, test_size, task_type, evaluation_mode)
 
     feature_columns = preprocessing_artifact.feature_names
     emit_log(
         "INFO",
-        f"任务类型确认: {task_type}",
+        f"任务类型确认: {task_type}"
+        + ("（selection 模式：外层 hold-out 已封存，验证用内层切分）"
+           if evaluation_mode == "selection" else ""),
         train_samples=str(len(X_train)),
         val_samples=str(len(X_val)),
         feature_count=str(X_train.shape[1]),
@@ -379,7 +448,12 @@ def _run_dl_sync(
         log_files=[f for f in [log_file, metrics_file] if f.exists()],
     )
 
-    return {"result_metrics": result, "model_path": model_path, "task_type": task_type}
+    return {
+        "result_metrics": result,
+        "model_path": model_path,
+        "task_type": task_type,
+        "evaluation_mode": evaluation_mode,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +492,12 @@ async def _run_dl_training_by_id(
         opt_config    = task.opt_config or {}
         train_config  = task.train_config or {}
 
+        # B1: V3 runs dispatched with evaluation_mode=selection seal the outer
+        # hold-out (same resolution as classic ML in training_service).
+        from app.services.training_service import _resolve_evaluation_mode
+
+        evaluation_mode = await _resolve_evaluation_mode(db, platform_task_id)
+
     # Mark domain task RUNNING
     async with async_session_factory() as db:
         result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == dl_task_id))
@@ -435,7 +515,7 @@ async def _run_dl_training_by_id(
             _run_dl_sync,
             dl_task_id, file_path, target_column, model_type, task_type_req,
             arch_config, opt_config, train_config, str(settings.storage_models), loop,
-            platform_task_id,
+            platform_task_id, evaluation_mode,
         )
         stored_metrics = training_result["result_metrics"]
 
@@ -452,7 +532,11 @@ async def _run_dl_training_by_id(
                 t.finished_at = datetime.now(timezone.utc)
                 await db.commit()
 
-        return {"metrics": stored_metrics, "model_path": training_result["model_path"]}
+        return {
+            "metrics": stored_metrics,
+            "model_path": training_result["model_path"],
+            "evaluation_mode": training_result.get("evaluation_mode", "standard"),
+        }
 
     except Exception as exc:
         async with async_session_factory() as db:

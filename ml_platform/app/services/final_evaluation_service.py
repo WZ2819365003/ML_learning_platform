@@ -184,8 +184,11 @@ async def _validate_finalization_winner(
     if not board:
         raise HTTPException(status_code=422, detail="没有可确认的成功 Run。")
     winner = board[0]
-    if winner.get("family") != "ml":
-        raise HTTPException(status_code=422, detail="深度学习 Run 暂不支持 sealed final 评估。")
+    if winner.get("family") not in ("ml", "dl"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"不支持最终确认的模型族: {winner.get('family')!r}",
+        )
     run = (
         await db.execute(
             select(ExperimentRun).where(ExperimentRun.id == winner["run_id"])
@@ -241,10 +244,11 @@ async def evaluate_task_winner(
         return {"status": "skipped", "reason": "no_successful_run"}
 
     winner = board[0]
-    if winner.get("family") != "ml":
+    family = winner.get("family")
+    if family not in ("ml", "dl"):
         return {
             "status": "unsupported",
-            "reason": "dl_winner_has_no_sealed_cv_flow",
+            "reason": f"unsupported_family_{family}",
             "run_id": winner["run_id"],
         }
 
@@ -264,40 +268,31 @@ async def evaluate_task_winner(
             select(PlatformTask).where(PlatformTask.id == run.task_id)
         )
     ).scalar_one_or_none()
-    domain_task_id = _training_task_id(platform_task)
-    if domain_task_id is None:
+    domain_kind, domain_task_id = _domain_ref(platform_task)
+    if domain_task_id is None or domain_kind not in ("train", "dl_train"):
         return {"status": "skipped", "reason": "missing_training_task", "run_id": run.id}
 
-    training_task = (
-        await db.execute(
-            select(TrainingTask).where(TrainingTask.id == domain_task_id)
-        )
-    ).scalar_one_or_none()
-    if training_task is None or not training_task.model_path:
-        return {"status": "skipped", "reason": "missing_model_artifact", "run_id": run.id}
-    dataset = (
-        await db.execute(select(Dataset).where(Dataset.id == training_task.dataset_id))
-    ).scalar_one_or_none()
-    if dataset is None:
-        return {"status": "skipped", "reason": "missing_dataset", "run_id": run.id}
+    if domain_kind == "dl_train":
+        spec = await _dl_evaluation_spec(db, run, domain_task_id)
+    else:
+        spec = await _ml_evaluation_spec(db, run, domain_task_id)
+    if "skip" in spec:
+        return {"status": "skipped", "reason": spec["skip"], "run_id": run.id}
 
-    model_path = resolve_runtime_path(training_task.model_path)
-    dataset_path = resolve_runtime_path(dataset.file_path)
-    test_size = float(training_task.test_size or 0.2)
-    eval_metrics = training_task.eval_metrics or (
-        ["rmse", "mae", "r2"]
-        if detect_task_type(training_task.model_type) == "regression"
-        else ["accuracy"]
-    )
+    model_path: Path = spec["model_path"]
+    dataset_path: Path = spec["dataset_path"]
+    test_size: float = spec["test_size"]
+    eval_metrics: list[str] = spec["eval_metrics"]
     evaluation_id = await asyncio.to_thread(
         _evaluation_id,
         run_id=run.id,
-        dataset_id=dataset.id,
+        dataset_id=spec["dataset_id"],
         dataset_path=dataset_path,
         model_path=model_path,
-        target_column=training_task.target_column,
+        target_column=spec["target_column"],
         test_size=test_size,
         eval_metrics=eval_metrics,
+        aux_files=spec.get("aux_files") or [],
     )
     existing = (run.search_meta or {}).get("final_evaluation") or {}
     if existing.get("evaluation_id") == evaluation_id:
@@ -308,13 +303,14 @@ async def evaluate_task_winner(
             "evaluation_id": evaluation_id,
         }
 
+    evaluate_fn = _evaluate_dl_artifact if domain_kind == "dl_train" else _evaluate_artifact
     computed = await asyncio.to_thread(
-        _evaluate_artifact,
+        evaluate_fn,
         dataset_path=dataset_path,
         model_path=model_path,
-        target_column=training_task.target_column,
+        target_column=spec["target_column"],
         test_size=test_size,
-        model_type=training_task.model_type,
+        model_type=spec["model_type"],
         eval_metrics=eval_metrics,
     )
 
@@ -355,11 +351,89 @@ async def evaluate_task_winner(
     }
 
 
-def _training_task_id(platform_task: PlatformTask | None) -> str | None:
+def _domain_ref(platform_task: PlatformTask | None) -> tuple[str | None, str | None]:
+    """Parse ``payload_ref`` into (kind, domain_task_id) — "train:{id}" (ML)
+    or "dl_train:{id}" (DL)."""
     if platform_task is None or not platform_task.payload_ref:
-        return None
+        return None, None
     kind, _, domain_id = platform_task.payload_ref.partition(":")
-    return domain_id if kind == "train" and domain_id else None
+    return (kind or None), (domain_id or None)
+
+
+async def _ml_evaluation_spec(
+    db: AsyncSession, run: ExperimentRun, domain_task_id: str
+) -> dict[str, Any]:
+    """Everything the sealed evaluation needs for a classic-ML winner."""
+    training_task = (
+        await db.execute(
+            select(TrainingTask).where(TrainingTask.id == domain_task_id)
+        )
+    ).scalar_one_or_none()
+    if training_task is None or not training_task.model_path:
+        return {"skip": "missing_model_artifact"}
+    dataset = (
+        await db.execute(select(Dataset).where(Dataset.id == training_task.dataset_id))
+    ).scalar_one_or_none()
+    if dataset is None:
+        return {"skip": "missing_dataset"}
+    return {
+        "model_path": resolve_runtime_path(training_task.model_path),
+        "dataset_path": resolve_runtime_path(dataset.file_path),
+        "dataset_id": dataset.id,
+        "target_column": training_task.target_column,
+        "model_type": training_task.model_type,
+        "test_size": float(training_task.test_size or 0.2),
+        "eval_metrics": training_task.eval_metrics or (
+            ["rmse", "mae", "r2"]
+            if detect_task_type(training_task.model_type) == "regression"
+            else ["accuracy"]
+        ),
+    }
+
+
+async def _dl_evaluation_spec(
+    db: AsyncSession, run: ExperimentRun, domain_task_id: str
+) -> dict[str, Any]:
+    """Everything the sealed evaluation needs for a DL winner.
+
+    Requires the preprocessing sidecar ({model}.preprocessor.joblib) — legacy
+    checkpoints without it cannot reproduce train-only transforms, so they
+    skip with a structured reason instead of evaluating on wrong features.
+    """
+    from app.models.database import DLTrainingTask
+
+    dl_task = (
+        await db.execute(
+            select(DLTrainingTask).where(DLTrainingTask.id == domain_task_id)
+        )
+    ).scalar_one_or_none()
+    if dl_task is None or not dl_task.model_path:
+        return {"skip": "missing_model_artifact"}
+    dataset = (
+        await db.execute(select(Dataset).where(Dataset.id == dl_task.dataset_id))
+    ).scalar_one_or_none()
+    if dataset is None:
+        return {"skip": "missing_dataset"}
+    model_path = resolve_runtime_path(dl_task.model_path)
+    sidecar = Path(str(model_path) + ".preprocessor.joblib")
+    if not sidecar.exists():
+        return {"skip": "legacy_dl_model_without_preprocessor"}
+    task_type = dl_task.task_type or "classification"
+    eval_metrics = (run.params or {}).get("eval_metrics") or (
+        ["rmse", "mae", "r2"] if task_type == "regression" else ["accuracy", "f1"]
+    )
+    return {
+        "model_path": model_path,
+        "dataset_path": resolve_runtime_path(dataset.file_path),
+        "dataset_id": dataset.id,
+        "target_column": dl_task.target_column,
+        "model_type": dl_task.model_type,
+        "test_size": float((dl_task.train_config or {}).get("test_size", 0.2)),
+        "eval_metrics": eval_metrics,
+        # The sidecar shapes the transform → it is part of the evaluation
+        # identity: swap the preprocessor and the result must recompute.
+        "aux_files": [sidecar],
+    }
 
 
 def _evaluate_artifact(
@@ -398,6 +472,52 @@ def _evaluate_artifact(
     )
 
 
+def _evaluate_dl_artifact(
+    *,
+    dataset_path: Path,
+    model_path: Path,
+    target_column: str,
+    test_size: float,
+    model_type: str,
+    eval_metrics: list[str],
+) -> dict[str, Any]:
+    """Sealed hold-out evaluation for a DL winner.
+
+    Replays the canonical outer split via dl_service.split_raw_holdout (same
+    seed/stratify as training), transforms the raw hold-out with the model's
+    OWN preprocessing sidecar, and computes metrics on encoded targets — the
+    exact contract the network was trained under.
+    """
+    from app.core.dl_registry import get_dl_trainer
+    from app.services.dl_service import split_raw_holdout
+
+    dl_trainer = get_dl_trainer(model_type)
+    meta = dl_trainer.load_for_inference(str(model_path))
+    artifact = meta.get("preprocessing_artifact")
+    if artifact is None:  # spec 已挡 legacy；双保险
+        raise ValueError("legacy_dl_model_without_preprocessor")
+    task_type = meta.get("task_type", "classification")
+
+    raw_X_holdout, raw_y_holdout, _ = split_raw_holdout(
+        str(dataset_path), target_column, test_size, task_type
+    )
+    X_holdout = artifact.transform_features(raw_X_holdout).astype("float32")
+    metric_targets = artifact.encode_target(raw_y_holdout)
+    predictions, probabilities = dl_trainer.predict(X_holdout, task_type)
+
+    # Borrow the shared trainer metric implementations so DL final_test_*
+    # keys/rounding match the classic-ML path exactly.
+    if task_type == "regression":
+        from app.core.regression_trainers import BaseRegressionTrainer
+
+        return BaseRegressionTrainer._compute_regression_metrics(
+            metric_targets, predictions, eval_metrics
+        )
+    return get_trainer("random_forest")._compute_metrics(
+        metric_targets, predictions, probabilities, eval_metrics
+    )
+
+
 def _evaluation_id(
     *,
     run_id: str,
@@ -407,6 +527,7 @@ def _evaluation_id(
     target_column: str,
     test_size: float,
     eval_metrics: list[str],
+    aux_files: list[Path] | None = None,
 ) -> str:
     payload = {
         "version": FINAL_EVALUATION_VERSION,
@@ -419,6 +540,8 @@ def _evaluation_id(
         "test_size": test_size,
         "eval_metrics": sorted(set(eval_metrics)),
     }
+    if aux_files:
+        payload["aux_files"] = [_file_identity(p) for p in sorted(aux_files)]
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()[:24]
 
