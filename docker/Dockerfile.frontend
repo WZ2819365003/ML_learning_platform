@@ -8,7 +8,9 @@ WORKDIR /app
 COPY ml_platform_web/package*.json /app/
 
 # 安装依赖
-RUN npm ci --prefer-offline --no-audit
+# npm install (not ci): tolerate npm 10/11 lockfile semantic drift between
+# local dev and the node:20-alpine builder — ci hard-fails on any mismatch.
+RUN npm install --prefer-offline --no-audit
 
 # 复制源代码
 COPY ml_platform_web /app
