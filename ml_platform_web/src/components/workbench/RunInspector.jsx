@@ -108,6 +108,13 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
   const siblings = data?.siblings || []
   const logs = data?.logs || []
   const diagnosis = data?.diagnosis
+  const isDlRun = ttask?.family === 'dl'
+  const taskKind = isDlRun
+    ? ttask?.task_type || run?.params?.task_type || 'classification'
+    : String(ttask?.model_type || '').toLowerCase().includes('regress')
+      ? 'regression'
+      : 'classification'
+  const resolvedTaskKind = taskKind === 'regression' ? 'regression' : 'classification'
 
   return (
     <Drawer
@@ -261,7 +268,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                 label: <span>训练可视化</span>,
                 children: (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    {run?.metrics?.history && (
+                    {!isDlRun && run?.metrics?.history && (
                       <div>
                         <Text strong style={{ fontSize: 13 }}>Epoch 训练历史</Text>
                         <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
@@ -270,11 +277,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                         <div style={{ marginTop: 6 }}>
                           <TrainingHistoryChart
                             history={run.metrics.history}
-                            taskType={
-                              String(ttask?.model_type || '').toLowerCase().includes('regress')
-                                ? 'regression'
-                                : 'classification'
-                            }
+                            taskType={resolvedTaskKind}
                             height={280}
                             xAxisName="Epoch"
                           />
@@ -286,17 +289,13 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                         a learning_curve-shaped payload, use the same shared
                         CrossValidationView the Results page uses. The shape
                         check matches `learning_curve.steps[]`. */}
-                    {Array.isArray(run?.metrics?.cv_fold_metrics) && run.metrics.cv_fold_metrics.length > 0 && (
+                    {!isDlRun && Array.isArray(run?.metrics?.cv_fold_metrics) && run.metrics.cv_fold_metrics.length > 0 && (
                       <div>
                         <Text strong style={{ fontSize: 13 }}>K-Fold 交叉验证</Text>
                         <div style={{ marginTop: 6 }}>
                           <CrossValidationView
                             payload={{ steps: run.metrics.cv_fold_metrics }}
-                            taskKind={
-                              String(ttask?.model_type || '').toLowerCase().includes('regress')
-                                ? 'regression'
-                                : 'classification'
-                            }
+                            taskKind={resolvedTaskKind}
                             height={260}
                           />
                         </div>
@@ -307,6 +306,10 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                       trainingTaskId={ttask?.id}
                       modelType={ttask?.model_type}
                       taskStatus={run?.status}
+                      family={ttask?.family}
+                      taskType={resolvedTaskKind}
+                      history={run?.metrics?.history}
+                      metrics={run?.metrics}
                     />
                   </Space>
                 ),

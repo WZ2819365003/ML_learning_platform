@@ -95,3 +95,91 @@ test.describe('Commit 13 — Results.jsx 训练过程 tab rework', () => {
     await expect(page.getByText(/(稳定|波动较大)/).first()).toBeVisible({ timeout: 10000 });
   });
 });
+
+test.describe('RunInspector DL training visualization', () => {
+  test('DL run renders only epoch history and links to its full DL results', async ({ page }) => {
+    test.setTimeout(60000);
+    const runId = 'dl-run-inspector-contract';
+    const dlTaskId = 'dl-task-inspector-contract';
+    const unexpectedVizRequests = [];
+
+    page.on('request', (request) => {
+      if (request.url().includes('/api/viz/')) unexpectedVizRequests.push(request.url());
+    });
+
+    await page.route('**/api/v3/runs/**', async (route) => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [{
+            run_id: runId,
+            experiment_id: 'experiment-1',
+            experiment_name: 'DL inspector contract',
+            strategy_type: 'baseline',
+            task_id: 'modeling-task-1',
+            task_name: 'DL task',
+            task_type: 'regression',
+            objective_metric: 'rmse',
+            objective_direction: 'min',
+            objective_value: 0.2,
+            trial_no: 1,
+            rank: 1,
+            status: 'SUCCESS',
+            model_type: 'mlp_dl',
+            created_at: '2026-07-17T00:00:00Z',
+            finished_at: '2026-07-17T00:01:00Z',
+          }],
+          total: 1,
+        }),
+      });
+    });
+    await page.route(`**/api/platform/runs/${runId}/inspector**`, async (route) => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          run: {
+            id: runId,
+            params: { task_type: 'classification' },
+            metrics: {
+              history: {
+                train_loss: [1.0, 0.6],
+                val_loss: [1.2, 0.8],
+                val_rmse: [1.1, 0.7],
+              },
+            },
+            status: 'SUCCESS',
+          },
+          experiment: { name: 'DL inspector contract', objective_metric: 'rmse', objective_direction: 'min' },
+          platform_task: { status: 'SUCCESS' },
+          training_task: {
+            id: dlTaskId,
+            family: 'dl',
+            model_type: 'mlp_dl',
+            task_type: 'regression',
+            status: 'SUCCESS',
+            progress: 1,
+            result_metrics: {},
+          },
+          logs: [],
+          siblings: [],
+        }),
+      });
+    });
+
+    await page.goto(`${WEB_BASE}/v3/runs`, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByText('DL inspector contract')).toBeVisible();
+    await page.locator('.ant-table-row', { hasText: 'DL inspector contract' })
+      .locator('button.ant-btn-text')
+      .click();
+
+    const drawer = page.locator('.ant-drawer-body').first();
+    await expect(drawer).toBeVisible();
+    await drawer.getByRole('tab', { name: '训练可视化' }).click();
+
+    await expect(drawer.getByText('Epoch 训练历史')).toBeVisible();
+    await expect(drawer.getByRole('link', { name: '查看完整 DL 结果' }))
+      .toHaveAttribute('href', `/dl/results?taskId=${dlTaskId}`);
+    await expect(drawer.getByText('混淆矩阵')).toHaveCount(0);
+    expect(unexpectedVizRequests).toEqual([]);
+  });
+});

@@ -6,7 +6,7 @@ import {
 } from 'antd';
 
 import { ArrowLeftOutlined, DownloadOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons';
-import EChart from '../components/EChart';
+import DLDiagnostics from '../components/viz/DLDiagnostics';
 import { dlApi } from '../services/api';
 
 const { Title, Text } = Typography;
@@ -52,170 +52,6 @@ const SCALAR_METRIC_DISPLAY_ORDER = [
   'val_precision', 'val_recall', 'val_auc_roc',
   'final_epoch',
 ];
-
-// ── Chart option builders ─────────────────────────────────────────────────────
-function buildHistoryOption(history) {
-  const epochs = history.map(d => d.epoch ?? d.step ?? '');
-  return {
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['train_loss', 'val_loss'] },
-    xAxis: { type: 'category', data: epochs, name: 'Epoch' },
-    yAxis: { type: 'value', name: 'Loss' },
-    series: [
-      { name: 'train_loss', type: 'line', smooth: true, data: history.map(d => d.train_loss ?? null) },
-      { name: 'val_loss',   type: 'line', smooth: true, data: history.map(d => d.val_loss   ?? null) },
-    ],
-  };
-}
-
-function buildMetricHistoryOption(history, taskType) {
-  const epochs = history.map(d => d.epoch ?? d.step ?? '');
-  // Resolve effective type: trust backend first, else sniff from data (acc
-  // implies classification, rmse/mae implies regression). This keeps the
-  // legend honest and stops us from drawing phantom metric lines on
-  // regression runs (the old bug).
-  let kind = taskType;
-  if (!kind || kind === 'auto') {
-    kind = history.some(d => d.val_rmse != null || d.val_mae != null) ? 'regression' : 'classification';
-  }
-
-  // Pick only the series whose key is actually populated — avoids phantom
-  // zero/null lines cluttering the chart.
-  const candidates = kind === 'regression'
-    ? [
-        { key: 'val_rmse', name: 'val_rmse' },
-        { key: 'val_mae',  name: 'val_mae'  },
-        { key: 'val_r2',   name: 'val_r2'   },
-      ]
-    : [
-        { key: 'val_acc',      name: 'val_acc' },
-        { key: 'val_error',    name: 'val_error' },
-      ];
-  const series = candidates
-    .filter(c => history.some(d => c.key === 'val_error' ? d.val_acc != null : d[c.key] != null))
-    .map(c => ({
-      name: c.name, type: 'line', smooth: true,
-      data: history.map(d => {
-        if (c.key === 'val_error') return d.val_acc != null ? 1 - d.val_acc : null;
-        return d[c.key] ?? null;
-      }),
-    }));
-
-  return {
-    tooltip: { trigger: 'axis' },
-    legend: { data: series.map(s => s.name) },
-    xAxis: { type: 'category', data: epochs, name: 'Epoch' },
-    yAxis: {
-      type: 'value',
-      name: kind === 'regression' ? '误差' : '指标',
-      ...(kind === 'regression' ? {} : { min: 0, max: 1 }),
-    },
-    series,
-  };
-}
-
-function buildConfusionMatrixOption(cm) {
-  const n = cm.length;
-  const labels = Array.from({ length: n }, (_, i) => String(i));
-  const data   = cm.flatMap((row, ri) => row.map((v, ci) => [ci, ri, v]));
-  const maxVal = Math.max(...cm.flat(), 1);
-  return {
-    tooltip: {
-      position: 'top',
-      formatter: p => `真实类别: ${labels[p.data[1]]}<br/>预测类别: ${labels[p.data[0]]}<br/>数量: ${p.data[2]}`,
-    },
-    grid: { height: '65%', top: 36, left: 72, right: 28, bottom: 60 },
-    xAxis: { type: 'category', data: labels, name: '预测类别', nameLocation: 'middle', nameGap: 30 },
-    yAxis: { type: 'category', data: labels, name: '真实类别', nameLocation: 'middle', nameGap: 40 },
-    visualMap: {
-      min: 0, max: maxVal,
-      calculable: true,
-      orient: 'horizontal',
-      left: 'center',
-      bottom: 0,
-      inRange: { color: ['#edf8fb', '#006d77'] },
-    },
-    series: [{ type: 'heatmap', data, label: { show: true } }],
-  };
-}
-
-function buildRocCurveOption(fpr, tpr, auc) {
-  const data = fpr.map((v, i) => [v, tpr[i]]);
-  return {
-    tooltip: { trigger: 'axis' },
-    legend: { data: [`ROC (AUC=${auc != null ? auc.toFixed(4) : '?'})`, '随机基线'], bottom: 0 },
-    grid: { top: 24, left: 56, right: 20, bottom: 54 },
-    xAxis: { type: 'value', name: 'FPR', min: 0, max: 1 },
-    yAxis: { type: 'value', name: 'TPR', min: 0, max: 1 },
-    series: [
-      {
-        name: `ROC (AUC=${auc != null ? auc.toFixed(4) : '?'})`,
-        type: 'line', smooth: false,
-        data,
-        areaStyle: { opacity: 0.1 },
-        lineStyle: { width: 2 },
-        showSymbol: false,
-      },
-      {
-        name: '随机基线', type: 'line',
-        data: [[0, 0], [1, 1]],
-        lineStyle: { type: 'dashed', color: '#94a3b8' },
-        symbol: 'none',
-      },
-    ],
-  };
-}
-
-function buildConfidenceDistOption(confidences) {
-  // Build histogram with 20 bins [0,1]
-  const bins = 20;
-  const counts = Array(bins).fill(0);
-  confidences.forEach(v => {
-    const bin = Math.min(Math.floor(v * bins), bins - 1);
-    counts[bin]++;
-  });
-  const labels = Array.from({ length: bins }, (_, i) => `${(i / bins).toFixed(2)}~${((i + 1) / bins).toFixed(2)}`);
-  return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { top: 24, left: 56, right: 20, bottom: 60 },
-    xAxis: { type: 'category', data: labels, name: '预测置信度', axisLabel: { rotate: 30, fontSize: 10 } },
-    yAxis: { type: 'value', name: '样本数' },
-    series: [{
-      type: 'bar',
-      data: counts,
-      itemStyle: { color: '#6366f1' },
-    }],
-  };
-}
-
-function buildScatterOption(actual, predicted) {
-  const data = actual.map((a, i) => [a, predicted[i]]);
-  const allVals = [...actual, ...predicted];
-  const minV = Math.min(...allVals);
-  const maxV = Math.max(...allVals);
-  return {
-    tooltip: { formatter: p => `实际: ${p.data[0].toFixed(4)}<br/>预测: ${p.data[1].toFixed(4)}` },
-    grid: { top: 24, left: 64, right: 20, bottom: 54 },
-    xAxis: { type: 'value', name: '实际值', min: minV, max: maxV },
-    yAxis: { type: 'value', name: '预测值', min: minV, max: maxV },
-    series: [
-      {
-        name: '预测 vs 实际',
-        type: 'scatter',
-        data,
-        symbolSize: 5,
-        itemStyle: { color: '#0ea5e9', opacity: 0.7 },
-      },
-      {
-        name: '完美预测线',
-        type: 'line',
-        data: [[minV, minV], [maxV, maxV]],
-        lineStyle: { type: 'dashed', color: '#f43f5e' },
-        symbol: 'none',
-      },
-    ],
-  };
-}
 
 const PAGE_SIZE = 10;
 
@@ -350,20 +186,7 @@ function DLResultDetailView({ taskId, navigate }) {
 
   const status          = (taskInfo?.status ?? '').toUpperCase();
   const rawMetrics      = taskInfo?.result_metrics ?? {};
-  const history         = Array.isArray(rawMetrics.history) ? rawMetrics.history : [];
-  const confusionMatrix = Array.isArray(rawMetrics.confusion_matrix) ? rawMetrics.confusion_matrix : null;
   const taskType        = taskInfo?.task_type ?? 'auto';
-
-  // ROC curve (binary classification)
-  const rocFpr = Array.isArray(rawMetrics.val_roc_fpr) ? rawMetrics.val_roc_fpr : null;
-  const rocTpr = Array.isArray(rawMetrics.val_roc_tpr) ? rawMetrics.val_roc_tpr : null;
-  const auc    = rawMetrics.val_auc_roc ?? null;
-
-  // Prediction confidence distribution (classification)
-  const confidenceDist = Array.isArray(rawMetrics.val_confidence_dist) ? rawMetrics.val_confidence_dist : null;
-
-  // Predicted vs Actual scatter (regression)
-  const scatter = rawMetrics.val_scatter ?? null;
 
   // Only show scalar numeric metrics in cards (exclude history, confusion_matrix, etc.)
   const derivedMetrics = {
@@ -433,61 +256,9 @@ function DLResultDetailView({ taskId, navigate }) {
             </Card>
           )}
 
-          {/* Training history charts */}
-          {history.length > 0 && (
-            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-              <Col xs={24} xl={12}>
-                <Card title="训练损失曲线">
-                  <EChart option={buildHistoryOption(history)} style={{ height: 320 }} />
-                </Card>
-              </Col>
-              <Col xs={24} xl={12}>
-                <Card title="验证指标曲线">
-                  <EChart option={buildMetricHistoryOption(history, taskType)} style={{ height: 320 }} />
-                </Card>
-              </Col>
-            </Row>
-          )}
-
-          {/* Confusion matrix + ROC curve */}
-          {(confusionMatrix || (rocFpr && rocTpr)) && (
-            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-              {confusionMatrix && (
-                <Col xs={24} xl={rocFpr ? 12 : 24}>
-                  <Card title="混淆矩阵">
-                    <EChart option={buildConfusionMatrixOption(confusionMatrix)} style={{ height: 340 }} />
-                  </Card>
-                </Col>
-              )}
-              {rocFpr && rocTpr && (
-                <Col xs={24} xl={confusionMatrix ? 12 : 24}>
-                  <Card title="ROC 曲线">
-                    <EChart option={buildRocCurveOption(rocFpr, rocTpr, auc)} style={{ height: 340 }} />
-                  </Card>
-                </Col>
-              )}
-            </Row>
-          )}
-
-          {/* Prediction confidence distribution (classification) */}
-          {confidenceDist && (
-            <Card title="预测置信度分布" style={{ marginBottom: 16 }}>
-              <EChart option={buildConfidenceDistOption(confidenceDist)} style={{ height: 280 }} />
-            </Card>
-          )}
-
-          {/* Predicted vs Actual scatter (regression) */}
-          {scatter?.actual && scatter?.predicted && (
-            <Card title="预测值 vs 实际值" style={{ marginBottom: 16 }}>
-              <EChart option={buildScatterOption(scatter.actual, scatter.predicted)} style={{ height: 320 }} />
-            </Card>
-          )}
-
-          {history.length === 0 && !confusionMatrix && !rocFpr && !scatter && (
-            <Card style={{ marginBottom: 16 }}>
-              <Text type="secondary">训练历史数据不可用，仅展示最终指标。</Text>
-            </Card>
-          )}
+          <div style={{ marginBottom: 16 }}>
+            <DLDiagnostics metrics={rawMetrics} taskType={taskType} />
+          </div>
 
           <Card title="模型文件">
             <Button icon={<DownloadOutlined />} disabled>

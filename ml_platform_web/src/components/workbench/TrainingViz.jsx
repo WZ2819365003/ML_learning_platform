@@ -17,8 +17,8 @@
  *
  *  - Each chart is in its own Card with a uniform 16-px gutter and a
  *    360-px canvas so the drawer stays readable.
- *  - Missing data renders an <Empty /> placeholder (endpoints return 4xx
- *    for non-applicable model types — we swallow errors silently).
+ *  - Missing data renders an <Empty /> placeholder while endpoint failures
+ *    remain visible in a consolidated error summary.
  *  - A single 刷新 button re-runs every query in parallel.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
@@ -36,6 +36,7 @@ import {
 } from '@ant-design/icons'
 import EChart from '../EChart'
 import { vizApi } from '../../services/api'
+import DLDiagnostics from '../viz/DLDiagnostics'
 
 const { Text } = Typography
 
@@ -50,8 +51,14 @@ function inferTaskType(modelType) {
   return 'classification'
 }
 
-function safeFetch(promise) {
-  return promise.then((v) => v).catch(() => null)
+// eslint-disable-next-line react-refresh/only-export-components
+export function settleVizRequest(label, promise) {
+  return promise
+    .then((data) => ({ data, error: null }))
+    .catch((error) => ({
+      data: null,
+      error: `${label}：${error?.response?.data?.detail || error?.message || '加载失败'}`,
+    }))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -279,43 +286,60 @@ function VizCard({ icon, title, hint, option, height = 320, empty = '暂无数�
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
+export default function TrainingViz({
+  trainingTaskId,
+  modelType,
+  taskStatus,
+  family,
+  taskType,
+  history,
+  metrics,
+}) {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState({
     cm: null, roc: null, fi: null, lc: null, res: null, pva: null,
   })
   const [error, setError] = useState(null)
 
-  const taskType = inferTaskType(modelType)
+  const resolvedTaskType = taskType === 'regression' || taskType === 'classification'
+    ? taskType
+    : inferTaskType(modelType)
+  const isDl = family === 'dl'
 
   const reload = useCallback(async () => {
-    if (!trainingTaskId) return
+    if (!trainingTaskId || isDl) return
     setLoading(true)
     setError(null)
     try {
-      if (taskType === 'classification') {
+      if (resolvedTaskType === 'classification') {
         const [cm, roc, fi, lc] = await Promise.all([
-          safeFetch(vizApi.getConfusionMatrix(trainingTaskId)),
-          safeFetch(vizApi.getRocCurve(trainingTaskId)),
-          safeFetch(vizApi.getFeatureImportance(trainingTaskId)),
-          safeFetch(vizApi.getLearningCurve(trainingTaskId)),
+          settleVizRequest('混淆矩阵', vizApi.getConfusionMatrix(trainingTaskId)),
+          settleVizRequest('ROC 曲线', vizApi.getRocCurve(trainingTaskId)),
+          settleVizRequest('特征重要度', vizApi.getFeatureImportance(trainingTaskId)),
+          settleVizRequest('学习曲线', vizApi.getLearningCurve(trainingTaskId)),
         ])
-        setData({ cm, roc, fi, lc, res: null, pva: null })
+        setData({
+          cm: cm.data, roc: roc.data, fi: fi.data, lc: lc.data, res: null, pva: null,
+        })
+        setError([cm, roc, fi, lc].map((result) => result.error).filter(Boolean).join('；') || null)
       } else {
         const [res, pva, fi, lc] = await Promise.all([
-          safeFetch(vizApi.getResidualPlot(trainingTaskId)),
-          safeFetch(vizApi.getPredictedVsActual(trainingTaskId)),
-          safeFetch(vizApi.getFeatureImportance(trainingTaskId)),
-          safeFetch(vizApi.getLearningCurve(trainingTaskId)),
+          settleVizRequest('残差图', vizApi.getResidualPlot(trainingTaskId)),
+          settleVizRequest('预测 vs 真实', vizApi.getPredictedVsActual(trainingTaskId)),
+          settleVizRequest('特征重要度', vizApi.getFeatureImportance(trainingTaskId)),
+          settleVizRequest('学习曲线', vizApi.getLearningCurve(trainingTaskId)),
         ])
-        setData({ cm: null, roc: null, fi, lc, res, pva })
+        setData({
+          cm: null, roc: null, fi: fi.data, lc: lc.data, res: res.data, pva: pva.data,
+        })
+        setError([res, pva, fi, lc].map((result) => result.error).filter(Boolean).join('；') || null)
       }
     } catch (e) {
       setError(e?.message || '加载训练可视化失败')
     } finally {
       setLoading(false)
     }
-  }, [trainingTaskId, taskType])
+  }, [isDl, resolvedTaskType, trainingTaskId])
 
   useEffect(() => { void reload() }, [reload])
 
@@ -334,13 +358,42 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
 
   const notReady = taskStatus && !['SUCCESS', 'FAILED'].includes(taskStatus)
 
+  if (isDl) {
+    return (
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Space size={8}>
+            <Tag color={resolvedTaskType === 'classification' ? 'blue' : 'purple'}>
+              {resolvedTaskType === 'classification' ? '分类' : '回归'}
+            </Tag>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              深度学习模型 · {modelType || '未知'}
+            </Text>
+          </Space>
+          <a href={`/dl/results?taskId=${trainingTaskId}`}>查看完整 DL 结果</a>
+        </Space>
+        {notReady && (
+          <Alert
+            type="info" showIcon
+            message="训练尚在进行中"
+            description="训练历史会随新的 Epoch 指标更新。"
+          />
+        )}
+        <DLDiagnostics
+          metrics={metrics || { history }}
+          taskType={resolvedTaskType}
+        />
+      </Space>
+    )
+  }
+
   return (
     <Spin spinning={loading}>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <Space size={8}>
-            <Tag color={taskType === 'classification' ? 'blue' : 'purple'}>
-              {taskType === 'classification' ? '分类' : '回归'}
+            <Tag color={resolvedTaskType === 'classification' ? 'blue' : 'purple'}>
+              {resolvedTaskType === 'classification' ? '分类' : '回归'}
             </Tag>
             <Text type="secondary" style={{ fontSize: 12 }}>
               模型 · {modelType || '未知'} · TrainingTask #{String(trainingTaskId).slice(0, 8)}
@@ -362,7 +415,7 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
 
         {/* Row 1 — 最核心的性能诊断 */}
         <Row gutter={[12, 12]}>
-          {taskType === 'classification' ? (
+          {resolvedTaskType === 'classification' ? (
             <>
               <Col span={24} xl={12}>
                 <VizCard
@@ -409,7 +462,7 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
 
         {/* Row 2 — 细节图 */}
         <Row gutter={[12, 12]}>
-          {taskType === 'classification' ? (
+          {resolvedTaskType === 'classification' ? (
             <Col span={24} xl={12}>
               <VizCard
                 icon={<RadarChartOutlined style={{ color: '#f59e0b' }} />}
