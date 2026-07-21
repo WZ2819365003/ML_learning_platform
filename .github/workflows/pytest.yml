@@ -100,6 +100,7 @@ jobs:
         env:
           DATABASE_URL: sqlite+aiosqlite:////tmp/m0_existing.db
         run: |
-          python -c "from sqlalchemy import create_engine; from app.models.database import Base; Base.metadata.create_all(create_engine('sqlite:////tmp/m0_existing.db'))"
+          python -c "from sqlalchemy import create_engine; from app.models.database import Base; engine = create_engine('sqlite:////tmp/m0_existing.db'); Base.metadata.create_all(engine); connection = engine.connect(); connection.exec_driver_sql('ALTER TABLE datasets DROP COLUMN content_sha256'); connection.exec_driver_sql(\"INSERT INTO datasets (id, name, file_path, file_size, created_at, updated_at) VALUES ('legacy', 'legacy.csv', '/tmp/legacy.csv', 1, '2026-01-01', '2026-01-01')\"); connection.commit(); connection.close(); engine.dispose()"
           alembic stamp 0001
           alembic upgrade head
+          python -c "from sqlalchemy import create_engine, inspect; engine = create_engine('sqlite:////tmp/m0_existing.db'); assert 'content_sha256' in {column['name'] for column in inspect(engine).get_columns('datasets')}; assert engine.connect().exec_driver_sql(\"SELECT name FROM datasets WHERE id='legacy'\").scalar_one() == 'legacy.csv'"

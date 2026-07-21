@@ -13,7 +13,7 @@ from app.models import database as database_models
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 sync_database_url = database_models._to_sync_database_url(
     get_settings().database_url

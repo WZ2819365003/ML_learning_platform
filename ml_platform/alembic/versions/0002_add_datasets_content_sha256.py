@@ -17,21 +17,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    columns = {
-        column["name"]
-        for column in sa.inspect(op.get_bind()).get_columns("datasets")
-    }
-    if "content_sha256" not in columns:
-        op.add_column(
-            "datasets",
-            sa.Column("content_sha256", sa.String(length=64), nullable=True),
-        )
+    op.add_column(
+        "datasets",
+        sa.Column("content_sha256", sa.String(length=64), nullable=True),
+    )
 
 
 def downgrade() -> None:
-    columns = {
-        column["name"]
-        for column in sa.inspect(op.get_bind()).get_columns("datasets")
-    }
-    if "content_sha256" in columns:
-        op.drop_column("datasets", "content_sha256")
+    op.drop_column("datasets", "content_sha256")
