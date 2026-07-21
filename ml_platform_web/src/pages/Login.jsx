@@ -44,12 +44,12 @@ export default function Login() {
   }
 
   return (
-    <div style={{
+    <div className="login-page" style={{
       minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: 'linear-gradient(160deg, #090f1e 0%, #0d1b38 55%, #0f2046 100%)',
       padding: 16,
     }}>
-      <div style={{
+      <div className="login-card" style={{
         width: 380, maxWidth: '100%', background: '#fff', borderRadius: 16,
         boxShadow: '0 24px 64px rgba(9, 15, 30, 0.45)', padding: '40px 36px 28px',
       }}>

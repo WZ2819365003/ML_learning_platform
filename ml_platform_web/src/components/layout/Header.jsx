@@ -1,8 +1,8 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Layout, Avatar, Dropdown, Space, Badge, Typography, Tag } from 'antd'
 import { BellOutlined, UserOutlined, QuestionCircleOutlined, HomeOutlined } from '@ant-design/icons'
-import { useLocation } from 'react-router-dom'
-import { clearAuthToken } from '../../services/api'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { authApi, clearAuthToken, platformTasksApi, systemApi } from '../../services/api'
 
 const { Header: AntHeader } = Layout
 const { Text } = Typography
@@ -54,15 +54,56 @@ function getBreadcrumb(pathname) {
 }
 
 const userMenu = [
-  { key: 'profile', label: '个人资料' },
-  { key: 'settings', label: '账号设置' },
-  { type: 'divider' },
   { key: 'logout', label: '退出登录', danger: true },
 ]
 
+export function environmentTag(environment) {
+  return String(environment).toLowerCase() === 'production'
+    ? { color: 'blue', label: 'PROD' }
+    : { color: 'default', label: 'DEV' }
+}
+
+export function failedTaskCount(payload) {
+  const total = Number(payload?.total)
+  return Number.isFinite(total) && total > 0 ? Math.floor(total) : 0
+}
+
+export function usernameLabel(payload) {
+  return typeof payload?.username === 'string' && payload.username.trim()
+    ? payload.username.trim()
+    : '管理员'
+}
+
 const Header = () => {
   const location = useLocation()
+  const navigate = useNavigate()
   const crumbs = getBreadcrumb(location.pathname)
+  const [environment, setEnvironment] = useState('development')
+  const [failedCount, setFailedCount] = useState(0)
+  const [username, setUsername] = useState('管理员')
+  const envTag = environmentTag(environment)
+
+  useEffect(() => {
+    let active = true
+
+    systemApi.health()
+      .then(payload => {
+        if (active) setEnvironment(payload?.environment || 'development')
+      })
+      .catch(() => {})
+    platformTasksApi.list({ status: 'FAILED', page: 1, page_size: 1 })
+      .then(payload => {
+        if (active) setFailedCount(failedTaskCount(payload))
+      })
+      .catch(() => {})
+    authApi.me()
+      .then(payload => {
+        if (active) setUsername(usernameLabel(payload))
+      })
+      .catch(() => {})
+
+    return () => { active = false }
+  }, [])
 
   const onUserMenuClick = ({ key }) => {
     if (key === 'logout') {
@@ -112,13 +153,16 @@ const Header = () => {
       {/* Right: actions */}
       <Space size={4} align="center">
         {/* Env indicator */}
-        <Tag color="blue" style={{ marginRight: 8, borderRadius: 6, fontSize: 11, fontWeight: 600 }}>
-          PROD
+        <Tag color={envTag.color} style={{ marginRight: 8, borderRadius: 6, fontSize: 11, fontWeight: 600 }}>
+          {envTag.label}
         </Tag>
 
         {/* Notifications */}
-        <Badge dot offset={[-4, 4]} color="#3b82f6">
+        <Badge count={failedCount} showZero={false} offset={[-4, 4]}>
           <div
+            role="button"
+            aria-label={failedCount ? `${failedCount} 个失败任务` : '无失败任务'}
+            tabIndex={0}
             style={{
               width: 36,
               height: 36,
@@ -130,6 +174,10 @@ const Header = () => {
               cursor: 'pointer',
               transition: 'background 0.2s',
               fontSize: 16,
+            }}
+            onClick={() => navigate('/v3/runs')}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') navigate('/v3/runs')
             }}
             onMouseEnter={e => e.currentTarget.style.background = 'rgba(59,130,246,0.08)'}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
@@ -174,7 +222,7 @@ const Header = () => {
               }}
             />
             <Text style={{ fontSize: 13, color: '#0f172a', fontWeight: 500 }} className="hidden md:inline">
-              管理员
+              {username}
             </Text>
           </Space>
         </Dropdown>

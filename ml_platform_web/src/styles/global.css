@@ -399,3 +399,11 @@ body {
   .ts-form-footer { justify-content: stretch; flex-direction: column-reverse; }
   .ts-drawer-footer { flex-direction: column-reverse; align-items: stretch; }
 }
+
+@media (max-width: 379px) {
+  .login-page { padding: 10px !important; }
+  .login-card {
+    padding: 32px 22px 24px !important;
+    border-radius: 12px !important;
+  }
+}

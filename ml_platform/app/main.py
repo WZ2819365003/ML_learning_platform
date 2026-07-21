@@ -243,7 +243,11 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["Health"])
     async def health_check():
-        return {"status": "ok", "version": "3.3.0"}
+        return {
+            "status": "ok",
+            "version": "3.3.0",
+            "environment": get_settings().environment,
+        }
 
     return app
 

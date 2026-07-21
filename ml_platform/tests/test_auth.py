@@ -80,6 +80,7 @@ async def test_api_guard_blocks_and_admits(auth_on, client):
 async def test_health_stays_public(auth_on, client):
     r = await client.get("/health")
     assert r.status_code == 200
+    assert r.json()["environment"] == auth_on.environment
 
 
 async def test_auth_disabled_passthrough(client):

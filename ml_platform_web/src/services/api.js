@@ -69,6 +69,12 @@ export const authApi = {
   },
 };
 
+export const systemApi = {
+  health() {
+    return inferenceApi.get('/health');
+  },
+};
+
 export const dataApi = {
   listDatasets(params) {
     return api.get('/data/list', { params });
