@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Query, Request, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,11 +32,21 @@ router = APIRouter(prefix="/data", tags=["Data Management"])
 
 @router.post("/upload", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
 async def upload_dataset_route(
+    request: Request,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ) -> DatasetResponse:
     """Upload a new dataset file."""
-    return await upload_dataset(file=file, db=db)
+    raw_content_length = request.headers.get("content-length")
+    try:
+        content_length = int(raw_content_length) if raw_content_length else None
+    except ValueError:
+        content_length = None
+    return await upload_dataset(
+        file=file,
+        db=db,
+        content_length=content_length,
+    )
 
 
 @router.post("/{dataset_id}/pipeline", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)

@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import shutil
+import os
+import tempfile
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
+import numpy as np
 import pandas as pd
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import func, select
@@ -25,6 +29,14 @@ from app.utils.file_utils import generate_unique_filename
 logger = logging.getLogger(__name__)
 
 _ALLOWED_EXTENSIONS = {".csv", ".parquet", ".xlsx"}
+_UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+_HASH_CHUNK_SIZE = 8 * 1024 * 1024
+_DATAFRAME_CHUNK_SIZE = 64_000
+_ANALYSIS_SAMPLE_SIZE = 50_000
+_XLSX_MAX_SIZE = 50 * 1024 * 1024
+_QUANTILE_SAMPLE_SIZE = 4_096
+_MAX_EXACT_UNIQUES = 100_000
+_HISTOGRAM_BINS = 20
 
 
 def _require_dataset_path(dataset: Dataset) -> Path:
@@ -34,23 +46,34 @@ def _require_dataset_path(dataset: Dataset) -> Path:
     return path
 
 
-def _compute_content_digest(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
+def _compute_file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(_HASH_CHUNK_SIZE):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 async def _find_existing_dataset_by_content(
     db: AsyncSession,
-    content: bytes,
+    content_sha256: str,
     file_size: int,
 ) -> Dataset | None:
-    digest = _compute_content_digest(content)
     result = await db.execute(select(Dataset).where(Dataset.file_size == file_size))
     for dataset in result.scalars():
+        stored_digest = getattr(dataset, "content_sha256", None)
+        if stored_digest:
+            if stored_digest == content_sha256:
+                return dataset
+            continue
+
         path = restore_dataset_file(dataset.id, dataset.file_path)
         if path is None:
             continue
         try:
-            if _compute_content_digest(path.read_bytes()) == digest:
+            stored_digest = _compute_file_digest(path)
+            dataset.content_sha256 = stored_digest
+            if stored_digest == content_sha256:
                 return dataset
         except OSError:
             logger.warning("Failed to inspect dataset file for dedup: %s", path, exc_info=True)
@@ -71,19 +94,273 @@ def _validate_extension(filename: str) -> str:
     return ext
 
 
+def _validate_xlsx_size(path: Path, file_size: int) -> None:
+    if file_size > _XLSX_MAX_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Excel 文件 {path.name!r} 超过 50MB，无法以低内存方式解析；"
+                "请转换为 CSV 或 Parquet 后重新上传。"
+            ),
+        )
+
+
+def _iter_dataframe_chunks(
+    path: Path,
+    ext: str,
+    *,
+    chunk_size: int = _DATAFRAME_CHUNK_SIZE,
+) -> Iterator[pd.DataFrame]:
+    if ext == ".csv":
+        yield from pd.read_csv(path, chunksize=chunk_size)
+        return
+    if ext == ".parquet":
+        import pyarrow.parquet as pq
+
+        parquet_file = pq.ParquetFile(path)
+        for batch in parquet_file.iter_batches(batch_size=chunk_size):
+            yield batch.to_pandas()
+        return
+    if ext == ".xlsx":
+        _validate_xlsx_size(path, path.stat().st_size)
+        yield pd.read_excel(path)
+        return
+    raise HTTPException(status_code=400, detail=f"Cannot read extension '{ext}'")
+
+
 def _read_dataframe(path: Path, ext: str, nrows: int | None = None) -> pd.DataFrame:
-    """Read a file into a DataFrame based on its extension."""
+    """Read a bounded preview or a complete small dataframe."""
     if ext == ".csv":
         return pd.read_csv(path, nrows=nrows)
-    elif ext == ".parquet":
-        df = pd.read_parquet(path)
-        if nrows is not None:
-            df = df.head(nrows)
-        return df
-    elif ext == ".xlsx":
+    if ext == ".parquet":
+        if nrows is None:
+            return pd.read_parquet(path)
+        import pyarrow.parquet as pq
+
+        batches = pq.ParquetFile(path).iter_batches(batch_size=max(1, nrows))
+        try:
+            return next(batches).to_pandas().head(nrows)
+        except StopIteration:
+            return pd.DataFrame()
+    if ext == ".xlsx":
+        _validate_xlsx_size(path, path.stat().st_size)
         return pd.read_excel(path, nrows=nrows)
-    else:
-        raise HTTPException(status_code=400, detail=f"Cannot read extension '{ext}'")
+    raise HTTPException(status_code=400, detail=f"Cannot read extension '{ext}'")
+
+
+def _normalise_counter_value(value: Any) -> Any:
+    if isinstance(value, np.generic):
+        return value.item()
+    try:
+        hash(value)
+    except TypeError:
+        return str(value)
+    return value
+
+
+@dataclass
+class _ColumnAccumulator:
+    dtype: str | None = None
+    total_rows: int = 0
+    count: int = 0
+    null_count: int = 0
+    mean: float = 0.0
+    m2: float = 0.0
+    minimum: float | None = None
+    maximum: float | None = None
+    numeric: bool | None = None
+    exact_counts: Counter = field(default_factory=Counter)
+    unique_overflow: bool = False
+    quantile_sample: list[float] = field(default_factory=list)
+    sampled_numeric_count: int = 0
+    rng: np.random.Generator = field(
+        default_factory=lambda: np.random.default_rng(42),
+        repr=False,
+    )
+
+    def update(self, series: pd.Series) -> None:
+        self.total_rows += len(series)
+        missing = int(series.isna().sum())
+        self.null_count += missing
+        non_null = series.dropna()
+        self.count += len(non_null)
+
+        current_dtype = str(series.dtype)
+        if self.dtype is None:
+            self.dtype = current_dtype
+        elif self.dtype != current_dtype:
+            self.dtype = "object"
+
+        is_numeric = pd.api.types.is_numeric_dtype(series)
+        if self.numeric is None:
+            self.numeric = bool(is_numeric)
+        elif not is_numeric:
+            self.numeric = False
+
+        if not self.unique_overflow:
+            counts = non_null.value_counts(dropna=True)
+            for value, count in counts.items():
+                key = _normalise_counter_value(value)
+                if key not in self.exact_counts and len(self.exact_counts) >= _MAX_EXACT_UNIQUES:
+                    self.unique_overflow = True
+                    break
+                self.exact_counts[key] += int(count)
+
+        if not is_numeric or non_null.empty:
+            return
+
+        values = pd.to_numeric(non_null, errors="coerce").dropna().to_numpy(dtype=float)
+        if values.size == 0:
+            return
+        chunk_count = int(values.size)
+        chunk_mean = float(values.mean())
+        chunk_m2 = float(((values - chunk_mean) ** 2).sum())
+        previous_count = self.sampled_numeric_count
+        combined_count = previous_count + chunk_count
+        if previous_count == 0:
+            self.mean = chunk_mean
+            self.m2 = chunk_m2
+        else:
+            delta = chunk_mean - self.mean
+            self.mean += delta * chunk_count / combined_count
+            self.m2 += chunk_m2 + delta * delta * previous_count * chunk_count / combined_count
+        self.sampled_numeric_count = combined_count
+        chunk_min = float(values.min())
+        chunk_max = float(values.max())
+        self.minimum = chunk_min if self.minimum is None else min(self.minimum, chunk_min)
+        self.maximum = chunk_max if self.maximum is None else max(self.maximum, chunk_max)
+
+        for value in values:
+            seen = previous_count
+            previous_count += 1
+            if len(self.quantile_sample) < _QUANTILE_SAMPLE_SIZE:
+                self.quantile_sample.append(float(value))
+                continue
+            replacement = int(self.rng.integers(0, seen + 1))
+            if replacement < _QUANTILE_SAMPLE_SIZE:
+                self.quantile_sample[replacement] = float(value)
+
+    def to_metadata(self) -> dict[str, Any]:
+        if self.unique_overflow:
+            sample_unique = len(self.exact_counts)
+            sample_count = max(1, sum(self.exact_counts.values()))
+            unique_count = min(
+                self.count,
+                max(sample_unique, round(sample_unique / sample_count * self.count)),
+            )
+            min_class_count = 1 if self.count else 0
+        else:
+            unique_count = len(self.exact_counts)
+            min_class_count = min(self.exact_counts.values(), default=0)
+
+        quantiles: dict[str, float | None] = {
+            "p25": None,
+            "p50": None,
+            "p75": None,
+        }
+        if self.quantile_sample:
+            p25, p50, p75 = np.quantile(self.quantile_sample, [0.25, 0.5, 0.75])
+            quantiles = {"p25": float(p25), "p50": float(p50), "p75": float(p75)}
+
+        return {
+            "dtype": self.dtype or "object",
+            "missing_count": self.null_count,
+            "missing_rate": round(self.null_count / self.total_rows, 4) if self.total_rows else 0.0,
+            "unique_count": int(unique_count),
+            "unique_rate": round(unique_count / self.total_rows, 4) if self.total_rows else 0.0,
+            "min_class_count": int(min_class_count),
+            "count": self.count,
+            "null_count": self.null_count,
+            "mean": self.mean if self.numeric and self.sampled_numeric_count else None,
+            "m2": self.m2 if self.numeric and self.sampled_numeric_count else None,
+            "min": self.minimum if self.numeric else None,
+            "max": self.maximum if self.numeric else None,
+            "quantiles": {
+                "approx": True,
+                "sample_size": len(self.quantile_sample),
+                **quantiles,
+            },
+        }
+
+
+@dataclass(frozen=True)
+class _DatasetScan:
+    row_count: int
+    column_count: int
+    columns_info: dict[str, dict[str, Any]]
+
+
+def _scan_dataset(
+    path: Path,
+    ext: str,
+    *,
+    chunk_size: int = _DATAFRAME_CHUNK_SIZE,
+) -> _DatasetScan:
+    if ext == ".xlsx":
+        _validate_xlsx_size(path, path.stat().st_size)
+
+    accumulators: dict[str, _ColumnAccumulator] = {}
+    row_count = 0
+    for chunk in _iter_dataframe_chunks(path, ext, chunk_size=chunk_size):
+        row_count += len(chunk)
+        for column in chunk.columns:
+            name = str(column)
+            accumulators.setdefault(name, _ColumnAccumulator()).update(chunk[column])
+
+    if ext == ".parquet":
+        import pyarrow.parquet as pq
+
+        row_count = int(pq.ParquetFile(path).metadata.num_rows)
+
+    columns_info = {
+        name: accumulator.to_metadata()
+        for name, accumulator in accumulators.items()
+    }
+
+    histogram_specs: dict[str, tuple[np.ndarray, list[int]]] = {}
+    for name, metadata in columns_info.items():
+        minimum = metadata["min"]
+        maximum = metadata["max"]
+        if minimum is None or maximum is None:
+            continue
+        if minimum == maximum:
+            edges = np.linspace(minimum - 0.5, maximum + 0.5, _HISTOGRAM_BINS + 1)
+        else:
+            edges = np.linspace(minimum, maximum, _HISTOGRAM_BINS + 1)
+        histogram_specs[name] = (edges, [0] * _HISTOGRAM_BINS)
+
+    if histogram_specs:
+        underflow = {name: 0 for name in histogram_specs}
+        overflow = {name: 0 for name in histogram_specs}
+        for chunk in _iter_dataframe_chunks(path, ext, chunk_size=chunk_size):
+            for name, (edges, counts) in histogram_specs.items():
+                values = pd.to_numeric(chunk[name], errors="coerce").dropna().to_numpy(dtype=float)
+                if not values.size:
+                    continue
+                underflow[name] += int((values < edges[0]).sum())
+                overflow[name] += int((values > edges[-1]).sum())
+                in_range = values[(values >= edges[0]) & (values <= edges[-1])]
+                batch_counts, _ = np.histogram(in_range, bins=edges)
+                for index, value in enumerate(batch_counts):
+                    counts[index] += int(value)
+
+        for name, (edges, counts) in histogram_specs.items():
+            columns_info[name]["histogram"] = {
+                "bin_edges": [float(value) for value in edges],
+                "counts": counts,
+                "underflow": underflow[name],
+                "overflow": overflow[name],
+                "missing": columns_info[name]["null_count"],
+            }
+
+    for metadata in columns_info.values():
+        metadata.setdefault("histogram", None)
+
+    return _DatasetScan(
+        row_count=row_count,
+        column_count=len(columns_info),
+        columns_info=columns_info,
+    )
 
 
 def _build_columns_info(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
@@ -122,7 +399,12 @@ def _merge_columns_info_with_sample(
 # ---------------------------------------------------------------------------
 
 
-async def upload_dataset(file: UploadFile, db: AsyncSession) -> Dataset:
+async def upload_dataset(
+    file: UploadFile,
+    db: AsyncSession,
+    *,
+    content_length: int | None = None,
+) -> Dataset:
     """Validate, persist, and catalogue an uploaded dataset file.
 
     Steps:
@@ -135,57 +417,95 @@ async def upload_dataset(file: UploadFile, db: AsyncSession) -> Dataset:
     """
     settings = get_settings()
 
-    # -- extension check --
     original_name = file.filename or "unnamed"
     ext = _validate_extension(original_name)
 
-    # -- size check (read content once) --
-    content = await file.read()
-    file_size = len(content)
-    if file_size > settings.max_upload_size:
+    if content_length is not None and content_length > settings.max_upload_size:
         raise HTTPException(
-            status_code=400,
+            status_code=413,
             detail=(
-                f"File size ({file_size:,} bytes) exceeds the maximum "
+                f"Request size ({content_length:,} bytes) exceeds the maximum "
                 f"allowed size ({settings.max_upload_size:,} bytes)."
             ),
         )
 
-    # -- dedup: reuse existing dataset if file content is identical --
-    existing_dataset = await _find_existing_dataset_by_content(db, content=content, file_size=file_size)
-    if existing_dataset is not None:
-        logger.info("Reusing existing dataset %s for '%s' by content digest", existing_dataset.id, original_name)
-        return existing_dataset
-
-    # -- save to disk --
     unique_name = generate_unique_filename(original_name)
     dest_path = settings.storage_uploads / unique_name
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    dest_path.write_bytes(content)
+    temp_name: str | None = None
+    file_size = 0
+    digest = hashlib.sha256()
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=f".{dest_path.name}.",
+            suffix=".tmp",
+            dir=dest_path.parent,
+            delete=False,
+        ) as tmp:
+            temp_name = tmp.name
+            while chunk := await file.read(_UPLOAD_CHUNK_SIZE):
+                file_size += len(chunk)
+                if file_size > settings.max_upload_size:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"File size exceeds the maximum allowed size "
+                            f"({settings.max_upload_size:,} bytes)."
+                        ),
+                    )
+                tmp.write(chunk)
+                digest.update(chunk)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(temp_name, dest_path)
+        temp_name = None
+    except Exception:
+        if temp_name:
+            Path(temp_name).unlink(missing_ok=True)
+        dest_path.unlink(missing_ok=True)
+        raise
+
+    content_sha256 = digest.hexdigest()
+    if ext == ".xlsx":
+        try:
+            _validate_xlsx_size(dest_path, file_size)
+        except HTTPException:
+            dest_path.unlink(missing_ok=True)
+            raise
+
+    existing_dataset = await _find_existing_dataset_by_content(
+        db,
+        content_sha256=content_sha256,
+        file_size=file_size,
+    )
+    if existing_dataset is not None:
+        dest_path.unlink(missing_ok=True)
+        logger.info("Reusing existing dataset %s for '%s' by content digest", existing_dataset.id, original_name)
+        return existing_dataset
 
     logger.info("Saved uploaded file to %s (%s bytes)", dest_path, file_size)
 
-    # -- read with pandas for metadata --
     try:
-        df = _read_dataframe(dest_path, ext)
+        scan = _scan_dataset(dest_path, ext)
+    except HTTPException:
+        dest_path.unlink(missing_ok=True)
+        raise
     except Exception as exc:
-        # Clean up the file if pandas cannot parse it
         dest_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=400,
             detail=f"Failed to parse uploaded file: {exc}",
         ) from exc
 
-    columns_info = _build_columns_info(df)
-
-    # -- persist to DB --
     dataset = Dataset(
         name=original_name,
         file_path=to_portable_storage_path(dest_path),
         file_size=file_size,
-        row_count=len(df),
-        column_count=len(df.columns),
-        columns_info=columns_info,
+        row_count=scan.row_count,
+        column_count=scan.column_count,
+        columns_info=scan.columns_info,
+        content_sha256=content_sha256,
     )
     db.add(dataset)
     await db.flush()
@@ -195,6 +515,33 @@ async def upload_dataset(file: UploadFile, db: AsyncSession) -> Dataset:
 
     logger.info("Created dataset record %s for '%s'", dataset.id, original_name)
     return dataset
+
+
+def _sample_dataframe(
+    path: Path,
+    ext: str,
+    *,
+    sample_size: int = _ANALYSIS_SAMPLE_SIZE,
+    seed: int = 42,
+) -> tuple[pd.DataFrame, int]:
+    """Return a deterministic uniform sample without materialising the full file."""
+    rng = np.random.default_rng(seed)
+    sampled: pd.DataFrame | None = None
+    total_rows = 0
+    priority_column = "__m1_sample_priority__"
+    for chunk in _iter_dataframe_chunks(path, ext):
+        total_rows += len(chunk)
+        candidate = chunk.copy()
+        candidate[priority_column] = rng.random(len(candidate))
+        if sampled is not None:
+            candidate = pd.concat([sampled, candidate], ignore_index=True)
+        if len(candidate) > sample_size:
+            candidate = candidate.nsmallest(sample_size, priority_column)
+        sampled = candidate
+
+    if sampled is None:
+        return pd.DataFrame(), 0
+    return sampled.drop(columns=[priority_column]).reset_index(drop=True), total_rows
 
 
 async def get_dataset_preview(
@@ -301,17 +648,30 @@ async def get_correlation(
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     file_path = _require_dataset_path(dataset)
-    df = _read_dataframe(file_path, file_path.suffix.lower())
+    df, total_rows = _sample_dataframe(file_path, file_path.suffix.lower())
+    sampled = total_rows > _ANALYSIS_SAMPLE_SIZE
     numeric_df = df.select_dtypes(include="number")
 
     if numeric_df.empty:
-        return {"columns": [], "matrix": [], "method": method}
+        return {
+            "columns": [],
+            "matrix": [],
+            "method": method,
+            "sampled": sampled,
+            "sample_size": len(df),
+        }
 
     corr = numeric_df.corr(method=method).round(4)
     columns = corr.columns.tolist()
     matrix = corr.where(corr.notna(), None).values.tolist()
 
-    return {"columns": columns, "matrix": matrix, "method": method}
+    return {
+        "columns": columns,
+        "matrix": matrix,
+        "method": method,
+        "sampled": sampled,
+        "sample_size": len(df),
+    }
 
 
 async def get_target_distribution(
@@ -326,7 +686,8 @@ async def get_target_distribution(
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     file_path = _require_dataset_path(dataset)
-    df = _read_dataframe(file_path, file_path.suffix.lower())
+    df, total_rows = _sample_dataframe(file_path, file_path.suffix.lower())
+    sampled = total_rows > _ANALYSIS_SAMPLE_SIZE
 
     if target_column not in df.columns:
         raise HTTPException(
@@ -367,6 +728,8 @@ async def get_target_distribution(
         "stats": stats,
         "value_counts": counts,
         "histogram": hist,
+        "sampled": sampled,
+        "sample_size": len(df),
     }
 
 

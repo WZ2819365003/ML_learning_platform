@@ -34,6 +34,7 @@ from app.utils.storage_paths import resolve_runtime_path
 logger = logging.getLogger(__name__)
 
 _CIRCUIT_COOLDOWN_SECONDS = 30.0
+_DOWNLOAD_CHUNK_SIZE = 8 * 1024 * 1024
 _circuit_open_until = 0.0
 _circuit_lock = threading.Lock()
 
@@ -212,13 +213,10 @@ def restore_file(
     destination.parent.mkdir(parents=True, exist_ok=True)
     for object_key in object_keys:
         temp_name: str | None = None
+        body = None
         try:
             response = client.get_object(Bucket=settings.s3_bucket, Key=object_key)
             body = response["Body"]
-            payload = body.read()
-            close = getattr(body, "close", None)
-            if callable(close):
-                close()
 
             with tempfile.NamedTemporaryFile(
                 mode="wb",
@@ -228,7 +226,8 @@ def restore_file(
                 delete=False,
             ) as tmp:
                 temp_name = tmp.name
-                tmp.write(payload)
+                while chunk := body.read(_DOWNLOAD_CHUNK_SIZE):
+                    tmp.write(chunk)
                 tmp.flush()
                 os.fsync(tmp.fileno())
             os.replace(temp_name, destination)
@@ -241,6 +240,9 @@ def restore_file(
         except Exception as exc:
             logger.warning("Object restore failed (%s): %s", object_key, exc)
         finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
             if temp_name:
                 Path(temp_name).unlink(missing_ok=True)
     return None

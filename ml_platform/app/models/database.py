@@ -119,6 +119,7 @@ class Dataset(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
     row_count: Mapped[int | None] = mapped_column(default=None)
     column_count: Mapped[int | None] = mapped_column(default=None)
     columns_info: Mapped[dict | None] = mapped_column(JSON, default=None)

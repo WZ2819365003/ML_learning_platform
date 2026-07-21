@@ -1,3 +1,4 @@
+import io
 from types import SimpleNamespace
 
 from botocore.exceptions import ClientError
@@ -54,8 +55,15 @@ def test_upload_failure_opens_process_circuit(monkeypatch, tmp_path):
 
 def test_restore_file_downloads_missing_artifact_atomically(monkeypatch, tmp_path):
     class Body:
-        def read(self):
-            return b"persisted-artifact"
+        def __init__(self):
+            self.payload = io.BytesIO(b"persisted-artifact")
+            self.read_sizes = []
+
+        def read(self, size=-1):
+            self.read_sizes.append(size)
+            return self.payload.read(size)
+
+    body = Body()
 
     class Client:
         def get_object(self, **kwargs):
@@ -65,7 +73,7 @@ def test_restore_file_downloads_missing_artifact_atomically(monkeypatch, tmp_pat
                     "GetObject",
                 )
             assert kwargs == {"Bucket": "test-bucket", "Key": "models/task.joblib"}
-            return {"Body": Body()}
+            return {"Body": body}
 
     destination = tmp_path / "nested" / "task.joblib"
     monkeypatch.setattr(object_storage, "get_settings", _settings)
@@ -79,6 +87,7 @@ def test_restore_file_downloads_missing_artifact_atomically(monkeypatch, tmp_pat
     assert restored_key == "models/task.joblib"
     assert destination.read_bytes() == b"persisted-artifact"
     assert list(destination.parent.glob("*.tmp")) == []
+    assert body.read_sizes and set(body.read_sizes) == {object_storage._DOWNLOAD_CHUNK_SIZE}
 
 
 def test_dataset_object_key_is_stable_across_runtime_roots():
