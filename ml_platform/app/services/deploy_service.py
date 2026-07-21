@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections import OrderedDict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import joblib
@@ -15,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import InferenceJob, ModelDeployment, TrainingTask, Dataset
 from app.services.object_storage import restore_dataset_file, restore_model_bundle
 from app.services.prediction_service import load_dataframe, predict_with_model
-from app.utils.storage_paths import resolve_runtime_path
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class _ModelCache:
         self._cache: OrderedDict[str, Any] = OrderedDict()
         self.max_size = max_size
 
-    def get(self, deployment_id: str, model_path: str) -> Any:
+    def get(self, deployment_id: str, model_path: str | Path) -> Any:
         if deployment_id in self._cache:
             self._cache.move_to_end(deployment_id)
             return self._cache[deployment_id]
@@ -184,7 +184,13 @@ async def run_inference(
     if task is None or not task.model_path:
         raise HTTPException(status_code=404, detail="Associated task or model not found")
 
-    model = _model_cache.get(deployment_id, str(resolve_runtime_path(task.model_path)))
+    model_path = restore_model_bundle(task.model_path)
+    if model_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="模型文件不存在，且对象存储中无可恢复副本",
+        )
+    model = _model_cache.get(deployment_id, model_path)
 
     # Legacy estimators still need their training dataframe; new artifacts do not refit it.
     ds_result = await db.execute(select(Dataset).where(Dataset.id == task.dataset_id))
@@ -192,7 +198,13 @@ async def run_inference(
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    training_df = load_dataframe(dataset.file_path)
+    dataset_path = restore_dataset_file(dataset.id, dataset.file_path)
+    if dataset_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="数据集文件不存在，且对象存储中无可恢复副本",
+        )
+    training_df = load_dataframe(dataset_path)
     prediction = predict_with_model(
         model,
         training_df,

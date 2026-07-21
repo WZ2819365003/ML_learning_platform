@@ -32,6 +32,7 @@ from app.models.database import (
     PlatformTask,
     PlatformExperiment,
 )
+from app.services.object_storage import restore_dataset_file
 from app.services.prediction_service import load_dataframe
 
 logger = logging.getLogger(__name__)
@@ -305,8 +306,16 @@ def _validate_target_column(
     if not target_column:
         return
 
+    restored_path = restore_dataset_file(dataset.id, dataset.file_path)
+    if restored_path is None:
+        logger.warning(
+            "Skipping target validation for dataset %s; artifact is unavailable locally and remotely",
+            dataset.id,
+        )
+        return
+
     try:
-        df = load_dataframe(dataset.file_path)
+        df = load_dataframe(restored_path)
     except Exception as exc:  # noqa: BLE001
         # Historical tests and stale dev DB rows can point at unavailable
         # files. Keep creation best-effort; actual training still fails with

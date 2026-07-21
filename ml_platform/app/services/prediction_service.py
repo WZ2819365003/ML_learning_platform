@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from app.core.model_artifact import is_tabular_artifact
 from app.models.database import AsyncSession, Dataset, TrainingTask
+from app.services.object_storage import restore_dataset_file, restore_model_bundle
 from app.utils.storage_paths import resolve_runtime_path
 
 DERIVED_TARGET_COLUMNS: dict[str, set[str]] = {
@@ -218,11 +219,20 @@ async def predict_rows(
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    model_path = resolve_runtime_path(task.model_path)
-    if not model_path.exists():
-        raise HTTPException(status_code=404, detail="Saved model file not found")
+    model_path = restore_model_bundle(task.model_path)
+    if model_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="模型文件不存在，且对象存储中无可恢复副本",
+        )
 
-    training_df = load_dataframe(dataset.file_path)
+    dataset_path = restore_dataset_file(dataset.id, dataset.file_path)
+    if dataset_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="数据集文件不存在，且对象存储中无可恢复副本",
+        )
+    training_df = load_dataframe(dataset_path)
     model = joblib.load(model_path)
     try:
         prediction = predict_with_model(

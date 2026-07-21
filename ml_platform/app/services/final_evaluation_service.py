@@ -31,9 +31,9 @@ from app.services.modeling_task_service import (
     task_final_evaluation_state,
     task_leaderboard,
 )
+from app.services.object_storage import restore_dataset_file, restore_model_bundle
 from app.services.training_service import _prepare_data
 from app.services.task_lifecycle_lock import task_lifecycle_guard
-from app.utils.storage_paths import resolve_runtime_path
 
 
 FINAL_SPLIT_SEED = 42
@@ -376,9 +376,15 @@ async def _ml_evaluation_spec(
     ).scalar_one_or_none()
     if dataset is None:
         return {"skip": "missing_dataset"}
+    model_path = restore_model_bundle(training_task.model_path)
+    if model_path is None:
+        return {"skip": "missing_model_artifact"}
+    dataset_path = restore_dataset_file(dataset.id, dataset.file_path)
+    if dataset_path is None:
+        return {"skip": "missing_dataset"}
     return {
-        "model_path": resolve_runtime_path(training_task.model_path),
-        "dataset_path": resolve_runtime_path(dataset.file_path),
+        "model_path": model_path,
+        "dataset_path": dataset_path,
         "dataset_id": dataset.id,
         "target_column": training_task.target_column,
         "model_type": training_task.model_type,
@@ -414,7 +420,12 @@ async def _dl_evaluation_spec(
     ).scalar_one_or_none()
     if dataset is None:
         return {"skip": "missing_dataset"}
-    model_path = resolve_runtime_path(dl_task.model_path)
+    model_path = restore_model_bundle(dl_task.model_path)
+    if model_path is None:
+        return {"skip": "missing_model_artifact"}
+    dataset_path = restore_dataset_file(dataset.id, dataset.file_path)
+    if dataset_path is None:
+        return {"skip": "missing_dataset"}
     sidecar = Path(str(model_path) + ".preprocessor.joblib")
     if not sidecar.exists():
         return {"skip": "legacy_dl_model_without_preprocessor"}
@@ -424,7 +435,7 @@ async def _dl_evaluation_spec(
     )
     return {
         "model_path": model_path,
-        "dataset_path": resolve_runtime_path(dataset.file_path),
+        "dataset_path": dataset_path,
         "dataset_id": dataset.id,
         "target_column": dl_task.target_column,
         "model_type": dl_task.model_type,
