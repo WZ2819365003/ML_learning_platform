@@ -9,6 +9,7 @@ now rejects bad payloads with an actionable 422 before any DB work.
 from __future__ import annotations
 
 import pytest
+from unittest.mock import AsyncMock
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
@@ -22,7 +23,7 @@ def app_with_db(session_factory, monkeypatch):
     """FastAPI app wired to the in-memory V3 test database."""
     from app.services import tuning_service as svc
 
-    monkeypatch.setattr(svc, "_launch_concurrent", lambda *args, **kwargs: None)
+    monkeypatch.setattr(svc, "_launch_concurrent", AsyncMock())
     monkeypatch.setattr(svc, "_launch_bayesian", lambda *args, **kwargs: None)
 
     app = create_app()

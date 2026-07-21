@@ -109,6 +109,10 @@ services:
     environment:
       DATABASE_URL: "${DATABASE_URL:-mysql+aiomysql://root:123456@mysql:3306/ml_platform}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+      CELERY_BROKER_URL: "${CELERY_BROKER_URL:-redis://redis:6379/0}"
+      CELERY_RESULT_BACKEND: "${CELERY_RESULT_BACKEND:-redis://redis:6379/1}"
+      CELERY_KINDS: "${CELERY_KINDS:-}"
+      EVENT_BUS_MODE: "${EVENT_BUS_MODE:-memory}"
       MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI:-sqlite:////app/storage/mlflow.db}"
       S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-http://minio:9000}"
       S3_ACCESS_KEY: "${S3_ACCESS_KEY:-mlplatform}"
@@ -133,6 +137,42 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # Celery worker — shares backend storage so restored datasets and generated
+  # model/log artifacts are visible to both processes.
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: ml_platform_worker
+    restart: unless-stopped
+    command: celery -A app.scheduler.celery_app worker -Q train,explain,forecast,default --concurrency=2 --loglevel=info
+    volumes:
+      - ml_backend_storage:/app/storage
+    env_file:
+      - path: .deploy_secrets
+        required: false
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-mysql+aiomysql://root:123456@mysql:3306/ml_platform}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+      CELERY_BROKER_URL: "${CELERY_BROKER_URL:-redis://redis:6379/0}"
+      CELERY_RESULT_BACKEND: "${CELERY_RESULT_BACKEND:-redis://redis:6379/1}"
+      CELERY_KINDS: "${CELERY_KINDS:-}"
+      EVENT_BUS_MODE: "${EVENT_BUS_MODE:-memory}"
+      MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI:-sqlite:////app/storage/mlflow.db}"
+      S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-http://minio:9000}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY:-mlplatform}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY:-mlplatform123}"
+      S3_BUCKET: "${S3_BUCKET:-ml-platform}"
+      S3_ENABLED: "${S3_ENABLED:-true}"
+      ENVIRONMENT: "${ENVIRONMENT:-production}"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
 
   # 前端 React (production build)
   frontend:

@@ -53,8 +53,23 @@ class EventBus:
                 pass  # drop if consumer is too slow
 
 
-# Global event bus singleton
-event_bus = EventBus()
+def _build_event_bus():
+    settings = get_settings()
+    if settings.event_bus_mode == "redis":
+        from app.core.event_bus_redis import RedisEventBus
+
+        return RedisEventBus(redis_url=settings.redis_url)
+    if settings.event_bus_mode != "memory":
+        logger.warning(
+            "Unknown EVENT_BUS_MODE=%r; falling back to memory",
+            settings.event_bus_mode,
+        )
+    return EventBus()
+
+
+# Global event bus singleton. The default branch is the original in-memory
+# implementation, preserving synchronous publish semantics and call paths.
+event_bus = _build_event_bus()
 
 
 class TrainingLogger:

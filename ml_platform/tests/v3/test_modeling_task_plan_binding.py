@@ -208,8 +208,14 @@ async def test_dispatch_falls_back_to_snapshot(db, dataset, plan, session_factor
         return {"run_id": kwargs.get("run_id") or (args[2] if len(args) > 2 else None),
                 "status": "SUCCESS", "metrics": {}}
 
+    class NoopScheduler:
+        async def submit(self, platform_task_id):
+            return None
+
     with patch("app.models.database.async_session_factory", session_factory), \
-         patch.object(tuning_service, "_execute_single_trial", noop_trial):
+         patch.object(tuning_service, "async_session_factory", session_factory), \
+         patch.object(tuning_service, "_execute_single_trial", noop_trial), \
+         patch.object(tuning_service, "get_scheduler", return_value=NoopScheduler()):
         out = await tuning_service.dispatch_experiment_batch(
             db,
             modeling_task_id=task_payload["id"],

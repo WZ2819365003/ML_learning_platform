@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pytest
 import optuna
+from unittest.mock import AsyncMock
 
 from app.services import training_service as training_svc
 from app.services import tuning_service as svc
@@ -278,11 +279,10 @@ async def test_finalise_batch_never_opens_sealed_holdout(
     monkeypatch.setattr(svc, "_schedule_shap_for_top_runs", fake_shap)
 
     await svc._finalise_batch(exp_id, task_id)
+    await svc._finalise_batch(exp_id, task_id)
 
-    assert calls == [
-        ("summary", task_id),
-        ("shap", exp_id),
-    ]
+    assert calls.count(("summary", task_id)) == 2
+    assert calls.count(("shap", exp_id)) == 1
 
 
 async def test_schedule_shap_includes_successful_dl_runs(
@@ -322,11 +322,12 @@ async def test_schedule_shap_includes_successful_dl_runs(
 
     dispatched = []
 
-    async def fake_dispatch(task_id, kind, payload_ref, priority):
-        dispatched.append((task_id, kind, payload_ref, priority))
+    class FakeScheduler:
+        async def submit(self, task_id):
+            dispatched.append(task_id)
 
     monkeypatch.setattr(svc, "async_session_factory", session_factory)
-    monkeypatch.setattr(svc, "dispatch_platform_task", fake_dispatch)
+    monkeypatch.setattr(svc, "get_scheduler", lambda kind: FakeScheduler())
 
     await svc._schedule_shap_for_top_runs(experiment_id, top_k=1)
 
@@ -335,7 +336,7 @@ async def test_schedule_shap_includes_successful_dl_runs(
             await db.execute(select(PlatformTask).where(PlatformTask.kind == "explain"))
         ).scalars().all()
     assert [task.payload_ref for task in explain_tasks] == [f"explain:{run_id}"]
-    assert len(dispatched) == 1
+    assert dispatched == [explain_tasks[0].id]
 
 
 @pytest.mark.parametrize("state", ["EVALUATING", "FINALIZED", "FAILED"])
@@ -417,7 +418,7 @@ async def test_dispatch_experiment_bundle_creates_one_batch_per_strategy(db, mon
     from app.models.database import Dataset, ModelingTask, PlatformExperiment
     from sqlalchemy import select
 
-    monkeypatch.setattr(svc, "_launch_concurrent", lambda *args, **kwargs: None)
+    monkeypatch.setattr(svc, "_launch_concurrent", AsyncMock())
     monkeypatch.setattr(svc, "_launch_bayesian", lambda *args, **kwargs: None)
 
     ds = Dataset(name="demo.csv", file_path="/tmp/demo.csv", file_size=1, row_count=20)
@@ -489,7 +490,7 @@ async def test_dispatch_persists_cv_folds_on_training_tasks(db, monkeypatch):
     from app.models.database import Dataset, ModelingTask, TrainingTask
     from sqlalchemy import select
 
-    monkeypatch.setattr(svc, "_launch_concurrent", lambda *args, **kwargs: None)
+    monkeypatch.setattr(svc, "_launch_concurrent", AsyncMock())
 
     ds = Dataset(name="demo.csv", file_path="/tmp/demo.csv", file_size=1, row_count=20)
     db.add(ds)
@@ -526,7 +527,7 @@ async def test_search_strategy_rejects_mixed_dl_models_instead_of_dropping_them(
     from fastapi import HTTPException
     from app.models.database import Dataset, ModelingTask
 
-    monkeypatch.setattr(svc, "_launch_concurrent", lambda *args, **kwargs: None)
+    monkeypatch.setattr(svc, "_launch_concurrent", AsyncMock())
 
     ds = Dataset(name="demo.csv", file_path="/tmp/demo.csv", file_size=1, row_count=20)
     db.add(ds)

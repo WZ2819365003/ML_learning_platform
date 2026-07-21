@@ -26,6 +26,7 @@ service is enough), which matches how FastAPI routers are wired.
 from __future__ import annotations
 
 import logging
+from importlib import import_module
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,18 @@ class Executor(Protocol):
 
 
 _EXECUTORS: dict[str, Executor] = {}
+
+_EXECUTOR_MODULES = (
+    "app.services.training_service",
+    "app.services.dl_service",
+    "app.services.explain_service",
+)
+
+
+def load_executor_modules() -> None:
+    """Import every service module that registers scheduler executors."""
+    for module_name in _EXECUTOR_MODULES:
+        import_module(module_name)
 
 
 def register_executor(kind: str, fn: Callable[..., Awaitable[dict[str, Any]]]) -> None:

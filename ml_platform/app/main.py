@@ -2,6 +2,7 @@
 ML Training Platform -- FastAPI application entry point.
 """
 
+import logging
 import shutil
 from contextlib import asynccontextmanager
 from typing import Any
@@ -31,6 +32,8 @@ from app.services.timeseries_service import resume_unfinished_ts_tasks
 from app.services.object_storage import upload_dataset_file
 from app.utils.file_utils import generate_unique_filename
 from app.utils.storage_paths import to_portable_storage_path
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Preset tag definitions — seeded once on first startup
@@ -167,22 +170,36 @@ async def lifespan(app: FastAPI):
         from app.core.migrations import run_startup_migrations
 
         await run_startup_migrations(async_engine)
-    # V3 Phase 2 — force-import services so their module-level
-    # ``register_executor`` calls populate the Scheduler registry before any
-    # task dispatch happens.  The router imports already cover training_service
-    # and dl_service, but explain_service is only imported lazily inside
-    # handlers — so pull it in explicitly here.
-    import app.services.training_service  # noqa: F401
-    import app.services.dl_service        # noqa: F401
-    import app.services.explain_service   # noqa: F401
-    await _seed_tag_library()
-    await _seed_example_datasets()
-    await resume_unfinished_ts_tasks()
+    from app.core.logger import event_bus
+    from app.scheduler.executors import load_executor_modules
+    from app.scheduler.scheduler import reconcile_queued_tasks
 
-    yield
+    load_executor_modules()
+    start_event_bus = getattr(event_bus, "start", None)
+    stop_event_bus = getattr(event_bus, "stop", None)
+    if start_event_bus is not None:
+        await start_event_bus()
 
-    # --- Shutdown ---
-    await async_engine.dispose()
+    try:
+        try:
+            reconciled = await reconcile_queued_tasks()
+            if reconciled:
+                logger.info("Reconciled %d stale queued task(s)", len(reconciled))
+        except Exception:
+            # Recovery is best-effort; a transient DB outage should not make
+            # the API permanently unbootable.
+            logger.exception("Queued-task reconciliation failed during startup")
+
+        await _seed_tag_library()
+        await _seed_example_datasets()
+        await resume_unfinished_ts_tasks()
+
+        yield
+    finally:
+        # --- Shutdown ---
+        if stop_event_bus is not None:
+            await stop_event_bus()
+        await async_engine.dispose()
 
 
 def create_app() -> FastAPI:

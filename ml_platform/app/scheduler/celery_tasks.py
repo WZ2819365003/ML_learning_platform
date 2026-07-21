@@ -47,6 +47,9 @@ class MLBaseTask(CeleryTask):
         platform_task_id = kwargs.get("platform_task_id") or (args[0] if args else None)
         if platform_task_id:
             _run_async(_mark_task_failed(platform_task_id, str(exc)))
+            from app.scheduler.scheduler import CeleryScheduler
+
+            _run_async(CeleryScheduler().on_task_done(platform_task_id))
         logger.error("Task %s failed: %s", task_id, exc)
 
     def on_retry(self, exc, task_id, args, kwargs, einfo):
@@ -240,6 +243,7 @@ async def _execute_explain(platform_task_id: str) -> dict:
     name="app.scheduler.celery_tasks.run_platform_task_generic",
     max_retries=3,
     default_retry_delay=30,
+    retry_backoff=True,
 )
 def run_platform_task_generic(self, platform_task_id: str) -> dict:
     """Generic PlatformTask runner — dispatches via the executor registry."""
@@ -255,7 +259,8 @@ def run_platform_task_generic(self, platform_task_id: str) -> dict:
         raise
     except Exception as exc:
         # run_with_status already wrote FAILED; bubble up so Celery retries.
-        raise self.retry(exc=exc)
+        countdown = 30 * (2 ** int(getattr(self.request, "retries", 0)))
+        raise self.retry(exc=exc, countdown=countdown)
 
 
 async def _mark_celery_id(platform_task_id: str, celery_id: str) -> None:
@@ -276,13 +281,11 @@ async def _execute_generic(platform_task_id: str) -> dict:
     """Resolve kind + payload_ref and invoke the executor via run_with_status."""
     from app.models.database import PlatformTask, async_session_factory
     from sqlalchemy import select
-    from app.scheduler.executors import has_executor, run_with_status
+    from app.scheduler.executors import has_executor, load_executor_modules, run_with_status
 
     # Force-import services so their register_executor calls have fired —
     # the Celery worker process may not have run app.main lifespan.
-    import app.services.training_service  # noqa: F401
-    import app.services.dl_service        # noqa: F401
-    import app.services.explain_service   # noqa: F401
+    load_executor_modules()
 
     async with async_session_factory() as db:
         result = await db.execute(
@@ -314,4 +317,8 @@ async def _execute_generic(platform_task_id: str) -> dict:
         return {"metrics": {}}
 
     # run_with_status owns RUNNING → SUCCESS/FAILED transitions.
-    return await run_with_status(kind, domain_id, platform_task_id)
+    result = await run_with_status(kind, domain_id, platform_task_id)
+    from app.scheduler.scheduler import CeleryScheduler
+
+    await CeleryScheduler().on_task_done(platform_task_id)
+    return result

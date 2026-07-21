@@ -19,7 +19,8 @@ from app.models.database import (
     PlatformTask,
     get_db,
 )
-from app.scheduler.task_runner import cancel_task, dispatch_platform_task, retry_task
+from app.scheduler.scheduler import get_scheduler
+from app.scheduler.task_runner import cancel_task, retry_task
 from app.services.platform_task_detail_service import get_platform_task_detail
 
 router = APIRouter(prefix="/platform/tasks", tags=["Platform Tasks V3"])
@@ -385,7 +386,7 @@ async def retry_platform_task(
         status_code = 404 if "not found" in detail else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
     await db.commit()
-    await dispatch_platform_task(task.id, task.kind, task.payload_ref, task.priority)
+    await get_scheduler(task.kind).submit(task.id)
     return _serialize(task)
 
 

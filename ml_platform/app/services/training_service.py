@@ -138,6 +138,8 @@ def _apply_class_weight(
 ) -> dict:
     """Translate the top-level class_weight field into model-specific hyperparameter keys."""
     if not class_weight:
+        class_weight = hyperparameters.get("class_weight")
+    if not class_weight:
         return hyperparameters
 
     hp = dict(hyperparameters)
@@ -388,11 +390,16 @@ async def create_training_task_record(db: AsyncSession, candidate: dict) -> Trai
     cv_config = candidate.get("cross_validation") or {}
     cv_folds = int(candidate.get("cv_folds") or cv_config.get("folds") or 5)
     short_id = str(_uuid_mod.uuid4())[:8]
+    hyperparameters = dict(candidate.get("hyperparameters", {}))
+    if candidate.get("class_weight"):
+        # Scheduler executors reconstruct their input solely from this
+        # committed domain row, so persist the top-level option with it.
+        hyperparameters["class_weight"] = candidate["class_weight"]
     task = TrainingTask(
         dataset_id=dataset_id,
         model_type=model_type,
         name=f"{model_type}_{short_id}",
-        hyperparameters=candidate.get("hyperparameters", {}),
+        hyperparameters=hyperparameters,
         target_column=candidate["target_column"],
         test_size=candidate.get("test_size", 0.2),
         cv_folds=cv_folds,
@@ -489,8 +496,6 @@ async def _run_training_sync_by_id(
 
 async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     """Create a training task, register it in the unified platform, and launch it."""
-    settings = get_settings()
-
     # Validate dataset exists
     dataset_id = request_data["dataset_id"]
     result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
@@ -514,11 +519,14 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     cv_folds = cv_config.get("folds", 5) if cv_config.get("enabled", True) else 3
     import uuid as _uuid_mod
     short_id = str(_uuid_mod.uuid4())[:8]
+    hyperparameters = dict(request_data.get("hyperparameters", {}))
+    if request_data.get("class_weight"):
+        hyperparameters["class_weight"] = request_data["class_weight"]
     task = TrainingTask(
         dataset_id=dataset_id,
         model_type=request_data["model_type"],
         name=f"{request_data['model_type']}_{short_id}",
-        hyperparameters=request_data.get("hyperparameters", {}),
+        hyperparameters=hyperparameters,
         target_column=request_data["target_column"],
         test_size=request_data.get("test_size", 0.2),
         cv_folds=cv_folds,
@@ -530,8 +538,6 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     await db.refresh(task)
 
     task_id = task.id
-    file_path = str(restored_dataset)
-
     # ── Write-back contract: register in unified platform task table ──────────
     from app.scheduler.task_runner import register_domain_task
     platform_task = await register_domain_task(
@@ -543,21 +549,14 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     # commit both records together
     await db.commit()
 
-    # Launch asyncio background training (dev mode — no Celery worker required)
-    bg_task = asyncio.create_task(_execute_training(
-        task_id=task_id,
-        platform_task_id=platform_task_id,
-        file_path=file_path,
-        target_column=request_data["target_column"],
-        model_type=request_data["model_type"],
-        hyperparameters=request_data.get("hyperparameters", {}),
-        test_size=request_data.get("test_size", 0.2),
-        eval_metrics=request_data.get("eval_metrics", ["accuracy"]),
-        cv_folds=cv_folds,
-        model_save_dir=str(settings.storage_models),
-        class_weight=request_data.get("class_weight"),
-    ))
-    _running_tasks[task_id] = bg_task
+    from app.scheduler.scheduler import get_scheduler
+
+    scheduled = await get_scheduler("train").submit(platform_task_id)
+    if isinstance(scheduled, asyncio.Task):
+        _running_tasks[task_id] = scheduled
+        scheduled.add_done_callback(
+            lambda _done, domain_id=task_id: _running_tasks.pop(domain_id, None)
+        )
 
     return task
 

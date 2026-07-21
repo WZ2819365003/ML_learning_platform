@@ -81,6 +81,11 @@ class Settings:
     scheduler_mode: str = field(
         default_factory=lambda: os.getenv("SCHEDULER_MODE", "inprocess").lower()
     )
+    # Comma-separated task kinds enabled for Celery. Empty means all kinds
+    # remain in-process; SCHEDULER_MODE=celery stays the global override.
+    celery_kinds: str = field(
+        default_factory=lambda: os.getenv("CELERY_KINDS", "")
+    )
 
     # Event bus mode — ``memory`` keeps the in-process pub/sub (unit tests +
     # inprocess scheduler); ``redis`` uses Redis channels so Celery workers

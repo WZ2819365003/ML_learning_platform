@@ -20,9 +20,10 @@ Dependencies:
 
 Design notes
 ------------
-- baseline & grid_search fire runs concurrently via ``asyncio.create_task``.
+- baseline & grid_search submit persisted runs through the per-kind scheduler.
 - bayesian_search runs one trial at a time because Optuna's TPE needs the
-  last result before suggesting the next set of hyperparameters.
+  last result before suggesting the next set of hyperparameters. Its outer
+  in-process orchestrator remains until M2d moves study state to RDBStorage.
 - ``search_space`` shape:
     grid_search:
       {"<model_type>": {"param_name": [v1, v2, ...], ...}, ...}
@@ -61,10 +62,10 @@ from app.models.database import (
     async_session_factory,
 )
 from app.scheduler.task_runner import (
-    dispatch_platform_task,
     register_domain_task,
     update_platform_task_status,
 )
+from app.scheduler.scheduler import get_scheduler
 from app.services.modeling_task_service import (
     load_tuning_spaces,
     refresh_task_summary,
@@ -435,7 +436,7 @@ async def _dispatch_experiment_batch_locked(
             raise HTTPException(status_code=422, detail="Baseline produced no trials — check selected_models")
         await _persist_trials(db, exp, task, trials, eval_metrics, test_size=test_size, cv_folds=cv_folds)
         await db.commit()
-        _launch_concurrent(exp.id, modeling_task_id)
+        await _launch_concurrent(exp.id, modeling_task_id)
     elif strategy_type == "grid_search":
         ml_trials = _expand_grid_search(ml_models, tuning_defaults, search_space, max_trials)
         trials = ml_trials + _renumber_trials(dl_trials, start=len(ml_trials) + 1)
@@ -447,7 +448,7 @@ async def _dispatch_experiment_batch_locked(
             )
         await _persist_trials(db, exp, task, trials, eval_metrics, test_size=test_size, cv_folds=cv_folds)
         await db.commit()
-        _launch_concurrent(exp.id, modeling_task_id)
+        await _launch_concurrent(exp.id, modeling_task_id)
     elif strategy_type == "bayesian_search":
         # ML part runs bayesian; DL part runs baseline concurrently (persisted now).
         if dl_trials:
@@ -455,7 +456,7 @@ async def _dispatch_experiment_batch_locked(
         total_trials = _count_bayesian_trials(ml_models, budget_config, max_trials) + len(dl_trials)
         await db.commit()
         if dl_trials:
-            _launch_concurrent(exp.id, modeling_task_id)
+            await _launch_concurrent(exp.id, modeling_task_id)
         if ml_models:
             _launch_bayesian(
                 experiment_id=exp.id,
@@ -828,13 +829,13 @@ async def _create_dl_training_task_record(
 # Launch helpers
 # ---------------------------------------------------------------------------
 
-def _launch_concurrent(experiment_id: str, modeling_task_id: str) -> None:
-    """Fire one asyncio coroutine per persisted PENDING run."""
-    asyncio.create_task(_run_concurrent_batch(experiment_id, modeling_task_id))
+async def _launch_concurrent(experiment_id: str, modeling_task_id: str) -> None:
+    """Submit every persisted PENDING run without waiting for execution."""
+    await _run_concurrent_batch(experiment_id, modeling_task_id)
 
 
 async def _run_concurrent_batch(experiment_id: str, modeling_task_id: str) -> None:
-    """Launch all PENDING runs of an experiment in parallel and wait for completion."""
+    """Submit all PENDING runs; their scheduler wrappers finalise the batch."""
     async with async_session_factory() as db:
         rows = await db.execute(
             select(ExperimentRun).where(
@@ -867,14 +868,20 @@ async def _run_concurrent_batch(experiment_id: str, modeling_task_id: str) -> No
             elif domain_fallback:
                 full_entries.append(("train", domain_fallback, platform_task_id, run_id))
 
-    await asyncio.gather(
+    submissions = await asyncio.gather(
         *(
-            _execute_single_trial(dti, pti, rid, experiment_id, kind=kind)
-            for kind, dti, pti, rid in full_entries
+            get_scheduler(kind).submit(platform_task_id)
+            for kind, _domain_id, platform_task_id, _run_id in full_entries
         ),
         return_exceptions=True,
     )
-    await _finalise_batch(experiment_id, modeling_task_id)
+    for submission in submissions:
+        if isinstance(submission, BaseException):
+            logger.error(
+                "Failed to submit experiment %s trial: %s",
+                experiment_id,
+                submission,
+            )
 
 
 def _parse_domain_task_id_from_payload_ref(run: ExperimentRun) -> str | None:
@@ -1062,10 +1069,12 @@ async def _finalise_batch(experiment_id: str, modeling_task_id: str) -> None:
         if total > 0 and done >= total:
             exp = (
                 await db.execute(
-                    select(PlatformExperiment).where(PlatformExperiment.id == experiment_id)
+                    select(PlatformExperiment)
+                    .where(PlatformExperiment.id == experiment_id)
+                    .with_for_update()
                 )
             ).scalar_one_or_none()
-            if exp:
+            if exp and exp.status not in {"COMPLETED", "FAILED"}:
                 if status_map.get("SUCCESS", 0) == 0:
                     exp.status = "FAILED"
                 else:
@@ -1158,10 +1167,10 @@ async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> 
             dispatches.append((platform_task.id, "explain", f"explain:{run.id}"))
         await db.commit()
 
-    # Dispatch outside the DB transaction so asyncio.create_task() fires cleanly.
+    # Dispatch outside the DB transaction so Celery never races an uncommitted row.
     for platform_task_id, kind, payload_ref in dispatches:
         try:
-            await dispatch_platform_task(platform_task_id, kind, payload_ref, 3)
+            await get_scheduler(kind).submit(platform_task_id)
             logger.info(
                 "SHAP explain dispatched: experiment=%s platform_task=%s payload=%s",
                 experiment_id,
@@ -1317,13 +1326,15 @@ async def _run_bayesian_search(
                     cv_folds=cv_folds,
                 )
 
-                outcome = await _execute_single_trial(
-                    domain_task_id,
-                    platform_task_id,
-                    run_id,
-                    experiment_id,
-                    kind="train",
-                )
+                scheduled = await get_scheduler("train").submit(platform_task_id)
+                if not isinstance(scheduled, asyncio.Task):
+                    logger.warning(
+                        "Bayesian trial %s submitted to Celery; study continuation "
+                        "is deferred to M2d",
+                        run_id,
+                    )
+                    return
+                outcome = await scheduled
                 resolved = resolve_objective_metrics(
                     outcome.get("metrics") or {}, objective_metric
                 )

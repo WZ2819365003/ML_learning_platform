@@ -656,8 +656,6 @@ async def _execute_dl_training(
 # ---------------------------------------------------------------------------
 
 async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingTask:
-    settings = get_settings()
-
     # Validate dataset
     dataset_id = request_data["dataset_id"]
     res = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
@@ -704,19 +702,14 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
     platform_task_id = platform_task.id
     await db.commit()
 
-    bg = asyncio.create_task(_execute_dl_training(
-        task_id=task.id,
-        file_path=str(restored_dataset),
-        target_column=request_data["target_column"],
-        model_type=request_data["model_type"],
-        task_type=request_data.get("task_type", "auto"),
-        arch_config=request_data.get("arch_config", {}),
-        opt_config=request_data.get("opt_config", {}),
-        train_config=request_data.get("train_config", {}),
-        model_save_dir=str(settings.storage_models),
-        platform_task_id=platform_task_id,
-    ))
-    _running_tasks[task.id] = bg
+    from app.scheduler.scheduler import get_scheduler
+
+    scheduled = await get_scheduler("dl_train").submit(platform_task_id)
+    if isinstance(scheduled, asyncio.Task):
+        _running_tasks[task.id] = scheduled
+        scheduled.add_done_callback(
+            lambda _done, domain_id=task.id: _running_tasks.pop(domain_id, None)
+        )
     return task
 
 
