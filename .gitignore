@@ -68,3 +68,7 @@ ml_platform_web/.env.local
 
 # Server-only deployment credentials
 docker/.deploy_secrets
+
+# 本地产物 / 临时工作区（不入库）
+screenshots/
+.claude/worktrees/

@@ -178,7 +178,7 @@ async def test_retry_then_success_clears_transient_error(db, session_factory, sp
         ptask_id, status="FAILED", error="transient boom", final_attempt=False
     )
     # Attempt 2 starts: the run must show RUNNING again, not a stale RETRY.
-    assert await run_writeback.mark_run_started(ptask_id) is True
+    assert await run_writeback.claim_for_execution(ptask_id) is True
     run, _ = await _fetch(session_factory, run_id, ptask_id)
     assert run.status == "RUNNING"
 
@@ -253,24 +253,24 @@ async def test_non_v3_task_completes_without_run(db, session_factory, spy):
 # Claim semantics
 # ---------------------------------------------------------------------------
 
-async def test_mark_run_started_claims_and_keeps_first_started_at(db, session_factory):
+async def test_claim_keeps_first_started_at(db, session_factory):
     ptask_id, run_id, _ = await _seed_trial(db)
 
-    assert await run_writeback.mark_run_started(ptask_id) is True
+    assert await run_writeback.claim_for_execution(ptask_id) is True
     run, _ = await _fetch(session_factory, run_id, ptask_id)
     first_started = run.started_at
     assert run.status == "RUNNING" and first_started is not None
 
-    assert await run_writeback.mark_run_started(ptask_id) is True
+    assert await run_writeback.claim_for_execution(ptask_id) is True
     run, _ = await _fetch(session_factory, run_id, ptask_id)
     assert run.started_at == first_started, "started_at must not be bumped"
 
 
-async def test_mark_run_started_refuses_to_reopen_terminal_run(db, session_factory):
+async def test_claim_refuses_to_reopen_terminal_run(db, session_factory):
     """A duplicate delivery must not resurrect a finished run and re-execute it."""
     ptask_id, run_id, _ = await _seed_trial(db)
     await run_writeback.complete_platform_task(ptask_id, status="SUCCESS", metrics={"accuracy": 0.9})
 
-    assert await run_writeback.mark_run_started(ptask_id) is False
+    assert await run_writeback.claim_for_execution(ptask_id) is False
     run, _ = await _fetch(session_factory, run_id, ptask_id)
     assert run.status == "SUCCESS"

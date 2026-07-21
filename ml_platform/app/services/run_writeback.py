@@ -409,6 +409,3 @@ async def claim_for_execution(platform_task_id: str) -> bool:
                     run.started_at = now
             return True
 
-
-# Backwards-compatible alias — the original name only claimed the Run.
-mark_run_started = claim_for_execution
