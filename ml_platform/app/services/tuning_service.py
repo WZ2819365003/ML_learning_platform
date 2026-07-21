@@ -1131,7 +1131,7 @@ async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> 
             r for r in runs if not (r.metrics or {}).get("shap_importances")
         ]
         candidates.sort(key=_score, reverse=reverse)
-        ml_candidates: list[ExperimentRun] = []
+        explainable_candidates: list[ExperimentRun] = []
         for run in candidates:
             if not run.task_id:
                 continue
@@ -1140,10 +1140,10 @@ async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> 
                     select(PlatformTask).where(PlatformTask.id == run.task_id)
                 )
             ).scalar_one_or_none()
-            if platform_task and platform_task.kind == "train":
-                ml_candidates.append(run)
+            if platform_task and platform_task.kind in {"train", "dl_train"}:
+                explainable_candidates.append(run)
 
-        top_runs = ml_candidates[: max(0, int(top_k))]
+        top_runs = explainable_candidates[: max(0, int(top_k))]
         if not top_runs:
             return
 

@@ -23,8 +23,9 @@ from app.config import get_settings
 from app.core.user_code_executor import run_user_code
 from app.models.database import Dataset
 from app.services.data_service import _build_columns_info
+from app.services.object_storage import restore_dataset_file, upload_dataset_file
 from app.services.prediction_service import load_dataframe
-from app.utils.storage_paths import resolve_runtime_path, to_portable_storage_path
+from app.utils.storage_paths import to_portable_storage_path
 
 
 async def run_data_pipeline(
@@ -41,6 +42,9 @@ async def run_data_pipeline(
     src = await db.get(Dataset, dataset_id)
     if src is None:
         raise HTTPException(status_code=404, detail="源数据集不存在")
+    source_path = restore_dataset_file(src.id, src.file_path)
+    if source_path is None:
+        raise HTTPException(status_code=404, detail="源数据集文件不存在")
 
     settings = get_settings()
     base = save_as or f"{Path(src.name).stem}_pipeline"
@@ -54,7 +58,7 @@ async def run_data_pipeline(
             mode="pipeline",
             code=code,
             timeout_s=settings.pipeline_code_timeout_s,
-            input_path=str(resolve_runtime_path(src.file_path)),
+            input_path=str(source_path),
             output_path=str(dest),
         )
     except ValueError as exc:  # UserCodeError/UserCodeTimeout included
@@ -78,4 +82,5 @@ async def run_data_pipeline(
     db.add(dataset)
     await db.flush()
     await db.refresh(dataset)
+    upload_dataset_file(dataset.id, dest)
     return dataset

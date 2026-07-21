@@ -18,12 +18,20 @@ from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.models.database import AsyncSession, Dataset
+from app.services.object_storage import restore_dataset_file, upload_dataset_file
 from app.utils.storage_paths import resolve_runtime_path, to_portable_storage_path
 from app.utils.file_utils import generate_unique_filename
 
 logger = logging.getLogger(__name__)
 
 _ALLOWED_EXTENSIONS = {".csv", ".parquet", ".xlsx"}
+
+
+def _require_dataset_path(dataset: Dataset) -> Path:
+    path = restore_dataset_file(dataset.id, dataset.file_path)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Dataset artifact not found")
+    return path
 
 
 def _compute_content_digest(content: bytes) -> str:
@@ -38,8 +46,8 @@ async def _find_existing_dataset_by_content(
     digest = _compute_content_digest(content)
     result = await db.execute(select(Dataset).where(Dataset.file_size == file_size))
     for dataset in result.scalars():
-        path = resolve_runtime_path(dataset.file_path)
-        if not path.exists():
+        path = restore_dataset_file(dataset.id, dataset.file_path)
+        if path is None:
             continue
         try:
             if _compute_content_digest(path.read_bytes()) == digest:
@@ -183,6 +191,8 @@ async def upload_dataset(file: UploadFile, db: AsyncSession) -> Dataset:
     await db.flush()
     await db.refresh(dataset)
 
+    upload_dataset_file(dataset.id, dest_path)
+
     logger.info("Created dataset record %s for '%s'", dataset.id, original_name)
     return dataset
 
@@ -201,7 +211,7 @@ async def get_dataset_preview(
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    file_path = resolve_runtime_path(dataset.file_path)
+    file_path = _require_dataset_path(dataset)
     ext = file_path.suffix.lower()
 
     df = _read_dataframe(file_path, ext, nrows=rows)
@@ -290,7 +300,7 @@ async def get_correlation(
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    file_path = resolve_runtime_path(dataset.file_path)
+    file_path = _require_dataset_path(dataset)
     df = _read_dataframe(file_path, file_path.suffix.lower())
     numeric_df = df.select_dtypes(include="number")
 
@@ -315,7 +325,7 @@ async def get_target_distribution(
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    file_path = resolve_runtime_path(dataset.file_path)
+    file_path = _require_dataset_path(dataset)
     df = _read_dataframe(file_path, file_path.suffix.lower())
 
     if target_column not in df.columns:

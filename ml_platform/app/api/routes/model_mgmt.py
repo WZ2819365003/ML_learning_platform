@@ -9,7 +9,14 @@ from sqlalchemy import select, func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import get_db, TrainingTask, Dataset, ModelTagLibrary
+from app.config import get_settings
+from app.models.database import (
+    Dataset,
+    DLTrainingTask,
+    ModelTagLibrary,
+    TrainingTask,
+    get_db,
+)
 from app.models.schemas import (
     ModelAssetListResponse,
     PredictionRequest,
@@ -17,9 +24,25 @@ from app.models.schemas import (
 )
 from app.services.prediction_service import predict_rows
 from app.services.model_asset_service import list_model_assets
+from app.services.object_storage import restore_dataset_file, restore_model_bundle
 from app.utils.storage_paths import resolve_runtime_path
 
 router = APIRouter(prefix="/models", tags=["Model Management"])
+
+
+def _managed_model_file(raw_path: str):
+    """Resolve a model artifact without allowing paths outside storage/models."""
+    file_path = resolve_runtime_path(raw_path)
+    model_root = get_settings().storage_models.resolve()
+    try:
+        file_path.resolve().relative_to(model_root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Model file not found on disk")
+    if not file_path.is_file():
+        restore_model_bundle(raw_path)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Model file not found on disk")
+    return file_path
 
 
 @router.get("/assets", response_model=ModelAssetListResponse)
@@ -71,8 +94,8 @@ async def list_models(
     items = []
     for task in tasks:
         dataset = dataset_map.get(task.dataset_id)
-        model_file = resolve_runtime_path(task.model_path) if task.model_path else None
-        dataset_file = resolve_runtime_path(dataset.file_path) if dataset else None
+        model_file = restore_model_bundle(task.model_path) if task.model_path else None
+        dataset_file = restore_dataset_file(dataset.id, dataset.file_path) if dataset else None
 
         if dataset is None or dataset_file is None or not dataset_file.exists():
             continue
@@ -245,14 +268,20 @@ async def model_detail(
             if model_file.exists():
                 model_size = model_file.stat().st_size
 
+        is_dl = isinstance(recovered_task, DLTrainingTask)
+        train_config = getattr(recovered_task, "train_config", None) or {}
+
         return {
             "task_id": recovered_task.id,
-            "name": None,
+            "family": "dl" if is_dl else "ml",
+            "name": getattr(recovered_task, "name", None),
             "model_type": recovered_task.model_type,
-            "hyperparameters": None,
+            "hyperparameters": getattr(recovered_task, "hyperparameters", None),
             "target_column": recovered_task.target_column,
-            "test_size": recovered_task.test_size,
-            "eval_metrics": None,
+            "test_size": getattr(
+                recovered_task, "test_size", train_config.get("test_size", 0.2)
+            ),
+            "eval_metrics": getattr(recovered_task, "eval_metrics", None),
             "result_metrics": recovered_task.result_metrics,
             "model_path": str(resolve_runtime_path(model_path)) if model_path else None,
             "model_size": model_size,
@@ -310,18 +339,22 @@ async def download_model_file(
     task_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    """Download the saved model file (.joblib)."""
+    """Download a saved ML (.joblib) or DL (.pt) model file."""
     result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
     task = result.scalar_one_or_none()
+    if task is None:
+        result = await db.execute(
+            select(DLTrainingTask).where(DLTrainingTask.id == task_id)
+        )
+        task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
     if not task.model_path:
         raise HTTPException(status_code=404, detail="Model file not found on disk")
 
-    file_path = resolve_runtime_path(task.model_path)
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Model file not found on disk")
-    safe_name = f"{task.model_type or 'model'}_{task_id[:8]}.joblib"
+    file_path = _managed_model_file(task.model_path)
+    extension = ".pt" if isinstance(task, DLTrainingTask) else ".joblib"
+    safe_name = f"{task.model_type or 'model'}_{task_id[:8]}{extension}"
     return FileResponse(
         path=str(file_path),
         filename=safe_name,

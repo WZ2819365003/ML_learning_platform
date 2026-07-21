@@ -28,6 +28,7 @@ from app.api.routes.v3_runs import router as v3_runs_router
 from app.api.routes.training_plans import router as training_plans_router
 from app.api.websocket import router as ws_router
 from app.services.timeseries_service import resume_unfinished_ts_tasks
+from app.services.object_storage import upload_dataset_file
 from app.utils.file_utils import generate_unique_filename
 from app.utils.storage_paths import to_portable_storage_path
 
@@ -133,6 +134,8 @@ async def _seed_example_datasets() -> None:
                 columns_info=_build_columns_info(df),
             )
             db.add(dataset)
+            await db.flush()
+            upload_dataset_file(dataset.id, dest)
 
         await db.commit()
 

@@ -41,6 +41,7 @@ from app.config import get_settings
 from app.core.model_artifact import is_tabular_artifact
 from app.models.database import (
     Dataset,
+    DLTrainingTask,
     ExperimentRun,
     ModelingTask,
     PlatformExperiment,
@@ -53,8 +54,23 @@ from app.services.prediction_service import (
     prepare_training_frame,
 )
 from app.utils.storage_paths import resolve_runtime_path
+from app.services.object_storage import (
+    restore_dataset_file,
+    restore_file,
+    restore_model_bundle,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _require_dataset_file(dataset: Dataset) -> Dataset:
+    """Restore a dataset from object storage or fail with an actionable 404."""
+    if restore_dataset_file(dataset.id, dataset.file_path) is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Dataset artifact not found for this task",
+        )
+    return dataset
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +146,8 @@ class TaskFacade:
 def load_model(model_path: str):
     """Load a saved model artifact; raise 404 if the file is missing."""
     path = resolve_runtime_path(model_path)
+    if not path.exists():
+        restore_model_bundle(model_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Model file not found: {model_path}")
     return joblib.load(path)
@@ -403,6 +421,8 @@ async def synthesize_facade_from_run(
     model_path: str | None = None
     for cid in candidate_ids:
         candidate = settings.storage_models / f"{cid}.joblib"
+        if not candidate.exists():
+            restore_file(candidate, [f"models/{cid}.joblib"])
         if candidate.exists():
             model_path = f"storage/models/{cid}.joblib"
             break
@@ -495,7 +515,7 @@ async def synthesize_facade_from_orphan(
 
 
 async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
-    """Multi-source resolver: TrainingTask → V3 ExperimentRun → on-disk orphan.
+    """Multi-source resolver: ML/DL task → V3 ExperimentRun → on-disk orphan.
 
     The caller gets a `TaskFacade` and `Dataset` back in all three cases,
     so downstream code is oblivious to which data path was taken.
@@ -514,7 +534,28 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
         )).scalar_one_or_none()
         if dataset is None:
             raise HTTPException(status_code=404, detail="Dataset not found")
-        return task, dataset
+        return task, _require_dataset_file(dataset)
+
+    # --- Tier 1b: DLTrainingTask direct ------------------------------------
+    dl_task = (await db.execute(
+        select(DLTrainingTask).where(DLTrainingTask.id == task_id)
+    )).scalar_one_or_none()
+    if dl_task is not None:
+        if dl_task.status != "SUCCESS":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Task not completed (status={dl_task.status})",
+            )
+        if not dl_task.model_path:
+            raise HTTPException(status_code=400, detail="No model saved for this task")
+        if restore_model_bundle(dl_task.model_path) is None:
+            raise HTTPException(status_code=404, detail="Model artifact not found for this task")
+        dataset = (await db.execute(
+            select(Dataset).where(Dataset.id == dl_task.dataset_id)
+        )).scalar_one_or_none()
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        return dl_task, _require_dataset_file(dataset)
 
     # --- Tier 2: V3 ExperimentRun synthesis ---------------------------------
     run = (await db.execute(
@@ -530,11 +571,7 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
             )).scalar_one_or_none()
             if run is None and pt.payload_ref and pt.payload_ref.startswith(("train:", "dl_train:")):
                 legacy_id = pt.payload_ref.split(":", 1)[1]
-                legacy_tt = (await db.execute(
-                    select(TrainingTask).where(TrainingTask.id == legacy_id)
-                )).scalar_one_or_none()
-                if legacy_tt is not None:
-                    return await resolve_task_and_dataset(legacy_id, db)
+                return await resolve_task_and_dataset(legacy_id, db)
 
     if run is not None:
         if run.status != "SUCCESS":
@@ -542,6 +579,18 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
                 status_code=400,
                 detail=f"Run not completed (status={run.status or 'UNKNOWN'})",
             )
+        if run.task_id:
+            platform_task = (await db.execute(
+                select(PlatformTask).where(PlatformTask.id == run.task_id)
+            )).scalar_one_or_none()
+            if (
+                platform_task
+                and platform_task.payload_ref
+                and platform_task.payload_ref.startswith("dl_train:")
+            ):
+                return await resolve_task_and_dataset(
+                    platform_task.payload_ref.split(":", 1)[1], db
+                )
         facade, dataset = await synthesize_facade_from_run(run, db)
         if not facade.model_path:
             raise HTTPException(status_code=404, detail="Model artifact not found for this run")
@@ -549,7 +598,7 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
             raise HTTPException(status_code=400, detail="Target column unavailable for this run")
         if dataset is None:
             raise HTTPException(status_code=404, detail="Dataset not found for this run")
-        return facade, dataset
+        return facade, _require_dataset_file(dataset)
 
     # --- Tier 3: orphan recovery from on-disk artifacts ---------------------
     orphan = await synthesize_facade_from_orphan(task_id, db)
@@ -557,7 +606,7 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
         facade, dataset = orphan
         if dataset is None:
             raise HTTPException(status_code=404, detail="Dataset not found for this task")
-        return facade, dataset
+        return facade, _require_dataset_file(dataset)
 
     raise HTTPException(status_code=404, detail="Training task not found")
 
@@ -575,6 +624,14 @@ async def resolve_and_load(task_id: str, db: AsyncSession, *, stratified: bool |
     non-stratified split even for classification (SHAP sampling, for example).
     """
     task, dataset = await resolve_task_and_dataset(task_id, db)
+    if isinstance(task, DLTrainingTask):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "DL task is not supported by the generic ML visualization endpoint; "
+                "use the DL results or SHAP endpoint"
+            ),
+        )
     if stratified is None:
         stratified = task.task_kind == "classification" if isinstance(task, TaskFacade) \
             else not is_regressor(getattr(task, "model_type", None))

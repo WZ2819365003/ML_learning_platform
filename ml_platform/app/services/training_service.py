@@ -25,7 +25,7 @@ from app.models.database import (
 )
 from app.services.prediction_service import load_dataframe, prepare_raw_training_frame
 from app.utils.storage_paths import to_portable_storage_path
-from app.services.object_storage import upload_training_artifacts
+from app.services.object_storage import restore_dataset_file, upload_training_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -429,7 +429,10 @@ async def _run_training_sync_by_id(
         dataset = ds_result.scalar_one_or_none()
         if dataset is None:
             raise ValueError(f"Dataset {task.dataset_id!r} not found for TrainingTask {training_task_id!r}")
-        file_path     = dataset.file_path
+        restored_dataset = restore_dataset_file(dataset.id, dataset.file_path)
+        if restored_dataset is None:
+            raise ValueError(f"Dataset artifact {dataset.id!r} not found for TrainingTask {training_task_id!r}")
+        file_path     = str(restored_dataset)
         target_column = task.target_column
         model_type    = task.model_type
         hyperparams   = task.hyperparameters or {}
@@ -494,6 +497,9 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     dataset = result.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
+    restored_dataset = restore_dataset_file(dataset.id, dataset.file_path)
+    if restored_dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset artifact not found")
 
     # Validate model type
     available = list_available_models()
@@ -524,7 +530,7 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     await db.refresh(task)
 
     task_id = task.id
-    file_path = dataset.file_path
+    file_path = str(restored_dataset)
 
     # ── Write-back contract: register in unified platform task table ──────────
     from app.scheduler.task_runner import register_domain_task

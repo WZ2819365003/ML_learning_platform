@@ -118,8 +118,11 @@ class BaseDLTrainer(ABC):
             ytr_t = torch.tensor(y_train.astype(np.int64), dtype=torch.long)
             yva_t = torch.tensor(y_val.astype(np.int64),   dtype=torch.long)
 
+        # BatchNorm cannot train on a final batch containing one sample. Drop
+        # only that pathological tail; keep all other partial batches.
+        drop_single_tail = len(Xtr_t) > batch_size and len(Xtr_t) % batch_size == 1
         train_loader = DataLoader(TensorDataset(Xtr_t, ytr_t),
-                                  batch_size=batch_size, shuffle=True, drop_last=False)
+                                  batch_size=batch_size, shuffle=True, drop_last=drop_single_tail)
         val_loader   = DataLoader(TensorDataset(Xva_t, yva_t),
                                   batch_size=batch_size * 2, shuffle=False)
         return train_loader, val_loader

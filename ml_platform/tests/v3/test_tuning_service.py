@@ -285,6 +285,59 @@ async def test_finalise_batch_never_opens_sealed_holdout(
     ]
 
 
+async def test_schedule_shap_includes_successful_dl_runs(
+    session_factory, monkeypatch
+):
+    from sqlalchemy import select
+    from app.models.database import ExperimentRun, PlatformExperiment, PlatformTask
+
+    async with session_factory() as db:
+        experiment = PlatformExperiment(
+            name="mixed-shap",
+            status="DONE",
+            objective_metric="accuracy",
+            objective_direction="max",
+        )
+        db.add(experiment)
+        await db.flush()
+        dl_task = PlatformTask(
+            kind="dl_train",
+            status="SUCCESS",
+            payload_ref="dl_train:domain-dl-id",
+        )
+        db.add(dl_task)
+        await db.flush()
+        run = ExperimentRun(
+            experiment_id=experiment.id,
+            task_id=dl_task.id,
+            params={"family": "dl", "model_type": "mlp_dl"},
+            metrics={"accuracy": 0.9},
+            status="SUCCESS",
+            trial_no=1,
+        )
+        db.add(run)
+        await db.commit()
+        experiment_id = experiment.id
+        run_id = run.id
+
+    dispatched = []
+
+    async def fake_dispatch(task_id, kind, payload_ref, priority):
+        dispatched.append((task_id, kind, payload_ref, priority))
+
+    monkeypatch.setattr(svc, "async_session_factory", session_factory)
+    monkeypatch.setattr(svc, "dispatch_platform_task", fake_dispatch)
+
+    await svc._schedule_shap_for_top_runs(experiment_id, top_k=1)
+
+    async with session_factory() as db:
+        explain_tasks = (
+            await db.execute(select(PlatformTask).where(PlatformTask.kind == "explain"))
+        ).scalars().all()
+    assert [task.payload_ref for task in explain_tasks] == [f"explain:{run_id}"]
+    assert len(dispatched) == 1
+
+
 @pytest.mark.parametrize("state", ["EVALUATING", "FINALIZED", "FAILED"])
 async def test_experiment_dispatch_lock_rejects_non_open_task(db, state):
     from fastapi import HTTPException

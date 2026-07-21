@@ -39,8 +39,12 @@ from app.services.prediction_service import (
     prepare_prediction_frame,
     prepare_raw_training_frame,
 )
-from app.utils.storage_paths import resolve_runtime_path, to_portable_storage_path
-from app.services.object_storage import upload_training_artifacts
+from app.utils.storage_paths import to_portable_storage_path
+from app.services.object_storage import (
+    restore_dataset_file,
+    restore_model_bundle,
+    upload_training_artifacts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -483,8 +487,9 @@ async def _run_dl_training_by_id(
         dataset = dataset_result.scalar_one_or_none()
         if dataset is None:
             raise ValueError(f"Dataset {task.dataset_id!r} not found for DLTask {dl_task_id!r}")
-
-        file_path     = resolve_runtime_path(dataset.file_path)
+        file_path = restore_dataset_file(dataset.id, dataset.file_path)
+        if file_path is None:
+            raise ValueError(f"Dataset artifact {dataset.id!r} not found for DLTask {dl_task_id!r}")
         target_column = task.target_column
         model_type    = task.model_type
         task_type_req = task.task_type or "auto"
@@ -659,6 +664,9 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
     dataset = res.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
+    restored_dataset = restore_dataset_file(dataset.id, dataset.file_path)
+    if restored_dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset artifact not found")
 
     # Validate model type
     from app.core.dl_registry import get_dl_trainer_registry
@@ -698,7 +706,7 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
 
     bg = asyncio.create_task(_execute_dl_training(
         task_id=task.id,
-        file_path=dataset.file_path,
+        file_path=str(restored_dataset),
         target_column=request_data["target_column"],
         model_type=request_data["model_type"],
         task_type=request_data.get("task_type", "auto"),
@@ -957,12 +965,17 @@ async def predict_dl_deployment(
     dataset = ds_res.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="训练数据集不存在，无法推断特征编码")
+    if restore_dataset_file(dataset.id, dataset.file_path) is None:
+        raise HTTPException(status_code=404, detail="训练数据集文件不存在，无法推断特征编码")
+    model_path = restore_model_bundle(task.model_path)
+    if model_path is None:
+        raise HTTPException(status_code=404, detail="模型文件不存在")
 
     loop = asyncio.get_event_loop()
 
     def _load_and_predict():
         trainer = get_dl_trainer(task.model_type)
-        meta = trainer.load_for_inference(str(resolve_runtime_path(task.model_path)))
+        meta = trainer.load_for_inference(str(model_path))
         task_type = meta["task_type"]
         training_df = (
             load_dataframe(dataset.file_path)
@@ -1020,12 +1033,17 @@ async def predict_dl_task_direct(
     dataset = ds_res.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="训练数据集不存在，无法推断特征编码")
+    if restore_dataset_file(dataset.id, dataset.file_path) is None:
+        raise HTTPException(status_code=404, detail="训练数据集文件不存在，无法推断特征编码")
+    model_path = restore_model_bundle(task.model_path)
+    if model_path is None:
+        raise HTTPException(status_code=404, detail="模型文件不存在")
 
     loop = asyncio.get_event_loop()
 
     def _predict():
         trainer = get_dl_trainer(task.model_type)
-        meta = trainer.load_for_inference(str(resolve_runtime_path(task.model_path)))
+        meta = trainer.load_for_inference(str(model_path))
         task_type = meta["task_type"]
         training_df = (
             load_dataframe(dataset.file_path)

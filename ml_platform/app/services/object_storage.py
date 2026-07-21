@@ -18,6 +18,8 @@ local-only development without a running MinIO instance.
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -27,6 +29,7 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 
 from app.config import get_settings
+from app.utils.storage_paths import resolve_runtime_path
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +148,102 @@ def upload_training_artifacts(task_id: str, model_files: list[Path], log_files: 
     for path in log_files:
         if path.exists():
             upload_file(path, f"logs/{path.name}")
+
+
+def dataset_object_key(dataset_id: str, local_path: str | Path) -> str:
+    """Return the stable object key for a dataset's original uploaded file."""
+    return f"datasets/{dataset_id}/original/{Path(local_path).name}"
+
+
+def upload_dataset_file(dataset_id: str, local_path: str | Path) -> str | None:
+    """Persist an original dataset file under its stable dataset-scoped key."""
+    return upload_file(local_path, dataset_object_key(dataset_id, local_path))
+
+
+def restore_dataset_file(dataset_id: str, file_path: str | Path) -> Path | None:
+    """Ensure a dataset's original file exists locally, restoring it if needed."""
+    destination = resolve_runtime_path(file_path)
+    if destination.exists():
+        return destination
+    restored = restore_file(
+        destination,
+        [dataset_object_key(dataset_id, destination)],
+    )
+    return destination if restored and destination.exists() else None
+
+
+def restore_model_bundle(model_path: str | Path) -> Path | None:
+    """Restore an ML model or a DL checkpoint with its optional sidecars."""
+    destination = resolve_runtime_path(model_path)
+    restore_file(destination, [f"models/{destination.name}"])
+
+    if destination.suffix.lower() == ".pt":
+        for suffix in (".scaler.joblib", ".preprocessor.joblib"):
+            sidecar = Path(str(destination) + suffix)
+            restore_file(sidecar, [f"models/{sidecar.name}"])
+
+    return destination if destination.exists() else None
+
+
+def restore_file(
+    local_path: str | Path,
+    object_keys: list[str] | tuple[str, ...],
+) -> str | None:
+    """Restore a missing local file from the first available MinIO object.
+
+    The payload is written to a temporary file in the destination directory and
+    atomically renamed so concurrent readers never observe a partial artifact.
+    Returns the object key used, or ``None`` when no remote copy is available.
+    """
+    destination = Path(local_path)
+    if destination.exists():
+        return None
+
+    settings = get_settings()
+    if not settings.s3_enabled:
+        return None
+
+    try:
+        client = _get_client()
+    except Exception as exc:
+        logger.warning("Object storage client unavailable while restoring %s: %s", destination, exc)
+        return None
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    for object_key in object_keys:
+        temp_name: str | None = None
+        try:
+            response = client.get_object(Bucket=settings.s3_bucket, Key=object_key)
+            body = response["Body"]
+            payload = body.read()
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
+
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f".{destination.name}.",
+                suffix=".tmp",
+                dir=destination.parent,
+                delete=False,
+            ) as tmp:
+                temp_name = tmp.name
+                tmp.write(payload)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(temp_name, destination)
+            logger.info("Restored s3://%s/%s -> %s", settings.s3_bucket, object_key, destination)
+            return object_key
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code not in {"404", "NoSuchKey", "NoSuchObject"}:
+                logger.warning("Object restore failed (%s): %s", object_key, exc)
+        except Exception as exc:
+            logger.warning("Object restore failed (%s): %s", object_key, exc)
+        finally:
+            if temp_name:
+                Path(temp_name).unlink(missing_ok=True)
+    return None
 
 
 def get_presigned_url(object_key: str, expires_in: int = 3600) -> str | None:

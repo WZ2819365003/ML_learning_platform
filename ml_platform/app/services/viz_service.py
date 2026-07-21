@@ -41,6 +41,7 @@ from app.services.resolver import (
     resolve_legacy_id_candidates,
     resolve_task_and_dataset,
 )
+from app.services.object_storage import restore_file
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +183,8 @@ async def get_learning_curve(task_id: str, db: AsyncSession) -> dict:
     resolved_id = task_id
     for cid in await resolve_legacy_id_candidates(task_id, db):
         candidate = settings.storage_logs / f"{cid}_metrics.json"
+        if not candidate.exists():
+            restore_file(candidate, [f"logs/{cid}_metrics.json"])
         if candidate.exists():
             metrics_file = candidate
             resolved_id = cid

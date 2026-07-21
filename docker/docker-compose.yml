@@ -88,6 +88,8 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    volumes:
+      - ml_backend_storage:/app/storage
     environment:
       DATABASE_URL: "mysql+aiomysql://root:123456@mysql:3306/ml_platform"
       REDIS_URL: "redis://redis:6379/0"
@@ -147,6 +149,8 @@ volumes:
   ml_mysql_data:
   ml_redis_data:
   ml_minio_data:
+  ml_backend_storage:
+    name: ml_platform_backend_storage
 
 networks:
   default:

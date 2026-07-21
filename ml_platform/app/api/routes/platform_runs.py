@@ -26,6 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
     Dataset,
+    DLTrainingLog,
+    DLTrainingTask,
     ExperimentRun,
     ExperimentRunLog,
     PlatformExperiment,
@@ -91,6 +93,7 @@ def _serialize_platform_task(task: PlatformTask) -> dict[str, Any]:
 def _serialize_training_task(tt: TrainingTask, dataset: Dataset | None) -> dict[str, Any]:
     return {
         "id": tt.id,
+        "family": "ml",
         "name": tt.name,
         "model_type": tt.model_type,
         "hyperparameters": tt.hyperparameters or {},
@@ -109,7 +112,36 @@ def _serialize_training_task(tt: TrainingTask, dataset: Dataset | None) -> dict[
     }
 
 
-def _serialize_log(log: TrainingLog | ExperimentRunLog) -> dict[str, Any]:
+def _serialize_dl_training_task(
+    task: DLTrainingTask, dataset: Dataset | None
+) -> dict[str, Any]:
+    return {
+        "id": task.id,
+        "family": "dl",
+        "name": task.name,
+        "model_type": task.model_type,
+        "task_type": task.task_type,
+        "arch_config": task.arch_config or {},
+        "opt_config": task.opt_config or {},
+        "train_config": task.train_config or {},
+        "status": task.status,
+        "progress": task.progress,
+        "current_epoch": task.current_epoch,
+        "total_epochs": task.total_epochs,
+        "model_path": task.model_path,
+        "result_metrics": task.result_metrics or {},
+        "dataset": {
+            "id": dataset.id if dataset else task.dataset_id,
+            "name": dataset.name if dataset else None,
+            "row_count": dataset.row_count if dataset else None,
+            "column_count": dataset.column_count if dataset else None,
+        } if (dataset or task.dataset_id) else None,
+    }
+
+
+def _serialize_log(
+    log: TrainingLog | DLTrainingLog | ExperimentRunLog,
+) -> dict[str, Any]:
     """Shape-compatible serializer for both legacy TrainingLog and V3-native
     ExperimentRunLog rows — both expose level/message/extra/created_at.
     """
@@ -187,10 +219,35 @@ async def inspect_run(
         resolved_log_task_id = run_id
 
     if domain_task_id:
-        tt = (
-            await db.execute(select(TrainingTask).where(TrainingTask.id == domain_task_id))
-        ).scalar_one_or_none()
-        if tt:
+        if platform_task and platform_task.kind == "dl_train":
+            dl_task = (
+                await db.execute(
+                    select(DLTrainingTask).where(DLTrainingTask.id == domain_task_id)
+                )
+            ).scalar_one_or_none()
+            if dl_task:
+                ds = (
+                    await db.execute(select(Dataset).where(Dataset.id == dl_task.dataset_id))
+                ).scalar_one_or_none()
+                training_task_payload = _serialize_dl_training_task(dl_task, ds)
+
+                if not logs_payload:
+                    log_rows = await db.execute(
+                        select(DLTrainingLog)
+                        .where(DLTrainingLog.task_id == dl_task.id)
+                        .order_by(DLTrainingLog.created_at.desc())
+                        .limit(log_limit)
+                    )
+                    logs = list(log_rows.scalars().all())
+                    logs.reverse()
+                    logs_payload = [_serialize_log(log) for log in logs]
+                    if logs_payload:
+                        resolved_log_task_id = dl_task.id
+        else:
+            tt = (
+                await db.execute(select(TrainingTask).where(TrainingTask.id == domain_task_id))
+            ).scalar_one_or_none()
+        if platform_task and platform_task.kind != "dl_train" and tt:
             ds = (
                 await db.execute(select(Dataset).where(Dataset.id == tt.dataset_id))
             ).scalar_one_or_none()
@@ -271,26 +328,30 @@ async def inspect_run(
         if training_task_payload is None:
             try:
                 facade, dataset = await resolve_task_and_dataset(run_id, db)
-                training_task_payload = {
-                    "id": getattr(facade, "id", run_id),
-                    "name": None,
-                    "model_type": getattr(facade, "model_type", None),
-                    "hyperparameters": {},
-                    "target_column": getattr(facade, "target_column", None),
-                    "test_size": getattr(facade, "test_size", 0.2),
-                    "eval_metrics": [],
-                    "status": getattr(facade, "status", "UNKNOWN"),
-                    "progress": 100,
-                    "model_path": getattr(facade, "model_path", None),
-                    "dataset": {
-                        "id": dataset.id,
-                        "name": dataset.name,
-                        "row_count": dataset.row_count,
-                        "column_count": dataset.column_count,
-                    } if dataset else None,
-                    "task_kind": getattr(facade, "task_kind", None),
-                    "synthesized": True,
-                }
+                if isinstance(facade, DLTrainingTask):
+                    training_task_payload = _serialize_dl_training_task(facade, dataset)
+                else:
+                    training_task_payload = {
+                        "id": getattr(facade, "id", run_id),
+                        "family": "ml",
+                        "name": None,
+                        "model_type": getattr(facade, "model_type", None),
+                        "hyperparameters": {},
+                        "target_column": getattr(facade, "target_column", None),
+                        "test_size": getattr(facade, "test_size", 0.2),
+                        "eval_metrics": [],
+                        "status": getattr(facade, "status", "UNKNOWN"),
+                        "progress": 100,
+                        "model_path": getattr(facade, "model_path", None),
+                        "dataset": {
+                            "id": dataset.id,
+                            "name": dataset.name,
+                            "row_count": dataset.row_count,
+                            "column_count": dataset.column_count,
+                        } if dataset else None,
+                        "task_kind": getattr(facade, "task_kind", None),
+                        "synthesized": True,
+                    }
             except HTTPException:
                 pass  # resolver raised — the run may still be pending
             except Exception as exc:

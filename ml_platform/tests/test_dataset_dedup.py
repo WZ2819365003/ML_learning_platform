@@ -140,3 +140,63 @@ def test_uploaded_dataset_columns_info_includes_target_selection_stats(client: T
     assert preview_target_info["unique_count"] == 2
     assert preview_target_info["unique_rate"] == 0.6667
     assert preview_target_info["min_class_count"] == 1
+
+
+def test_upload_copies_original_dataset_to_object_storage(
+    client: TestClient,
+    monkeypatch,
+):
+    uploaded = {}
+
+    def capture_upload(dataset_id, local_path):
+        uploaded["dataset_id"] = dataset_id
+        uploaded["local_path"] = local_path
+        return f"datasets/{dataset_id}/original/{local_path.name}"
+
+    monkeypatch.setattr(data_service, "upload_dataset_file", capture_upload)
+
+    response = client.post(
+        "/api/data/upload",
+        files={"file": ("durable.csv", io.BytesIO(_csv_bytes()), "text/csv")},
+    )
+
+    assert response.status_code == 201
+    assert uploaded["dataset_id"] == response.json()["id"]
+    assert uploaded["local_path"].exists()
+    assert uploaded["local_path"].name.endswith("-durable.csv")
+
+
+def test_preview_restores_missing_local_dataset_from_object_storage(
+    client: TestClient,
+    test_db,
+    monkeypatch,
+):
+    content = _csv_bytes()
+    response = client.post(
+        "/api/data/upload",
+        files={"file": ("restore.csv", io.BytesIO(content), "text/csv")},
+    )
+    assert response.status_code == 201
+    dataset_id = response.json()["id"]
+
+    _, test_sessionmaker = test_db
+
+    async def _fetch_dataset() -> Dataset:
+        async with test_sessionmaker() as session:
+            return await session.get(Dataset, dataset_id)
+
+    dataset = asyncio.run(_fetch_dataset())
+    local_path = storage_paths.resolve_runtime_path(dataset.file_path)
+    local_path.unlink()
+
+    def restore_dataset_file(restored_dataset_id, _file_path):
+        assert restored_dataset_id == dataset_id
+        local_path.write_bytes(content)
+        return local_path
+
+    monkeypatch.setattr(data_service, "restore_dataset_file", restore_dataset_file)
+
+    preview = client.get(f"/api/data/{dataset_id}/preview")
+
+    assert preview.status_code == 200
+    assert len(preview.json()["rows"]) == 3

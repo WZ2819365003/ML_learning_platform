@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import InferenceJob, ModelDeployment, TrainingTask, Dataset
+from app.services.object_storage import restore_dataset_file, restore_model_bundle
 from app.services.prediction_service import load_dataframe, predict_with_model
 from app.utils.storage_paths import resolve_runtime_path
 
@@ -78,8 +79,10 @@ async def create_deployment(
         raise HTTPException(status_code=404, detail="Training task not found")
     if task.status != "SUCCESS":
         raise HTTPException(status_code=400, detail=f"Task not completed (status={task.status})")
-    if not task.model_path or not resolve_runtime_path(task.model_path).exists():
-        raise HTTPException(status_code=400, detail="Model file not found on disk")
+    # Read-through: a rebuilt container has empty local storage — pull the
+    # model (and DL sidecars) back from MinIO before declaring it missing.
+    if not task.model_path or restore_model_bundle(task.model_path) is None:
+        raise HTTPException(status_code=400, detail="模型文件缺失，且对象存储中无副本")
 
     deployment = ModelDeployment(
         task_id=task_id,

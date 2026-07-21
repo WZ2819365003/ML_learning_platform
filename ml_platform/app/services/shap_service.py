@@ -33,6 +33,8 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.database import DLTrainingTask
+from app.services.dl_shap_adapter import build_dl_shap_context
 from app.services.resolver import (
     TaskFacade,
     is_regressor,
@@ -51,6 +53,8 @@ METHOD_PERMUTATION = "permutation"
 
 
 _TREE_MODEL_PREFIXES = ("random_forest", "xgboost", "lightgbm", "gradient_boost", "extra_trees")
+_DL_MAX_BACKGROUND = 20
+_DL_MAX_SAMPLES = 50
 
 
 def _to_f64_list(arr) -> list:
@@ -95,28 +99,37 @@ def _normalize_shap_values(shap_values):
     return sv, selected
 
 
-def _compute_tree(model, X_sample) -> tuple[np.ndarray, float | list | None]:
+def _normalize_base_value(base, selected_class_idx: int | None):
+    if hasattr(base, "tolist"):
+        try:
+            base = base.tolist()
+        except Exception:
+            return None
+    if isinstance(base, list) and selected_class_idx is not None:
+        if selected_class_idx >= len(base):
+            return None
+        base = base[selected_class_idx]
+    try:
+        return float(base) if isinstance(base, (int, float)) else base
+    except Exception:
+        return None
+
+
+def _compute_tree(
+    model, X_sample
+) -> tuple[np.ndarray, float | list | None, int | None]:
     """Tree-based SHAP — returns (sv_per_sample 2D, base_value)."""
     import shap
     explainer = shap.TreeExplainer(model)
     sv = explainer.shap_values(X_sample)
-    sv, _ = _normalize_shap_values(sv)
+    sv, selected = _normalize_shap_values(sv)
     base = getattr(explainer, "expected_value", None)
-    if hasattr(base, "tolist"):
-        try:
-            base = base.tolist()
-            if isinstance(base, list) and len(base) == 2:
-                base = float(base[1])  # positive class for binary
-        except Exception:
-            base = None
-    try:
-        base = float(base) if isinstance(base, (int, float)) else base
-    except Exception:
-        base = None
-    return sv, base
+    return sv, _normalize_base_value(base, selected), selected
 
 
-def _compute_kernel(model, X_train, X_sample, feature_names) -> tuple[np.ndarray, float | list | None]:
+def _compute_kernel(
+    model, X_train, X_sample, feature_names
+) -> tuple[np.ndarray, float | list | None, int | None]:
     """Kernel SHAP — model-agnostic, slower, needs background samples."""
     import shap
     predict_fn = getattr(model, "predict_proba", None) or model.predict
@@ -124,20 +137,9 @@ def _compute_kernel(model, X_train, X_sample, feature_names) -> tuple[np.ndarray
     background = shap.sample(bg_df, min(50, len(bg_df)))
     explainer = shap.KernelExplainer(predict_fn, background)
     sv = explainer.shap_values(X_sample, nsamples=50)
-    sv, _ = _normalize_shap_values(sv)
+    sv, selected = _normalize_shap_values(sv)
     base = getattr(explainer, "expected_value", None)
-    if hasattr(base, "tolist"):
-        try:
-            base = base.tolist()
-            if isinstance(base, list) and len(base) == 2:
-                base = float(base[1])
-        except Exception:
-            base = None
-    try:
-        base = float(base) if isinstance(base, (int, float)) else base
-    except Exception:
-        base = None
-    return sv, base
+    return sv, _normalize_base_value(base, selected), selected
 
 
 def _compute_permutation(model, X_sample, y_sample, feature_names) -> np.ndarray:
@@ -267,6 +269,36 @@ async def compute_shap_summary(
     """
     task, dataset = await resolve_task_and_dataset(task_id, db)
 
+    if isinstance(task, DLTrainingTask):
+        context = build_dl_shap_context(
+            task,
+            dataset,
+            max_background=_DL_MAX_BACKGROUND,
+            max_samples=min(max(1, int(max_samples)), _DL_MAX_SAMPLES),
+        )
+        sv_per_sample, base_value, selected_class_idx = _compute_kernel(
+            context.model,
+            context.X_background,
+            context.X_sample,
+            context.feature_names,
+        )
+        mean_abs_shap = np.abs(
+            np.asarray(sv_per_sample, dtype=np.float64)
+        ).mean(axis=0)
+        payload = _build_payload(
+            method=METHOD_KERNEL,
+            feature_names=context.feature_names,
+            mean_abs_shap=mean_abs_shap,
+            sv_per_sample=sv_per_sample,
+            feature_values=context.X_sample,
+            base_value=base_value,
+            sample_count=len(context.X_sample),
+            class_index=selected_class_idx,
+            task_kind=context.task_kind,
+        )
+        payload["task_id"] = task.id
+        return payload
+
     loaded_model = load_model(task.model_path)
     prepared = load_and_split_data_for_model(
         dataset.file_path,
@@ -299,11 +331,14 @@ async def compute_shap_summary(
     sv_per_sample = None
     base_value = None
     mean_abs_shap = None
+    selected_class_idx = None
 
     # ---- Ladder rung 1: TreeExplainer -------------------------------------
     if _is_tree_model(model_type, model):
         try:
-            sv_per_sample, base_value = _compute_tree(model, X_sample)
+            sv_per_sample, base_value, selected_class_idx = _compute_tree(
+                model, X_sample
+            )
             mean_abs_shap = np.abs(np.asarray(sv_per_sample, dtype=np.float64)).mean(axis=0)
             method = METHOD_TREE
         except Exception as exc:
@@ -312,7 +347,9 @@ async def compute_shap_summary(
     # ---- Ladder rung 2: KernelExplainer -----------------------------------
     if method is None:
         try:
-            sv_per_sample, base_value = _compute_kernel(model, X_train, X_sample, feature_names)
+            sv_per_sample, base_value, selected_class_idx = _compute_kernel(
+                model, X_train, X_sample, feature_names
+            )
             mean_abs_shap = np.abs(np.asarray(sv_per_sample, dtype=np.float64)).mean(axis=0)
             method = METHOD_KERNEL
         except Exception as exc:
@@ -337,7 +374,7 @@ async def compute_shap_summary(
         feature_values=np.asarray(X_sample, dtype=np.float64) if sv_per_sample is not None else None,
         base_value=base_value,
         sample_count=len(X_sample),
-        class_index=1 if task_kind == "classification" and sv_per_sample is not None else None,
+        class_index=selected_class_idx,
         task_kind=task_kind,
     )
     payload["task_id"] = getattr(task, "id", task_id)
