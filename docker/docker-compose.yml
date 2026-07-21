@@ -4,9 +4,12 @@ services:
     image: mysql:8.0
     container_name: ml_platform_mysql
     restart: unless-stopped
+    env_file:
+      - path: .deploy_secrets
+        required: false
     environment:
-      MYSQL_ROOT_PASSWORD: "123456"
-      MYSQL_DATABASE: ml_platform
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-123456}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-ml_platform}"
     ports:
       - "3307:3306"
     volumes:
@@ -19,7 +22,7 @@ services:
       --sort-buffer-size=8388608
       --read-rnd-buffer-size=4194304
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-uroot", "-p123456", "--silent"]
+      test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -45,9 +48,12 @@ services:
     image: minio/minio:latest
     container_name: ml_platform_minio
     restart: unless-stopped
+    env_file:
+      - path: .deploy_secrets
+        required: false
     environment:
-      MINIO_ROOT_USER: "mlplatform"
-      MINIO_ROOT_PASSWORD: "mlplatform123"
+      MINIO_ROOT_USER: "${S3_ACCESS_KEY:-mlplatform}"
+      MINIO_ROOT_PASSWORD: "${S3_SECRET_KEY:-mlplatform123}"
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -69,11 +75,18 @@ services:
         condition: service_healthy
     volumes:
       - ./minio_seed:/seed:ro
+    env_file:
+      - path: .deploy_secrets
+        required: false
+    environment:
+      MINIO_ROOT_USER: "${S3_ACCESS_KEY:-mlplatform}"
+      MINIO_ROOT_PASSWORD: "${S3_SECRET_KEY:-mlplatform123}"
+      S3_BUCKET: "${S3_BUCKET:-ml-platform}"
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 mlplatform mlplatform123 &&
-      mc mb -p local/ml-platform || true &&
-      mc mirror --overwrite /seed/ml-platform/ local/ml-platform/ &&
+      mc alias set local http://minio:9000 \"$${MINIO_ROOT_USER}\" \"$${MINIO_ROOT_PASSWORD}\" &&
+      mc mb -p \"local/$${S3_BUCKET}\" || true &&
+      mc mirror --overwrite /seed/ml-platform/ \"local/$${S3_BUCKET}/\" &&
       echo 'MinIO seed complete' &&
       exit 0
       "
@@ -90,16 +103,23 @@ services:
       - "8000:8000"
     volumes:
       - ml_backend_storage:/app/storage
+    env_file:
+      - path: .deploy_secrets
+        required: false
     environment:
-      DATABASE_URL: "mysql+aiomysql://root:123456@mysql:3306/ml_platform"
-      REDIS_URL: "redis://redis:6379/0"
-      MLFLOW_TRACKING_URI: "sqlite:////app/storage/mlflow.db"
-      S3_ENDPOINT_URL: "http://minio:9000"
-      S3_ACCESS_KEY: "mlplatform"
-      S3_SECRET_KEY: "mlplatform123"
-      S3_BUCKET: "ml-platform"
-      S3_ENABLED: "true"
-      ENVIRONMENT: "production"
+      DATABASE_URL: "${DATABASE_URL:-mysql+aiomysql://root:123456@mysql:3306/ml_platform}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+      MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI:-sqlite:////app/storage/mlflow.db}"
+      S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-http://minio:9000}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY:-mlplatform}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY:-mlplatform123}"
+      S3_BUCKET: "${S3_BUCKET:-ml-platform}"
+      S3_ENABLED: "${S3_ENABLED:-true}"
+      # This is the PRODUCTION stack: default to production so a deploy that
+      # forgets ENVIRONMENT fails fast on config validation instead of silently
+      # booting with auth disabled. Local dev uses the root docker-compose.yml
+      # (infrastructure only) or .claude/launch.json.
+      ENVIRONMENT: "${ENVIRONMENT:-production}"
     depends_on:
       mysql:
         condition: service_healthy

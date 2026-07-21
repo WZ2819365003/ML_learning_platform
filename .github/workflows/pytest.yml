@@ -1,10 +1,13 @@
-name: Backend pytest
+name: Test suite
 
 on:
   push:
-    branches: [main, dev]
+    branches:
+      - main
+      - dev
+      - 'feat/**'
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   pytest:
@@ -34,3 +37,69 @@ jobs:
           S3_ENABLED: "false"
         run: |
           python -m pytest tests/ -q --tb=short
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ml_platform_web/package-lock.json
+
+      # npm install (not ci): the lockfile is macOS-generated and fails npm ci on
+      # linux ("Missing: esbuild@0.28.1 from lock file") — same reason as
+      # docker/Dockerfile.frontend.
+      - name: Install dependencies
+        working-directory: ml_platform_web
+        run: npm install --no-audit
+
+      - name: Lint, test, and build
+        working-directory: ml_platform_web
+        run: |
+          npx eslint src --quiet
+          npx vitest run
+          npm run build
+
+  migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: ml_platform/requirements.txt
+
+      - name: Install migration dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            alembic==1.14.1 \
+            sqlalchemy==2.0.36 \
+            aiosqlite==0.20.0 \
+            python-dotenv==1.0.1
+
+      - name: Upgrade an empty database
+        working-directory: ml_platform
+        env:
+          DATABASE_URL: sqlite+aiosqlite:////tmp/m0_empty.db
+        run: alembic upgrade head
+
+      - name: Stamp and adopt an existing database
+        working-directory: ml_platform
+        env:
+          DATABASE_URL: sqlite+aiosqlite:////tmp/m0_existing.db
+        run: |
+          python -c "from sqlalchemy import create_engine; from app.models.database import Base; Base.metadata.create_all(create_engine('sqlite:////tmp/m0_existing.db'))"
+          alembic stamp 0001
+          alembic upgrade head

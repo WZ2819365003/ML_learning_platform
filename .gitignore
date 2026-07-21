@@ -65,3 +65,6 @@ docker/runtime_data/
 # Local dev env overrides
 .env.local
 ml_platform_web/.env.local
+
+# Server-only deployment credentials
+docker/.deploy_secrets

@@ -158,12 +158,15 @@ async def lifespan(app: FastAPI):
     # Ensure storage directories exist
     settings.ensure_storage_dirs()
 
-    # Create all database tables
-    async with async_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    # Apply V3 workbench schema migrations (idempotent, safe to rerun)
-    from app.core.migrations import run_startup_migrations
-    await run_startup_migrations(async_engine)
+    # Production schema changes are owned by the deployment-time Alembic
+    # command. Local and test environments keep the legacy bootstrap path so
+    # existing SQLite workflows remain unchanged.
+    if not settings.is_production:
+        async with async_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        from app.core.migrations import run_startup_migrations
+
+        await run_startup_migrations(async_engine)
     # V3 Phase 2 — force-import services so their module-level
     # ``register_executor`` calls populate the Scheduler registry before any
     # task dispatch happens.  The router imports already cover training_service

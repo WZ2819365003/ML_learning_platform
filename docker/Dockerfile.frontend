@@ -7,9 +7,11 @@ WORKDIR /app
 # 复制 package.json
 COPY ml_platform_web/package*.json /app/
 
-# 安装依赖
-# npm install (not ci): tolerate npm 10/11 lockfile semantic drift between
-# local dev and the node:20-alpine builder — ci hard-fails on any mismatch.
+# 安装锁定依赖；本地开发和 CI 共用同一份 package-lock.json。
+# npm install (not ci): the committed lockfile is generated on macOS and is not
+# npm-ci-compatible on linux — `npm ci` fails here with
+# "Missing: esbuild@0.28.1 from lock file" (verified by building this image).
+# Regenerating a truly cross-platform lockfile is deferred; install resolves it.
 RUN npm install --prefer-offline --no-audit
 
 # 复制源代码
