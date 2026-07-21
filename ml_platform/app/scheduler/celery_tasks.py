@@ -126,21 +126,6 @@ async def _mark_task_success(platform_task_id: str, metrics: dict | None = None)
             await db.commit()
 
 
-async def _mark_task_failed(platform_task_id: str, error: str) -> None:
-    from app.models.database import PlatformTask, async_session_factory
-    from sqlalchemy import select
-    async with async_session_factory() as db:
-        result = await db.execute(
-            select(PlatformTask).where(PlatformTask.id == platform_task_id)
-        )
-        task = result.scalar_one_or_none()
-        if task:
-            task.status = "FAILED"
-            task.finished_at = _utcnow()
-            task.error_message = error[:2000]
-            await db.commit()
-
-
 async def _mark_task_retry(platform_task_id: str, error: str) -> None:
     """Record a retry attempt without ever clobbering a terminal state.
 

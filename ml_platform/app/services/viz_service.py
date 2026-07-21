@@ -1,10 +1,7 @@
 """Visualization service — computes data for charts and plots.
 
 Task resolution and SHAP computation live in `resolver.py` / `shap_service.py`;
-this module stays focused on the per-chart metric computation. Back-compat
-aliases (`_get_task_and_dataset`, `_TaskFacade`, `_is_regressor`,
-`_load_and_split_data`, `_load_task_model_data`) are preserved so existing
-in-function imports (e.g. `model_mgmt.py`) keep working.
+this module stays focused on the per-chart metric computation.
 """
 
 from __future__ import annotations
@@ -32,43 +29,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.services import shap_service
 from app.services.resolver import (
-    TaskFacade,
     is_regressor,
-    load_and_split_data_no_stratify,
-    load_and_split_data_stratified,
-    load_model,
     resolve_and_load,
     resolve_legacy_id_candidates,
-    resolve_task_and_dataset,
 )
 from app.services.object_storage import restore_file
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Back-compat aliases — kept so existing `from .viz_service import _*` work.
-# New code should import directly from `app.services.resolver`.
-# ---------------------------------------------------------------------------
-
-_TaskFacade = TaskFacade
-_is_regressor = is_regressor
-_load_model = load_model
-_load_and_split_data = load_and_split_data_stratified
-_get_task_and_dataset = resolve_task_and_dataset
-_resolve_metrics_candidate_ids = resolve_legacy_id_candidates
-
-
-def _load_task_model_data(task, dataset, test_size: float = 0.2):
-    """Non-stratified loader compatible with older callers.
-
-    Returns (model, X_train, X_test, y_train, y_test, feature_names).
-    """
-    X_train, X_test, y_train, y_test, feature_names = load_and_split_data_no_stratify(
-        dataset.file_path, task.target_column, test_size
-    )
-    model = load_model(task.model_path)
-    return model, X_train, X_test, y_train, y_test, feature_names
 
 
 # ---------------------------------------------------------------------------

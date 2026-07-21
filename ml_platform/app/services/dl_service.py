@@ -1,8 +1,7 @@
 """Deep-learning training service.
 
 Orchestrates DLTrainingTask lifecycle:
-  start_dl_training  → create DB row, launch _execute_dl_training coroutine
-  _execute_dl_training → async: set RUNNING, submit sync work to ThreadPoolExecutor
+  start_dl_training  → create DB row, dispatch through the scheduler
   _run_dl_sync         → sync: actual PyTorch training; publishes epoch events via EventBus
   stop_dl_training    → cancel async task
   get_dl_status / list_dl_tasks → DB queries
@@ -558,98 +557,6 @@ async def _run_dl_training_by_id(
 # ---------------------------------------------------------------------------
 # Async orchestration
 # ---------------------------------------------------------------------------
-
-async def _execute_dl_training(
-    task_id:      str,
-    file_path:    str,
-    target_column: str,
-    model_type:   str,
-    task_type:    str,
-    arch_config:  dict,
-    opt_config:   dict,
-    train_config: dict,
-    model_save_dir: str,
-    platform_task_id: str | None = None,
-):
-    """Background coroutine that runs DL training and updates both domain + platform tables."""
-    from app.scheduler.task_runner import update_platform_task_status
-
-    # ── Mark RUNNING ──────────────────────────────────────────────────────────
-    async with async_session_factory() as db:
-        result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-        task = result.scalar_one_or_none()
-        if task:
-            task.status = "RUNNING"
-            task.started_at = datetime.now(timezone.utc)
-            task.total_epochs = int(train_config.get("epochs", 50))
-            await db.commit()
-
-    if platform_task_id:
-        await update_platform_task_status(platform_task_id, "RUNNING")
-
-    loop = asyncio.get_event_loop()
-    try:
-        training_result = await loop.run_in_executor(
-            _executor,
-            _run_dl_sync,
-            task_id, file_path, target_column, model_type, task_type,
-            arch_config, opt_config, train_config, model_save_dir, loop,
-            platform_task_id,
-        )
-
-        stored_metrics = training_result["result_metrics"]
-
-        # ── Mark SUCCESS (domain) ─────────────────────────────────────────────
-        async with async_session_factory() as db:
-            result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-            task = result.scalar_one_or_none()
-            if task:
-                task.status = "SUCCESS"
-                task.progress = 100.0
-                task.current_epoch = int(stored_metrics.get("final_epoch") or task.total_epochs or 0)
-                task.task_type = training_result["task_type"]
-                task.result_metrics = stored_metrics
-                task.model_path = training_result["model_path"]
-                task.finished_at = datetime.now(timezone.utc)
-                await db.commit()
-
-        # ── Write-back: PlatformTask SUCCESS ─────────────────────────────────
-        if platform_task_id:
-            await update_platform_task_status(
-                platform_task_id, "SUCCESS",
-                metrics=stored_metrics,
-            )
-
-        loop.call_soon_threadsafe(event_bus.publish, f"dl:{task_id}", {
-            "type": "done", "status": "SUCCESS", "metrics": stored_metrics,
-        })
-
-    except Exception as exc:
-        logger.error("[DL %s] Failed: %s", task_id, exc, exc_info=True)
-        await _store_dl_log_record(
-            task_id=task_id,
-            level="ERROR",
-            message=f"训练失败: {exc}",
-            extra=None,
-        )
-        # ── Mark FAILED (domain) ──────────────────────────────────────────────
-        async with async_session_factory() as db:
-            result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-            task = result.scalar_one_or_none()
-            if task:
-                task.status = "FAILED"
-                task.error_message = str(exc)
-                task.finished_at = datetime.now(timezone.utc)
-                await db.commit()
-
-        # ── Write-back: PlatformTask FAILED ──────────────────────────────────
-        if platform_task_id:
-            await update_platform_task_status(platform_task_id, "FAILED", error=str(exc))
-
-        event_bus.publish(f"dl:{task_id}", {"type": "done", "status": "FAILED", "error": str(exc)})
-    finally:
-        _running_tasks.pop(task_id, None)
-
 
 # ---------------------------------------------------------------------------
 # Public API

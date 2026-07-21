@@ -265,27 +265,6 @@ def get_presigned_url(object_key: str, expires_in: int = 3600) -> str | None:
         return None
 
 
-def list_objects(prefix: str = "") -> list[dict]:
-    """List objects under ``prefix`` (e.g. ``models/`` or ``logs/``)."""
-    settings = get_settings()
-    if not settings.s3_enabled:
-        return []
-    try:
-        client = _get_client()
-        response = client.list_objects_v2(Bucket=settings.s3_bucket, Prefix=prefix)
-        return [
-            {
-                "key": obj["Key"],
-                "size": obj["Size"],
-                "last_modified": obj["LastModified"].isoformat(),
-            }
-            for obj in response.get("Contents", [])
-        ]
-    except Exception as exc:
-        logger.warning("list_objects(%s) failed: %s", prefix, exc)
-        return []
-
-
 def download_object_bytes(object_key: str) -> bytes | None:
     """Fetch an object's body as bytes. Returns None if S3 is disabled or the key is missing."""
     settings = get_settings()

@@ -86,7 +86,6 @@ def _utcnow() -> datetime:
 # DAG gate constants
 _TERMINAL_SUCCESS = {"SUCCESS", "COMPLETED"}
 _TERMINAL_FAILURE = {"FAILED", "CANCELLED"}
-_ACTIVE_STATUSES  = {"PENDING", "QUEUED", "RUNNING", "RETRY"}
 
 
 async def _gate_upstream(depends_on: Iterable[str] | None) -> tuple[str, list[str]]:
