@@ -27,6 +27,15 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+async def _complete(platform_task_id: str, status: str, *, error: str | None = None):
+    """Terminalise via the single M2c write-back entry (safe to call twice)."""
+    from app.services.run_writeback import complete_platform_task
+
+    return await complete_platform_task(
+        platform_task_id, status=status, error=error, final_attempt=True
+    )
+
+
 def _run_async(coro):
     """Run an async coroutine from a sync Celery task."""
     loop = asyncio.new_event_loop()
@@ -44,12 +53,34 @@ class MLBaseTask(CeleryTask):
     abstract = True
 
     def on_failure(self, exc, task_id, args, kwargs, einfo):
-        platform_task_id = kwargs.get("platform_task_id") or (args[0] if args else None)
-        if platform_task_id:
-            _run_async(_mark_task_failed(platform_task_id, str(exc)))
-            from app.scheduler.scheduler import CeleryScheduler
+        """Last-resort terminaliser once Celery gives up.
 
-            _run_async(CeleryScheduler().on_task_done(platform_task_id))
+        Routed through the unified completion entry (idempotent) so the
+        ExperimentRun, batch finalisation and DAG propagation all happen
+        exactly once — the old path wrote only the PlatformTask and then
+        propagated the DAG a second time.
+        """
+        from app.services.run_writeback import WritebackError
+
+        platform_task_id = kwargs.get("platform_task_id") or (args[0] if args else None)
+        if isinstance(exc, WritebackError):
+            # The work itself succeeded; only recording it failed. Writing
+            # FAILED here would erase a real result. The row stays non-terminal
+            # so ``scheduler.recover_stalled_tasks`` can re-arm and re-execute
+            # it — the result was never persisted, so re-running is the only
+            # honest recovery. Note that only the *terminal write-back* is
+            # idempotent: the executor is not attempt-fenced, so the re-run
+            # rewrites the same artifacts. See recover_stalled_tasks for the
+            # full statement of what that costs.
+            logger.error(
+                "Task %s: work completed but write-back never landed (%s). "
+                "Left non-terminal for recover_stalled_tasks to re-drive.",
+                task_id,
+                exc,
+            )
+            return
+        if platform_task_id:
+            _run_async(_complete(platform_task_id, "FAILED", error=str(exc)))
         logger.error("Task %s failed: %s", task_id, exc)
 
     def on_retry(self, exc, task_id, args, kwargs, einfo):
@@ -111,18 +142,29 @@ async def _mark_task_failed(platform_task_id: str, error: str) -> None:
 
 
 async def _mark_task_retry(platform_task_id: str, error: str) -> None:
+    """Record a retry attempt without ever clobbering a terminal state.
+
+    Conditional UPDATE rather than read-then-write: under concurrency a late
+    on_retry could otherwise observe RUNNING, lose the race to a delivery that
+    commits SUCCESS, and then overwrite it with RETRY.
+    """
     from app.models.database import PlatformTask, async_session_factory
-    from sqlalchemy import select
+    from app.services.run_writeback import _TERMINAL_STATES
+    from sqlalchemy import update
     async with async_session_factory() as db:
-        result = await db.execute(
-            select(PlatformTask).where(PlatformTask.id == platform_task_id)
+        await db.execute(
+            update(PlatformTask)
+            .where(
+                PlatformTask.id == platform_task_id,
+                PlatformTask.status.notin_(list(_TERMINAL_STATES)),
+            )
+            .values(
+                status="RETRY",
+                retry_count=PlatformTask.retry_count + 1,
+                error_message=error[:2000],
+            )
         )
-        task = result.scalar_one_or_none()
-        if task:
-            task.status = "RETRY"
-            task.retry_count = (task.retry_count or 0) + 1
-            task.error_message = error[:2000]
-            await db.commit()
+        await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +187,7 @@ def run_train_task(self, platform_task_id: str) -> dict:
         _run_async(_mark_task_success(platform_task_id, result.get("metrics")))
         return result
     except SoftTimeLimitExceeded:
-        _run_async(_mark_task_failed(platform_task_id, "Task exceeded time limit"))
+        _run_async(_complete(platform_task_id, "FAILED", error="Task exceeded time limit"))
         raise
     except Exception as exc:
         _run_async(_mark_task_retry(platform_task_id, str(exc)))
@@ -198,7 +240,7 @@ def run_explain_task(self, platform_task_id: str) -> dict:
         _run_async(_mark_task_success(platform_task_id, result.get("metrics")))
         return result
     except SoftTimeLimitExceeded:
-        _run_async(_mark_task_failed(platform_task_id, "Explain task exceeded time limit"))
+        _run_async(_complete(platform_task_id, "FAILED", error="Explain task exceeded time limit"))
         raise
     except Exception as exc:
         _run_async(_mark_task_retry(platform_task_id, str(exc)))
@@ -252,13 +294,23 @@ def run_platform_task_generic(self, platform_task_id: str) -> dict:
         # has something to show (status transitions beyond RUNNING are owned
         # by run_with_status).
         _run_async(_mark_celery_id(platform_task_id, self.request.id))
-        result = _run_async(_execute_generic(platform_task_id))
+        # M2c: only the last attempt may write a terminal FAILED — earlier
+        # attempts park the run in RETRY so the status doesn't flap.
+        retries = int(getattr(self.request, "retries", 0) or 0)
+        max_retries = int(getattr(self, "max_retries", 0) or 0)
+        result = _run_async(
+            _execute_generic(platform_task_id, final_attempt=retries >= max_retries)
+        )
         return result
     except SoftTimeLimitExceeded:
-        _run_async(_mark_task_failed(platform_task_id, "Task exceeded time limit"))
+        # A hard timeout is terminal — route it through the unified entry so the
+        # ExperimentRun reaches a terminal state too (not just the PlatformTask).
+        _run_async(
+            _complete(platform_task_id, "FAILED", error="Task exceeded time limit")
+        )
         raise
     except Exception as exc:
-        # run_with_status already wrote FAILED; bubble up so Celery retries.
+        # _execute_generic already recorded RETRY/FAILED via the unified entry.
         countdown = 30 * (2 ** int(getattr(self.request, "retries", 0)))
         raise self.retry(exc=exc, countdown=countdown)
 
@@ -277,7 +329,7 @@ async def _mark_celery_id(platform_task_id: str, celery_id: str) -> None:
             await db.commit()
 
 
-async def _execute_generic(platform_task_id: str) -> dict:
+async def _execute_generic(platform_task_id: str, final_attempt: bool = True) -> dict:
     """Resolve kind + payload_ref and invoke the executor via run_with_status."""
     from app.models.database import PlatformTask, async_session_factory
     from sqlalchemy import select
@@ -316,9 +368,62 @@ async def _execute_generic(platform_task_id: str) -> dict:
         )
         return {"metrics": {}}
 
-    # run_with_status owns RUNNING → SUCCESS/FAILED transitions.
-    result = await run_with_status(kind, domain_id, platform_task_id)
-    from app.scheduler.scheduler import CeleryScheduler
+    # M2c: a PlatformTask that backs a V3 ExperimentRun needs the full
+    # write-back tail (normalise metrics → Run → mirror logs → batch
+    # finalisation → DAG), not just the PlatformTask status that
+    # run_with_status writes. Both are funnelled through
+    # run_writeback.complete_platform_task so worker-side completion is
+    # byte-identical to the in-process path.
+    from app.scheduler.executors import get_executor
+    from app.services.run_writeback import (
+        WritebackError,
+        claim_for_execution,
+        complete_platform_task,
+    )
 
-    await CeleryScheduler().on_task_done(platform_task_id)
+    # Claim first (writes RUNNING atomically on Task+Run, refuses terminal).
+    # Re-executing an already-finished trial would burn a worker slot and could
+    # clobber a committed result, so a lost claim exits immediately.
+    if not await claim_for_execution(platform_task_id):
+        logger.info(
+            "PlatformTask %s already terminal; skipping duplicate execution",
+            platform_task_id,
+        )
+        return {"metrics": {}, "skipped": True}
+
+    try:
+        result = await get_executor(kind)(domain_id, platform_task_id)
+        if not isinstance(result, dict):
+            raise TypeError(
+                f"executor for kind={kind!r} returned {type(result).__name__}, expected dict"
+            )
+        metrics = result.get("metrics") or {}
+        evaluation_mode = result.get("evaluation_mode", "standard")
+    except Exception as exc:  # noqa: BLE001 — genuine execution failure
+        # Terminal-vs-retryable is decided by the caller (the Celery task body
+        # knows the remaining retry budget) and passed via _FINAL_ATTEMPT.
+        await complete_platform_task(
+            platform_task_id,
+            status="FAILED",
+            error=str(exc),
+            domain_task_id=domain_id,
+            final_attempt=final_attempt,
+        )
+        raise
+
+    # Execution succeeded. A failure from here is a *bookkeeping* failure: it is
+    # tagged so Celery's failure hook won't convert a good run into FAILED.
+    try:
+        await complete_platform_task(
+            platform_task_id,
+            status="SUCCESS",
+            metrics=metrics,
+            evaluation_mode=evaluation_mode,
+            domain_task_id=domain_id,
+            final_attempt=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise WritebackError(
+            f"executor for {platform_task_id} succeeded but write-back failed: {exc}"
+        ) from exc
     return result

@@ -59,6 +59,8 @@ def _serialize_run(run: ExperimentRun) -> dict[str, Any]:
         "params": run.params or {},
         "metrics": run.metrics or {},
         "status": run.status,
+        # M2c: terminal failure reason, survives PlatformTask cleanup.
+        "error_message": run.error_message,
         "rank": run.rank,
         "trial_no": run.trial_no,
         "search_meta": run.search_meta or {},

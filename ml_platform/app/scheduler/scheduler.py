@@ -43,7 +43,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Protocol, runtime_checkable
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.scheduler.executors import has_executor, run_with_status
 from app.scheduler.queues import DEFAULT, KIND_TO_QUEUE
@@ -400,28 +400,22 @@ async def _run_v3_trial_and_propagate(
     from app.services.tuning_service import _execute_single_trial
 
     try:
-        outcome = await _execute_single_trial(
+        # M2c: batch finalisation AND DAG propagation are owned by
+        # ``run_writeback.complete_platform_task``. Propagating here as well is
+        # not a harmless no-op — ``on_task_done`` has no atomic claim, so two
+        # callers can both observe a dependent as PENDING and submit it twice.
+        # ``_execute_single_trial`` funnels every exit (including unexpected
+        # exceptions) through the write-back, so propagation is guaranteed.
+        return await _execute_single_trial(
             domain_id,
             platform_task_id,
             run_id,
             experiment_id,
             kind=kind,
         )
-        if modeling_task_id and strategy_type != "bayesian_search":
-            from app.services.tuning_service import _finalise_batch
-
-            try:
-                await _finalise_batch(experiment_id, modeling_task_id)
-            except Exception:
-                logger.exception(
-                    "Batch finalisation failed after V3 trial %s", platform_task_id
-                )
-        return outcome
-    finally:
-        try:
-            await scheduler.on_task_done(platform_task_id)
-        except Exception:  # pragma: no cover
-            logger.exception("on_task_done raised after V3 trial %s", platform_task_id)
+    except Exception:
+        logger.exception("V3 trial wrapper failed for %s", platform_task_id)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +504,120 @@ async def reconcile_queued_tasks(
         await scheduler.submit(task_id)
         submitted.append(task_id)
     return submitted
+
+
+async def recover_stalled_tasks(
+    *,
+    older_than: timedelta = timedelta(hours=6),
+    now: datetime | None = None,
+    limit: int = 100,
+) -> list[str]:
+    """Re-arm Celery tasks stuck non-terminal with no one left to finish them.
+
+    ``reconcile_queued_tasks`` only repairs rows that never reached the broker.
+    It cannot help the other hole: a worker that *executed* the task but died
+    before the terminal commit landed. Those rows sit at RUNNING/RETRY with a
+    ``celery_task_id`` already set, so nothing re-drives them and the trial
+    hangs forever. That is exactly the tail a ``WritebackError`` leaves behind
+    when every write-back attempt fails.
+
+    We cannot recover the lost *result* — it was never persisted anywhere
+    durable — so the only honest recovery is re-execution. The row is reset to
+    QUEUED and resubmitted, and the normal claim/complete path takes over.
+
+    Consequences, stated precisely:
+
+    * This is at-least-once. A genuine trial that runs longer than
+      ``older_than`` will be executed a second time. The threshold must sit
+      above the training hard time limit; the default is deliberately generous.
+    * Only the **terminal write-back is idempotent**. Whichever attempt commits
+      first wins and the loser's ``complete_platform_task`` is a no-op. That is
+      NOT the same as the duplicate being harmless: the executors are not
+      attempt-fenced, so two attempts write the same domain task, the same log
+      files and the same ``storage/models/{task_id}.joblib``. A loser that
+      finishes after the winner can overwrite the winner's artifact, leaving
+      the recorded metrics describing a model that is no longer on disk.
+      Artifact fencing is required before Celery ``train`` is enabled in
+      production — see the known-limits list in the M2c commit.
+    * The re-arm is a compare-and-set on ``status`` plus the ``attempt_token``
+      we observed. A task that reached a terminal state, or that was re-claimed
+      into a *fresh* attempt between the scan and the write, no longer matches
+      and is left alone. The token exists precisely because the obvious
+      candidates cannot do this job: Celery reuses one task id across retries,
+      and ``started_at`` is stamped only on the first claim.
+    """
+    from app.models.database import ExperimentRun, PlatformTask, async_session_factory
+
+    stalled = ["RUNNING", "RETRY"]
+    cutoff = (now or _utcnow()) - older_than
+    async with async_session_factory() as db:
+        rows = await db.execute(
+            select(
+                PlatformTask.id,
+                PlatformTask.kind,
+                PlatformTask.attempt_token,
+            )
+            .where(
+                PlatformTask.status.in_(stalled),
+                PlatformTask.started_at.is_not(None),
+                PlatformTask.started_at <= cutoff,
+            )
+            .order_by(PlatformTask.started_at, PlatformTask.id)
+            .limit(limit)
+        )
+        candidates = rows.all()
+
+    recovered: list[str] = []
+    for task_id, kind, seen_attempt in candidates:
+        scheduler = get_scheduler(kind)
+        if not isinstance(scheduler, CeleryScheduler):
+            continue
+
+        # Compare-and-set on the attempt we observed, not just on status.
+        # Between the scan and here the task may have been re-claimed; the
+        # claim mints a new attempt_token, so a fresh attempt no longer
+        # matches and is left running.
+        identity = [
+            PlatformTask.attempt_token.is_(None)
+            if seen_attempt is None
+            else PlatformTask.attempt_token == seen_attempt
+        ]
+
+        async with async_session_factory() as db:
+            async with db.begin():
+                result = await db.execute(
+                    update(PlatformTask)
+                    .where(
+                        PlatformTask.id == task_id,
+                        PlatformTask.status.in_(stalled),
+                        *identity,
+                    )
+                    .values(
+                        status="QUEUED",
+                        attempt_token=None,
+                        celery_task_id=None,
+                        queued_at=_utcnow(),
+                        started_at=None,
+                        finished_at=None,
+                    )
+                )
+                if not result.rowcount:
+                    # Finished, or re-claimed into a fresh attempt, since the
+                    # scan. Either way there is nothing stalled to recover.
+                    continue
+                await db.execute(
+                    update(ExperimentRun)
+                    .where(
+                        ExperimentRun.task_id == task_id,
+                        ExperimentRun.status.in_(stalled),
+                    )
+                    .values(status="PENDING", started_at=None)
+                )
+
+        await scheduler.submit(task_id)
+        recovered.append(task_id)
+        logger.warning("Recovered stalled task %s (kind=%s) by re-queueing", task_id, kind)
+    return recovered
 
 
 # ---------------------------------------------------------------------------

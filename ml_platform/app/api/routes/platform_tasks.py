@@ -191,6 +191,9 @@ async def platform_task_tree(
             "trial_no": run.trial_no,
             "rank": run.rank,
             "status": run.status,
+            # M2c: the Run keeps its own terminal failure reason, so the tree
+            # still explains a failure after the PlatformTask is cleaned up.
+            "error_message": run.error_message,
             "metrics": run.metrics or {},
             "params": run.params or {},
             "source_experiment_type": run.source_experiment_type,

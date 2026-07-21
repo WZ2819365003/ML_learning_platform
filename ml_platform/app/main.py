@@ -4,7 +4,9 @@ ML Training Platform -- FastAPI application entry point.
 
 import logging
 import shutil
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
+from datetime import timedelta
 from typing import Any
 
 import pandas as pd
@@ -143,6 +145,46 @@ async def _seed_example_datasets() -> None:
         await db.commit()
 
 
+# Floor on the sweep interval, kept as a module constant so tests can drive
+# the loop without sleeping for real.
+_SWEEP_MIN_INTERVAL_SECONDS = 30
+
+
+async def _recovery_sweep_loop(reconcile_queued_tasks, recover_stalled_tasks) -> None:
+    """Periodically re-drive rows that no live worker will ever finish.
+
+    Two distinct holes, both at-least-once repairs:
+
+    * ``reconcile_queued_tasks`` — queued but never handed to the broker.
+    * ``recover_stalled_tasks``  — executed, but the worker died before the
+      terminal commit landed (the tail a ``WritebackError`` leaves behind).
+
+    Failures are logged and the loop continues: a transient DB outage must not
+    silently stop recovery for the rest of the process lifetime.
+    """
+    cfg = get_settings()
+    interval = max(_SWEEP_MIN_INTERVAL_SECONDS, cfg.recovery_sweep_interval_seconds)
+    stall_timeout = timedelta(seconds=cfg.stalled_task_timeout_seconds)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            requeued = await reconcile_queued_tasks()
+            if requeued:
+                logger.info("Recovery sweep re-submitted %d queued task(s)", len(requeued))
+        except Exception:
+            logger.exception("Recovery sweep: queued-task reconciliation failed")
+        try:
+            recovered = await recover_stalled_tasks(older_than=stall_timeout)
+            if recovered:
+                logger.warning(
+                    "Recovery sweep re-drove %d stalled task(s): %s",
+                    len(recovered),
+                    recovered,
+                )
+        except Exception:
+            logger.exception("Recovery sweep: stalled-task recovery failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage startup and shutdown lifecycle events."""
@@ -172,7 +214,7 @@ async def lifespan(app: FastAPI):
         await run_startup_migrations(async_engine)
     from app.core.logger import event_bus
     from app.scheduler.executors import load_executor_modules
-    from app.scheduler.scheduler import reconcile_queued_tasks
+    from app.scheduler.scheduler import reconcile_queued_tasks, recover_stalled_tasks
 
     load_executor_modules()
     start_event_bus = getattr(event_bus, "start", None)
@@ -180,6 +222,10 @@ async def lifespan(app: FastAPI):
     if start_event_bus is not None:
         await start_event_bus()
 
+    # Bound before the try so the finally can always test it: any failure in
+    # the startup steps below would otherwise raise UnboundLocalError here and
+    # mask the real error *and* skip event-bus / engine cleanup.
+    sweep_task: asyncio.Task | None = None
     try:
         try:
             reconciled = await reconcile_queued_tasks()
@@ -194,9 +240,21 @@ async def lifespan(app: FastAPI):
         await _seed_example_datasets()
         await resume_unfinished_ts_tasks()
 
+        # A one-shot sweep at startup is not enough: a worker can die at any
+        # moment, and ``MLBaseTask.on_failure`` delegates correctness for the
+        # "succeeded but never recorded" case to this sweep. Without a periodic
+        # runner those rows stay non-terminal until the next restart.
+        sweep_task = asyncio.create_task(
+            _recovery_sweep_loop(reconcile_queued_tasks, recover_stalled_tasks)
+        )
+
         yield
     finally:
         # --- Shutdown ---
+        if sweep_task is not None:
+            sweep_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await sweep_task
         if stop_event_bus is not None:
             await stop_event_bus()
         await async_engine.dispose()

@@ -657,6 +657,7 @@ async def task_runs(
             "trial_no": run.trial_no,
             "rank": run.rank,
             "status": run.status,
+            "error_message": run.error_message,
             # deployable/downloadable model handle for this run (see _resolve_domain_ref)
             "domain_task_id": domain_task_id,
             "family": family,

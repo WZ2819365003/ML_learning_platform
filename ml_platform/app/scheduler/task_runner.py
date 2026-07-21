@@ -298,26 +298,135 @@ async def retry_task(db: AsyncSession, platform_task_id: str) -> PlatformTask:
     return task
 
 
+_TERMINAL = ("SUCCESS", "FAILED", "CANCELLED")
+
+
 async def cancel_task(db: AsyncSession, platform_task_id: str) -> PlatformTask:
-    """Cancel a PENDING or QUEUED task. Running tasks are marked for soft-cancel."""
-    from sqlalchemy import select
-    result = await db.execute(
-        select(PlatformTask).where(PlatformTask.id == platform_task_id)
-    )
-    task = result.scalar_one_or_none()
+    """Cancel a PENDING or QUEUED task. Running tasks are marked for soft-cancel.
+
+    Cancellation is a terminal transition, so it obeys the same rules as the
+    completion path in ``run_writeback``:
+
+    * **Both rows, one transaction.** Leaving the ExperimentRun non-terminal
+      would let a late delivery re-claim the trial and would stop the batch
+      from ever finalising.
+    * **Locked, not read-then-written.** Without the lock a completion could
+      commit SUCCESS between our read and our flush, producing a split
+      ``Task=CANCELLED / Run=SUCCESS``. We take the same row locks as
+      ``_commit_terminal_state`` so the two serialise, and re-check *both*
+      rows afterwards — if the completion won, cancellation is refused.
+    * **The tails still run.** Cancelling the last outstanding trial produces
+      no completion callback, so nothing else would ever close the batch.
+      Finalisation and DAG propagation are triggered here instead.
+    """
+    from sqlalchemy import select, update as _update
+    from app.models.database import ExperimentRun
+
+    is_sqlite = db.bind is not None and db.bind.dialect.name == "sqlite"
+    task_stmt = select(PlatformTask).where(PlatformTask.id == platform_task_id)
+    run_stmt = select(ExperimentRun).where(ExperimentRun.task_id == platform_task_id)
+    if not is_sqlite:  # SQLite is single-writer and has no row locks
+        task_stmt = task_stmt.with_for_update()
+        run_stmt = run_stmt.with_for_update()
+
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
     if task is None:
         raise ValueError(f"PlatformTask {platform_task_id!r} not found")
-    if task.status in ("SUCCESS", "FAILED", "CANCELLED"):
-        raise ValueError(f"Task {platform_task_id!r} is already {task.status!r}")
+    run = (await db.execute(run_stmt)).scalar_one_or_none()
 
-    if task.celery_task_id:
+    if task.status in _TERMINAL:
+        raise ValueError(f"Task {platform_task_id!r} is already {task.status!r}")
+    if run is not None and run.status in _TERMINAL:
+        # A completion won the race under the lock. Cancelling the Task now
+        # would split the pair, so refuse instead.
+        raise ValueError(
+            f"Task {platform_task_id!r} already finished as {run.status!r}"
+        )
+
+    celery_task_id = task.celery_task_id
+    experiment_id = run.experiment_id if run is not None else None
+    now = _utcnow()
+
+    # Claim the transition with a conditional UPDATE and let rowcount decide.
+    # The read above is only a fast path for error messages: on SQLite there
+    # are no row locks, so a completion could commit between that read and
+    # this write. Gating on the same record the completion path gates on
+    # (the Run when there is one) makes exactly one of them win.
+    gate = (
+        _update(ExperimentRun)
+        .where(
+            ExperimentRun.task_id == platform_task_id,
+            ExperimentRun.status.notin_(list(_TERMINAL)),
+        )
+        .values(status="CANCELLED", finished_at=now)
+        if run is not None
+        else _update(PlatformTask)
+        .where(
+            PlatformTask.id == platform_task_id,
+            PlatformTask.status.notin_(list(_TERMINAL)),
+        )
+        .values(status="CANCELLED", finished_at=now)
+    )
+    gate = gate.execution_options(synchronize_session=False)
+    if not (await db.execute(gate)).rowcount:
+        await db.rollback()
+        raise ValueError(
+            f"Task {platform_task_id!r} finished before it could be cancelled"
+        )
+
+    # We own the transition; terminalise the pair in the same transaction.
+    task.status = "CANCELLED"
+    task.finished_at = now
+    await db.commit()
+
+    # Revoke only after the transaction commits: a synchronous broker call
+    # while holding row locks would extend the lock window and block the event
+    # loop. It is best-effort either way.
+    if celery_task_id:
         try:
             from app.scheduler.celery_app import celery_app
-            celery_app.control.revoke(task.celery_task_id, terminate=False)
-        except Exception as exc:
-            logger.warning("Could not revoke Celery task %s: %s", task.celery_task_id, exc)
+            celery_app.control.revoke(celery_task_id, terminate=False)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not revoke Celery task %s: %s", celery_task_id, exc)
 
-    task.status = "CANCELLED"
-    task.finished_at = _utcnow()
-    await db.flush()
+    await _run_cancellation_tails(platform_task_id, experiment_id)
     return task
+
+
+async def _run_cancellation_tails(platform_task_id: str, experiment_id: str | None) -> None:
+    """Close the batch and release dependents after a cancellation commits.
+
+    Best-effort: the cancellation itself is already durable, so a failure here
+    must not surface as "cancel failed".
+    """
+    from app.services.run_writeback import _propagate_dag
+
+    if experiment_id:
+        try:
+            from sqlalchemy import select as _select
+            from app.models.database import PlatformExperiment, async_session_factory
+            from app.services.tuning_service import _finalise_batch
+
+            async with async_session_factory() as session:
+                row = (
+                    await session.execute(
+                        _select(
+                            PlatformExperiment.modeling_task_id,
+                            PlatformExperiment.strategy_type,
+                        ).where(PlatformExperiment.id == experiment_id)
+                    )
+                ).first()
+            modeling_task_id, strategy_type = row if row else (None, None)
+
+            # Same exclusion the completion path applies: bayesian_search
+            # creates its runs incrementally, so finalising on one cancelled
+            # trial would look like done==total and close (usually FAILED) the
+            # experiment while the study keeps producing trials.
+            if modeling_task_id and strategy_type != "bayesian_search":
+                await _finalise_batch(experiment_id, modeling_task_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Batch finalisation after cancelling %s failed: %s", platform_task_id, exc
+            )
+
+    await _propagate_dag(platform_task_id)

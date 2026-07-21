@@ -656,6 +656,13 @@ class PlatformTask(Base):
     celery_task_id: Mapped[str | None] = mapped_column(String(255), default=None)
     worker_id: Mapped[str | None] = mapped_column(String(255), default=None)
 
+    # Identifies the *current execution attempt*, refreshed on every claim.
+    # Neither celery_task_id nor started_at can serve this purpose: Celery
+    # reuses the same task id across retries, and started_at is stamped once.
+    # Stalled-task recovery compares this token so it never resets a task that
+    # was legitimately re-claimed between the scan and the write.
+    attempt_token: Mapped[str | None] = mapped_column(String(36), default=None)
+
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
 
@@ -793,6 +800,10 @@ class ExperimentRun(Base):
     rank: Mapped[int | None] = mapped_column(Integer, default=None)
     artifacts_uri: Mapped[str | None] = mapped_column(String(1024), default=None)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
+    # Terminal failure reason for this trial. Written only once retries are
+    # exhausted (M2c) so a transient Celery retry doesn't leave a scary
+    # message behind on a run that later succeeds.
+    error_message: Mapped[str | None] = mapped_column(Text, default=None)
 
     # V3 tuning metadata ────────────────────────────────────────────────────
     # trial_no: sequence within its experiment (1-based).  Useful for grid/optuna.

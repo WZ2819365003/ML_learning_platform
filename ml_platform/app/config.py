@@ -86,6 +86,16 @@ class Settings:
     celery_kinds: str = field(
         default_factory=lambda: os.getenv("CELERY_KINDS", "")
     )
+    # Background recovery sweep (see scheduler.recover_stalled_tasks). The
+    # stall threshold MUST stay above the training hard time limit: without a
+    # heartbeat there is no way to tell a dead worker from a slow trial, so a
+    # threshold set too low duplicates live work.
+    recovery_sweep_interval_seconds: int = field(
+        default_factory=lambda: int(os.getenv("RECOVERY_SWEEP_INTERVAL_SECONDS", "300"))
+    )
+    stalled_task_timeout_seconds: int = field(
+        default_factory=lambda: int(os.getenv("STALLED_TASK_TIMEOUT_SECONDS", str(6 * 3600)))
+    )
 
     # Event bus mode — ``memory`` keeps the in-process pub/sub (unit tests +
     # inprocess scheduler); ``redis`` uses Redis channels so Celery workers

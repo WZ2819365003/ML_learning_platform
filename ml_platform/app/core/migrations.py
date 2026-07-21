@@ -143,6 +143,10 @@ def _migrate_experiment_runs(conn: Connection) -> None:
     _add_column_if_missing(
         conn, "experiment_runs", "source_experiment_type", "VARCHAR(32) NULL"
     )
+    # M2c terminal failure reason. Production gets this from Alembic 0003, but
+    # local/dev databases still bootstrap through this path — without it an
+    # existing SQLite file breaks with "no such column: error_message".
+    _add_column_if_missing(conn, "experiment_runs", "error_message", "TEXT NULL")
 
 
 def _backfill_modeling_tasks(conn: Connection) -> None:
@@ -328,6 +332,11 @@ def _migrate_platform_tasks_depends_on(conn: Connection) -> None:
     _add_column_if_missing(conn, "platform_tasks", "depends_on", "JSON NULL")
 
 
+def _migrate_platform_tasks_attempt_token(conn: Connection) -> None:
+    """Per-attempt identity for stalled-task recovery (see Alembic 0004)."""
+    _add_column_if_missing(conn, "platform_tasks", "attempt_token", "VARCHAR(36) NULL")
+
+
 def _migrate_training_tasks_cv_folds(conn: Connection) -> None:
     """Persist cross-validation folds on concrete classical-ML training tasks."""
     _add_column_if_missing(
@@ -354,6 +363,7 @@ async def run_startup_migrations(engine: AsyncEngine) -> None:
             await conn.run_sync(_migrate_training_plans_version)
             await conn.run_sync(_migrate_modeling_tasks_plan_binding)
             await conn.run_sync(_migrate_platform_tasks_depends_on)
+            await conn.run_sync(_migrate_platform_tasks_attempt_token)
             await conn.run_sync(_migrate_training_tasks_cv_folds)
     except Exception as exc:  # noqa: BLE001
         # Startup must never crash because of a migration hiccup; log and move on.
