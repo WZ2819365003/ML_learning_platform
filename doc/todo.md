@@ -33,9 +33,13 @@
 
 ## P3 可靠性与可观测性
 
-- [ ] 将 `InProcessScheduler` 的生产替代方案打通：Celery worker、Redis broker、任务重试、取消、恢复。
-- [ ] 为数据库 schema 引入正式 migration 流程，避免运行库和代码模型漂移。
-- [ ] WebSocket 跨实例改为 Redis pub/sub，支持多 backend 实例部署。
+- [x] 将 `InProcessScheduler` 的生产替代方案打通：Celery worker、Redis broker、任务重试、取消、恢复。
+      基础设施已就绪（worker 容器、queues 单一来源、claim/CAS 写回、reconcile + stalled recovery）。
+      **但生产尚未开启** —— 阻断项是 executor 的 attempt fencing，见 TECH_DEBT TD-2。
+- [x] 为数据库 schema 引入正式 migration 流程，避免运行库和代码模型漂移。
+      Alembic 已冻结 0001 基线并推进到 0004；生产走 Alembic，非生产走幂等启动迁移。
+- [x] WebSocket 跨实例改为 Redis pub/sub，支持多 backend 实例部署。
+      `EVENT_BUS_MODE=redis` 已实现；生产 compose 默认仍是 `memory`，多实例前需切换。
 - [ ] 对训练失败补结构化错误分类：数据问题、模型参数问题、依赖问题、资源问题。
 - [ ] 对长任务补资源指标：耗时、CPU/内存、训练数据规模、模型文件大小。
 
