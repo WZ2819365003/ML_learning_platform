@@ -644,3 +644,41 @@ def test_explicit_startup_trials_wins():
     assert tuning_service._tpe_startup_trials(10, {"n_startup_trials": 7}) == 7
     # …but never zero: TPE needs at least one observation.
     assert tuning_service._tpe_startup_trials(10, {"n_startup_trials": 0}) == 1
+
+
+async def test_startup_migration_covers_every_alembic_column(tmp_path):
+    """The non-production bootstrap must not fall behind Alembic.
+
+    `datasets.content_sha256` shipped as Alembic 0002 but had no counterpart
+    here, so a dev database created through create_all + startup migrations
+    permanently lacked it and every dataset query failed. This pins the
+    specific gap and the general rule.
+    """
+    from sqlalchemy import create_engine, inspect
+
+    from app.core.migrations import (
+        _migrate_datasets_content_sha256,
+        _migrate_platform_tasks_attempt_token,
+    )
+    from app.models.database import Base
+
+    db_file = tmp_path / "legacy.db"
+    engine = create_engine(f"sqlite:///{db_file}")
+    Base.metadata.create_all(engine)
+
+    # Simulate a database created before those columns existed.
+    with engine.connect() as c:
+        c.exec_driver_sql("ALTER TABLE datasets DROP COLUMN content_sha256")
+        c.exec_driver_sql("ALTER TABLE platform_tasks DROP COLUMN attempt_token")
+        c.commit()
+
+    with engine.connect() as c:
+        _migrate_datasets_content_sha256(c)
+        _migrate_platform_tasks_attempt_token(c)
+        c.commit()
+
+    datasets = {col["name"] for col in inspect(engine).get_columns("datasets")}
+    tasks = {col["name"] for col in inspect(engine).get_columns("platform_tasks")}
+    assert "content_sha256" in datasets
+    assert "attempt_token" in tasks
+    engine.dispose()

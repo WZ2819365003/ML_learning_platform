@@ -5,7 +5,8 @@ Two routers:
 - inference_router (prefix="/inference") — registered at root → /inference/...
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_db
@@ -111,6 +112,65 @@ async def predict_route(
         db=db,
     )
     return InferenceJobResponse(**result)
+
+
+@inference_router.post("/{deployment_id}/batch-predict")
+async def batch_predict_route(
+    deployment_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Submit a CSV for asynchronous batch prediction.
+
+    Returns immediately with a job id; poll the status endpoint. Unlike the
+    synchronous route this never materialises the whole file in memory.
+    """
+    from app.services.batch_prediction_service import create_batch_job
+
+    content = await file.read()
+    return await create_batch_job(
+        db,
+        deployment_id=deployment_id,
+        filename=file.filename or "upload.csv",
+        content=content,
+    )
+
+
+@inference_router.get("/{deployment_id}/batch-predict/{job_id}")
+async def batch_predict_status_route(
+    deployment_id: str,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.services.batch_prediction_service import get_batch_job, serialize_batch_job
+
+    return serialize_batch_job(await get_batch_job(db, deployment_id, job_id))
+
+
+@inference_router.get("/{deployment_id}/batch-predict/{job_id}/download")
+async def batch_predict_download_route(
+    deployment_id: str,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream the result CSV. 409 while the job is still running so the caller
+    never receives a truncated file that looks complete."""
+    from pathlib import Path
+
+    from app.services.batch_prediction_service import get_batch_job
+
+    job = await get_batch_job(db, deployment_id, job_id)
+    if job.status != "completed" or not job.result_path:
+        raise HTTPException(
+            status_code=409,
+            detail=f"预测任务尚未完成（当前状态：{job.status}），结果暂不可下载",
+        )
+    path = Path(job.result_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="结果文件不存在")
+    return FileResponse(
+        path, media_type="text/csv", filename=f"predictions-{job_id[:8]}.csv"
+    )
 
 
 @inference_router.get("/{deployment_id}/result/{job_id}", response_model=InferenceJobResponse)

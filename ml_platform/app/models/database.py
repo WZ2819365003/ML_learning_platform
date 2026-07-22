@@ -300,9 +300,17 @@ class InferenceJob(Base):
     )
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     input_rows: Mapped[int] = mapped_column(Integer, default=0)
+    # Small synchronous requests keep their results inline; batch jobs do not.
+    # A CSV with 100k rows would blow up this JSON column and cannot be streamed
+    # back to the client, so file-backed jobs leave these NULL and use *_path.
     predictions: Mapped[list | None] = mapped_column(JSON, default=None)
     probabilities: Mapped[list | None] = mapped_column(JSON, default=None)
     error_message: Mapped[str | None] = mapped_column(Text, default=None)
+
+    # Batch (file-backed) jobs — see batch_prediction_service.
+    input_path: Mapped[str | None] = mapped_column(String(1024), default=None)
+    result_path: Mapped[str | None] = mapped_column(String(1024), default=None)
+    processed_rows: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 

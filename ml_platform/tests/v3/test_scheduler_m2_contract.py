@@ -186,8 +186,12 @@ def test_executor_module_loader_has_one_explicit_import_list():
     with patch("app.scheduler.executors.import_module") as import_module:
         executors.load_executor_modules()
 
+    # The list is explicit on purpose: an executor that is never imported is
+    # never registered, and the failure surfaces far away as "no executor for
+    # kind=X" at dispatch time. Adding a kind means adding it here.
     assert [call.args[0] for call in import_module.call_args_list] == [
         "app.services.training_service",
         "app.services.dl_service",
         "app.services.explain_service",
+        "app.services.batch_prediction_service",
     ]

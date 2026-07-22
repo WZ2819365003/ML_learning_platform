@@ -47,6 +47,7 @@ _EXECUTOR_MODULES = (
     "app.services.training_service",
     "app.services.dl_service",
     "app.services.explain_service",
+    "app.services.batch_prediction_service",
 )
 
 

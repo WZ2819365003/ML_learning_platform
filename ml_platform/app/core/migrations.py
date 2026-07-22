@@ -332,6 +332,26 @@ def _migrate_platform_tasks_depends_on(conn: Connection) -> None:
     _add_column_if_missing(conn, "platform_tasks", "depends_on", "JSON NULL")
 
 
+def _migrate_inference_jobs_batch(conn: Connection) -> None:
+    """File-backed batch prediction columns (see Alembic 0005)."""
+    _add_column_if_missing(conn, "inference_jobs", "input_path", "VARCHAR(1024) NULL")
+    _add_column_if_missing(conn, "inference_jobs", "result_path", "VARCHAR(1024) NULL")
+    _add_column_if_missing(conn, "inference_jobs", "processed_rows", "INT NOT NULL DEFAULT 0")
+
+
+def _migrate_datasets_content_sha256(conn: Connection) -> None:
+    """Content hash for dataset dedup/versioning.
+
+    This column shipped as Alembic 0002 but was never mirrored here, so any
+    database bootstrapped through the non-production path (create_all + these
+    idempotent migrations) never got it. The result is a local/dev environment
+    that cannot run the current code at all — every dataset query fails with
+    ``Unknown column 'datasets.content_sha256'``. Production is unaffected
+    because it goes through Alembic.
+    """
+    _add_column_if_missing(conn, "datasets", "content_sha256", "VARCHAR(64) NULL")
+
+
 def _migrate_platform_tasks_attempt_token(conn: Connection) -> None:
     """Per-attempt identity for stalled-task recovery (see Alembic 0004)."""
     _add_column_if_missing(conn, "platform_tasks", "attempt_token", "VARCHAR(36) NULL")
@@ -362,6 +382,8 @@ async def run_startup_migrations(engine: AsyncEngine) -> None:
             await conn.run_sync(_migrate_training_plans)
             await conn.run_sync(_migrate_training_plans_version)
             await conn.run_sync(_migrate_modeling_tasks_plan_binding)
+            await conn.run_sync(_migrate_datasets_content_sha256)
+            await conn.run_sync(_migrate_inference_jobs_batch)
             await conn.run_sync(_migrate_platform_tasks_depends_on)
             await conn.run_sync(_migrate_platform_tasks_attempt_token)
             await conn.run_sync(_migrate_training_tasks_cv_folds)
