@@ -20,6 +20,15 @@ export default defineConfig(({ mode }) => {
           secure: false,
           ws: true,
         },
+        // Inference routes live outside /api by design (see api.js). nginx
+        // proxies /inference/ in production; without the same rule here every
+        // online-prediction and batch-prediction call 404s against the dev
+        // server instead of reaching the backend.
+        '/inference': {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: false,
+        },
         '/ws': {
           target: wsTarget,
           ws: true,

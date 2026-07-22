@@ -722,7 +722,9 @@ export default function ModelDeploy() {
               ...(drawer.kind === 'ml' && drawer.record ? [{
                 key: 'batch',
                 label: '批量预测',
-                children: <BatchPredictPanel deploymentId={drawer.record.id} />,
+                // /deploy/list returns `deployment_id`, not `id` — passing record.id
+                // silently sends `undefined` and the API answers 「部署不存在」.
+                children: <BatchPredictPanel deploymentId={drawer.record.deployment_id} />,
               }] : []),
             ]}
           />

@@ -19,6 +19,7 @@ ml_platform/mlruns/
 ml_platform/storage/uploads/
 ml_platform/storage/models/
 ml_platform/storage/logs/
+ml_platform/storage/predictions/
 ml_platform/storage/*.db
 
 # Node
