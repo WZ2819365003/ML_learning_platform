@@ -226,3 +226,87 @@ async def test_serializer_exposes_progress_without_leaking_paths(db, session_fac
     # Filesystem paths are server internals — the client gets a download route.
     assert "result_path" not in payload
     assert "input_path" not in payload
+
+
+# ---------------------------------------------------------------------------
+# Persistence — surviving a rebuilt storage volume
+# ---------------------------------------------------------------------------
+
+async def test_input_is_uploaded_not_only_written_locally(db):
+    """The volume must not be the only copy of what was scored.
+
+    Without this the job cannot be re-run after a container rebuild, and there
+    is no record of the data a prediction was made against.
+    """
+    dep_id = await _seed(db)
+    uploaded: list[tuple[str, str]] = []
+
+    def spy_upload(local, key):
+        uploaded.append((str(local), key))
+        return key
+
+    with patch.object(bps, "upload_file", spy_upload):
+        result = await bps.create_batch_job(
+            db, deployment_id=dep_id, filename="in.csv", content=CSV_IN
+        )
+
+    keys = [k for _, k in uploaded]
+    assert keys == [f"predictions/{result['job_id']}-input.csv"], (
+        f"input was not uploaded to object storage: {keys}"
+    )
+
+
+async def test_executor_restores_a_vanished_input(db, session_factory, scratch_predictions):
+    """A rebuilt volume must not make recovery impossible: the executor asks
+    object storage before declaring the input lost."""
+    dep_id = await _seed(db)
+    with patch.object(bps, "upload_file", lambda *a, **k: None):
+        submitted = await bps.create_batch_job(
+            db, deployment_id=dep_id, filename="in.csv", content=CSV_IN
+        )
+    job_id = submitted["job_id"]
+
+    async with session_factory() as s:
+        job = (await s.execute(select(InferenceJob).where(InferenceJob.id == job_id))).scalar_one()
+        input_path = Path(job.input_path)
+    input_path.unlink()  # simulate the volume being rebuilt
+
+    restored: list[str] = []
+
+    def fake_restore(local_path, jid, *, kind):
+        restored.append(kind)
+        Path(local_path).write_bytes(CSV_IN)  # object storage still had it
+        return Path(local_path)
+
+    def fake_predict(model, training_df, rows, target, include_probabilities=False):
+        return {"predictions": ["p"] * len(rows), "probabilities": None}
+
+    async def fake_loader(db_, deployment_id):
+        return object(), None, "y"
+
+    with patch.object(bps, "restore_batch_file", fake_restore), \
+            patch.object(bps, "_load_predictor", fake_loader), \
+            patch("app.services.prediction_service.predict_with_model", fake_predict), \
+            patch.object(bps, "upload_file", lambda *a, **k: None):
+        out = await bps.run_batch_prediction(job_id, submitted["platform_task_id"])
+
+    assert restored == ["input"], "executor gave up without asking object storage"
+    assert out["metrics"]["processed_rows"] == 3
+
+
+async def test_executor_still_fails_when_object_storage_has_nothing(db, session_factory):
+    """Restore is a fallback, not a way to make a genuinely lost input silent."""
+    dep_id = await _seed(db)
+    with patch.object(bps, "upload_file", lambda *a, **k: None):
+        submitted = await bps.create_batch_job(
+            db, deployment_id=dep_id, filename="in.csv", content=CSV_IN
+        )
+    async with session_factory() as s:
+        job = (await s.execute(
+            select(InferenceJob).where(InferenceJob.id == submitted["job_id"])
+        )).scalar_one()
+        Path(job.input_path).unlink()
+
+    with patch.object(bps, "restore_batch_file", lambda *a, **k: None):
+        with pytest.raises(FileNotFoundError, match="无可恢复副本"):
+            await bps.run_batch_prediction(submitted["job_id"], submitted["platform_task_id"])

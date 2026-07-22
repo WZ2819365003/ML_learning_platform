@@ -41,6 +41,7 @@ from app.models.database import (
 )
 from app.services.object_storage import (
     restore_dataset_file,
+    restore_file,
     restore_model_bundle,
     upload_file,
 )
@@ -49,6 +50,25 @@ logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 5_000
 _PREDICTION_COLUMN = "prediction"
+
+
+def _input_key(job_id: str) -> str:
+    return f"predictions/{job_id}-input.csv"
+
+
+def _result_key(job_id: str) -> str:
+    return f"predictions/{job_id}-result.csv"
+
+
+def restore_batch_file(local_path: str | Path, job_id: str, *, kind: str) -> Path | None:
+    """Read-through for batch prediction files.
+
+    Uploading without a restore path only protects against *deleting* the file
+    by hand; it does nothing for the case that matters — the storage volume is
+    gone and the row still points at a path that no longer exists.
+    """
+    key = _input_key(job_id) if kind == "input" else _result_key(job_id)
+    return restore_file(Path(local_path), [key])
 
 
 def _predictions_dir() -> Path:
@@ -92,6 +112,16 @@ async def create_batch_job(
     input_path = _predictions_dir() / f"{job.id}-input.csv"
     input_path.write_bytes(content)
     job.input_path = str(input_path)
+
+    # Upload the input too, not just the result. Without it the volume is the
+    # only copy: a rebuilt container cannot re-run the job (the executor hard
+    # -fails on a missing input), and there is no record of what was actually
+    # scored. Best-effort like every other write-through — the local file is
+    # the source of truth for this request.
+    try:
+        upload_file(input_path, _input_key(job.id))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Batch prediction input upload failed for %s: %s", job.id, exc)
 
     from app.scheduler.task_runner import register_domain_task
 
@@ -171,7 +201,12 @@ async def run_batch_prediction(domain_task_id: str, platform_task_id: str) -> di
         await db.commit()
 
     if not input_path.exists():
-        raise FileNotFoundError(f"批量预测输入文件缺失: {input_path}")
+        # The volume may have been rebuilt since submission. Try object storage
+        # before giving up — otherwise stalled-task recovery can never succeed.
+        if restore_batch_file(input_path, domain_task_id, kind="input") is None:
+            raise FileNotFoundError(
+                f"批量预测输入文件缺失，且对象存储中无可恢复副本: {input_path}"
+            )
 
     async with async_session_factory() as db:
         model, training_df, target_column = await _load_predictor(db, deployment_id)
@@ -214,9 +249,8 @@ async def run_batch_prediction(domain_task_id: str, platform_task_id: str) -> di
                 job.processed_rows = processed
                 await db.commit()
 
-    object_key = f"predictions/{domain_task_id}-result.csv"
     try:
-        upload_file(result_path, object_key)
+        upload_file(result_path, _result_key(domain_task_id))
     except Exception as exc:  # noqa: BLE001 — object storage is a copy, not the source
         logger.warning("Batch prediction result upload failed for %s: %s", domain_task_id, exc)
 

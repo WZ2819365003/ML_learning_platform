@@ -165,9 +165,17 @@ async def batch_predict_download_route(
             status_code=409,
             detail=f"预测任务尚未完成（当前状态：{job.status}），结果暂不可下载",
         )
+    from app.services.batch_prediction_service import restore_batch_file
+
     path = Path(job.result_path)
     if not path.exists():
-        raise HTTPException(status_code=404, detail="结果文件不存在")
+        # The row says the job completed, so the result existed. A rebuilt
+        # storage volume must not turn that into a 404 when object storage
+        # still holds the copy we uploaded.
+        if restore_batch_file(path, job_id, kind="result") is None:
+            raise HTTPException(
+                status_code=404, detail="结果文件不存在，且对象存储中无可恢复副本"
+            )
     return FileResponse(
         path, media_type="text/csv", filename=f"predictions-{job_id[:8]}.csv"
     )
