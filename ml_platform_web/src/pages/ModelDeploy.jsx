@@ -19,6 +19,7 @@ import {
   PlusOutlined, ReloadOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
 import api, { dataApi, deployApi, dlApi, modelApi, trainingApi, tsApi } from '../services/api'
+import BatchPredictPanel from '../components/workbench/BatchPredictPanel'
 import { formatDateTime } from '../utils/formatters'
 
 const { Text, Title } = Typography
@@ -715,6 +716,14 @@ export default function ModelDeploy() {
                   </Space>
                 ),
               },
+              // ML deployments only: batch prediction is backed by the classical
+              // inference path (deploy_service + InferenceJob). DL/TS deployments
+              // have their own predict routes and no batch job table.
+              ...(drawer.kind === 'ml' && drawer.record ? [{
+                key: 'batch',
+                label: '批量预测',
+                children: <BatchPredictPanel deploymentId={drawer.record.id} />,
+              }] : []),
             ]}
           />
         )}

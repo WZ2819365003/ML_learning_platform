@@ -8,6 +8,7 @@ import {
   NodeIndexOutlined, LineChartOutlined, ExperimentOutlined,
   CheckCircleFilled, CloseCircleFilled, ClockCircleFilled, FireOutlined,
   FileTextOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { modelingTaskApi } from '../services/api'
@@ -56,6 +57,7 @@ export default function ModelingTaskDetail() {
 
   // Modals
   const [batchOpen, setBatchOpen] = useState(false)
+  const [automlLoading, setAutomlLoading] = useState(false)
   const [inspectorRunId, setInspectorRunId] = useState(null)
   const [inspectorTab, setInspectorTab] = useState('overview')
 
@@ -127,6 +129,19 @@ export default function ModelingTaskDetail() {
     await loadTask()
     await loadRuns()
     if (activeTab === 'compare') await loadLeaderboard()
+  }
+
+  const handleAutoml = async () => {
+    setAutomlLoading(true)
+    try {
+      const res = await modelingTaskApi.launchAutoml(taskId)
+      message.success(`AutoML 已启动，共 ${res?.trials_planned ?? '?'} 个候选`)
+      await refreshAll()
+    } catch (err) {
+      message.error(err?.response?.data?.detail || err?.message || 'AutoML 启动失败')
+    } finally {
+      setAutomlLoading(false)
+    }
   }
 
   if (loading && !task) {
@@ -369,6 +384,13 @@ export default function ModelingTaskDetail() {
           <Space>
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/v3/tasks')}>返回</Button>
             <Button icon={<ReloadOutlined />} onClick={refreshAll}>刷新</Button>
+            <Button
+              icon={<ThunderboltOutlined />}
+              loading={automlLoading}
+              onClick={() => void handleAutoml()}
+            >
+              AutoML 一键调优
+            </Button>
             <Button type="primary" icon={<PlusOutlined />} disabled={finalizationLocked}
               onClick={() => setBatchOpen(true)}>
               启动新批次

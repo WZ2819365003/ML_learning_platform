@@ -247,6 +247,20 @@ export const deployApi = {
   predict(deploymentId, payload) {
     return inferenceApi.post(`/inference/${deploymentId}/predict`, payload);
   },
+  // Batch prediction is file-in / file-out and runs asynchronously — the POST
+  // returns a job id, not results. See batch_prediction_service.py.
+  submitBatchPredict(deploymentId, file) {
+    const form = new FormData();
+    form.append('file', file);
+    return inferenceApi.post(`/inference/${deploymentId}/batch-predict`, form);
+  },
+  getBatchPredict(deploymentId, jobId) {
+    return inferenceApi.get(`/inference/${deploymentId}/batch-predict/${jobId}`);
+  },
+  batchPredictDownloadUrl(deploymentId, jobId) {
+    // inferenceApi's baseURL is '/', so interpolating it would yield '//inference/…'.
+    return `/inference/${deploymentId}/batch-predict/${jobId}/download`;
+  },
   getResult(deploymentId, jobId) {
     return inferenceApi.get(`/inference/${deploymentId}/result/${jobId}`);
   },
