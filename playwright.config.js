@@ -2,11 +2,13 @@
 const { defineConfig, devices } = require('@playwright/test');
 const path = require('path');
 
-// Ports are overridable so a locally running docker stack (which also binds
-// 8000/3000) doesn't get reused as the system under test — `reuseExistingServer`
-// would otherwise silently point the suite at whatever build is already there.
-const API_PORT = process.env.E2E_API_PORT || '8000';
-const WEB_PORT = process.env.E2E_WEB_PORT || '3000';
+// The suite runs on its own ports, NOT the dev/docker defaults (8000/3000).
+// With `reuseExistingServer` a suite pointed at those would silently adopt
+// whatever build happens to be running — a stale docker image passes or fails
+// tests for reasons that have nothing to do with the working tree, with no
+// warning. Overridable via E2E_API_PORT / E2E_WEB_PORT.
+const API_PORT = process.env.E2E_API_PORT || '8100';
+const WEB_PORT = process.env.E2E_WEB_PORT || '3100';
 
 const e2eDatabaseUrl = process.env.E2E_DATABASE_URL
   || `sqlite+aiosqlite:///${path.resolve(__dirname, 'ml_platform/storage/e2e-playwright.db')}`;

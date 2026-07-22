@@ -1,5 +1,5 @@
-const WEB_PORT = process.env.E2E_WEB_PORT || '3000';
-const API_PORT = process.env.E2E_API_PORT || '8000';
+const WEB_PORT = process.env.E2E_WEB_PORT || '3100';
+const API_PORT = process.env.E2E_API_PORT || '8100';
 
 const WEB_BASE = (process.env.BASE_UI || `http://127.0.0.1:${WEB_PORT}`)
   .replace(/\/$/, '');
