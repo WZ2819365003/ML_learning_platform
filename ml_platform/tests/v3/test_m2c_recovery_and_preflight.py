@@ -609,3 +609,38 @@ async def test_cancelling_a_bayesian_trial_does_not_close_the_study(db, session_
     await task_runner.cancel_task(db, pt_id)
 
     assert finalised == [], "cancelling one bayesian trial closed the whole study"
+
+
+# ---------------------------------------------------------------------------
+# TD-5 — bayesian must actually reach the TPE modelling stage
+# ---------------------------------------------------------------------------
+
+def test_default_budget_leaves_room_for_tpe():
+    """The regression this guards: Optuna's default n_startup_trials is 10 and
+    this platform's default n_trials_per_model is also 10, so a default
+    「贝叶斯搜索」 spent its entire budget in the random startup phase and never
+    modelled anything — random search wearing a Bayesian label."""
+    startup = tuning_service._tpe_startup_trials(10)
+    assert startup < 10, "default budget still spends every trial on random startup"
+    assert 10 - startup >= 5, "too few trials left for TPE to be worth the label"
+
+
+@pytest.mark.parametrize(
+    "n_trials, expected",
+    [
+        (1, 3),      # floor: never model on nothing
+        (5, 3),
+        (10, 3),
+        (15, 5),
+        (30, 10),    # ceiling: Optuna's own default once affordable
+        (100, 10),
+    ],
+)
+def test_startup_trials_scale_with_budget(n_trials, expected):
+    assert tuning_service._tpe_startup_trials(n_trials) == expected
+
+
+def test_explicit_startup_trials_wins():
+    assert tuning_service._tpe_startup_trials(10, {"n_startup_trials": 7}) == 7
+    # …but never zero: TPE needs at least one observation.
+    assert tuning_service._tpe_startup_trials(10, {"n_startup_trials": 0}) == 1

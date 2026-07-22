@@ -1431,6 +1431,29 @@ async def _run_bayesian_search_guarded(**kwargs: Any) -> None:
             await db.commit()
 
 
+def _tpe_startup_trials(n_trials: int, budget_config: dict[str, Any] | None = None) -> int:
+    """How many trials TPE spends on random exploration before it models.
+
+    Optuna's default is 10 — and this platform's default ``n_trials_per_model``
+    is also 10. Left alone, that means the default "bayesian search" spends
+    100% of its budget in the random startup phase and never reaches the TPE
+    modelling stage at all: measured on optuna 4.1.0, a default run completes
+    10 trials with **zero** TPE-sampled suggestions. Users pick 「贝叶斯搜索」
+    and get random search, only slower (trials run sequentially).
+
+    Scaling startup with the budget fixes that without making the default run
+    any longer: ~1/3 of trials explore, the rest exploit. The floor of 3 keeps
+    TPE from modelling on almost nothing; the ceiling of 10 preserves Optuna's
+    default behaviour once the budget is large enough to afford it.
+
+    An explicit ``n_startup_trials`` in budget_config always wins.
+    """
+    explicit = (budget_config or {}).get("n_startup_trials")
+    if explicit is not None:
+        return max(1, int(explicit))
+    return max(3, min(10, n_trials // 3))
+
+
 async def _run_bayesian_search(
     *,
     experiment_id: str,
@@ -1456,6 +1479,7 @@ async def _run_bayesian_search(
 
     n_trials_per_model = int(budget_config.get("n_trials_per_model", 10))
     random_state = int(budget_config.get("random_state", 42))
+    n_startup_trials = _tpe_startup_trials(n_trials_per_model, budget_config)
     max_trials = budget_config.get("max_trials")
 
     async with async_session_factory() as db:
@@ -1483,7 +1507,7 @@ async def _run_bayesian_search(
 
         study = optuna.create_study(
             direction=direction,
-            sampler=TPESampler(seed=random_state),
+            sampler=TPESampler(seed=random_state, n_startup_trials=n_startup_trials),
             study_name=f"{experiment_id}-{model_type}",
         )
 
