@@ -4,9 +4,8 @@
 const { test, expect, request } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
+const { WEB_BASE, API_ROOT: API_BASE } = require('./helpers/e2e-env');
 
-const WEB_BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
-const API_BASE = process.env.BASE_API || 'http://127.0.0.1:8000';
 const DATASET_PATH = path.resolve(__dirname, '..', 'examples', 'data', 'predictive_maintenance.csv');
 let fixture;
 

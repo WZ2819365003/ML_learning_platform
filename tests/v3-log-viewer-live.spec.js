@@ -2,8 +2,7 @@
 // We dispatch a slow-ish run (bayesian with more trials) and open the inspector
 // mid-flight to confirm the "LIVE" badge + auto-updating log list.
 const { test, expect } = require('@playwright/test');
-const BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
-const API = (process.env.BASE_API || 'http://127.0.0.1:8000').replace(/\/api\/?$/, '');
+const { WEB_BASE: BASE, API_ROOT: API } = require('./helpers/e2e-env');
 
 test('run inspector — live batch is visible while logs stream', async ({ page }) => {
   test.setTimeout(60_000);

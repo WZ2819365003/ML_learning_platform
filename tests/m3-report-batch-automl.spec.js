@@ -7,11 +7,10 @@
 // Testing them in isolation would miss exactly the integration that was broken.
 const { test, expect } = require('@playwright/test');
 const path = require('path');
+const { API_ROOT: API } = require('./helpers/e2e-env');
 
 const TRAIN_CSV = path.resolve(__dirname, '..', 'examples', 'data', 'telco_churn.csv');
 const PREDICT_CSV = path.resolve(__dirname, '..', 'examples', 'data', 'telco_churn_to_predict.csv');
-
-const API = `http://127.0.0.1:${process.env.E2E_API_PORT || '8000'}`;
 
 /** Poll an API predicate until it holds. Playwright's expect.poll on request. */
 async function waitFor(request, url, predicate, { timeout = 180000, interval = 2000 } = {}) {

@@ -1,7 +1,7 @@
 // Capture the LogViewer — both the live-tail state and a paginated view with
 // multiple entries. We dispatch a new batch mid-test so the WS stream is active.
 const { test, expect } = require('@playwright/test');
-const BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
+const { WEB_BASE: BASE } = require('./helpers/e2e-env');
 
 test('run inspector — logs tab (paginated to run with logs)', async ({ page }) => {
   test.setTimeout(60_000);

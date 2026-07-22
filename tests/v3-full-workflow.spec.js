@@ -33,11 +33,7 @@
 //   - Backend + frontend both launched via playwright.config.js webServer.
 
 const { test, expect } = require('@playwright/test');
-
-// In Docker stacks the SPA lives behind nginx at :80 (see docker/README.md).
-// Override either when running against a dev server (e.g. BASE_UI=http://127.0.0.1:3000).
-const BASE_UI  = process.env.BASE_UI  || 'http://127.0.0.1:3000';
-const BASE_API = process.env.BASE_API || 'http://127.0.0.1:8000/api';
+const { WEB_BASE: BASE_UI, API_BASE: BASE_API } = require('./helpers/e2e-env');
 
 // Tests mutate shared DB state → run in order, one worker.
 test.describe.configure({ mode: 'serial' });

@@ -16,9 +16,8 @@
 const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
+const { WEB_BASE: BASE, API_ROOT: API } = require('./helpers/e2e-env');
 
-const BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
-const API = process.env.BASE_API || 'http://127.0.0.1:8000';
 const DATASET_PATH = path.resolve(__dirname, '..', 'examples', 'data', 'predictive_maintenance.csv');
 
 async function ensureTaskWithSuccessfulRun(request) {

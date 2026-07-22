@@ -14,9 +14,7 @@
 // would actually click.
 
 const { test, expect } = require('@playwright/test');
-
-const BASE_UI  = process.env.BASE_UI  || 'http://127.0.0.1:3000';
-const BASE_API = process.env.BASE_API || 'http://127.0.0.1:8000/api';
+const { WEB_BASE: BASE_UI, API_BASE: BASE_API } = require('./helpers/e2e-env');
 
 test.describe.configure({ mode: 'serial' });
 

@@ -12,8 +12,7 @@
 
 const { test, expect } = require('@playwright/test');
 const { ensureSuccessfulTrainingTasks } = require('./helpers/training-tasks');
-
-const WEB_BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
+const { WEB_BASE } = require('./helpers/e2e-env');
 
 let classificationTaskId;
 let regressionTaskId;

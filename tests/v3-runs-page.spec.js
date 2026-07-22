@@ -11,9 +11,7 @@
 // Backend + Vite are expected to already be running.
 
 const { test, expect, request } = require('@playwright/test');
-
-const WEB_BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
-const API_BASE = process.env.BASE_API || 'http://127.0.0.1:8000';
+const { WEB_BASE, API_ROOT: API_BASE } = require('./helpers/e2e-env');
 
 test.describe('Commit 11 — V3 Run 诊断中心', () => {
   test('GET /api/v3/runs/ returns flat run list with documented fields', async () => {

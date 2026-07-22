@@ -10,6 +10,21 @@ const WEB_PORT = process.env.E2E_WEB_PORT || '3000';
 
 const e2eDatabaseUrl = process.env.E2E_DATABASE_URL
   || `sqlite+aiosqlite:///${path.resolve(__dirname, 'ml_platform/storage/e2e-playwright.db')}`;
+const requestedWorkers = process.env.E2E_WORKERS === undefined
+  ? undefined
+  : Number(process.env.E2E_WORKERS);
+
+if (requestedWorkers !== undefined
+  && (!Number.isInteger(requestedWorkers) || requestedWorkers < 1)) {
+  throw new Error('E2E_WORKERS must be a positive integer');
+}
+
+// SQLite permits only one writer at a time. The suite creates datasets and
+// training runs in many specs, so parallel workers turn valid scenarios into
+// nondeterministic "database is locked" failures.
+const workers = process.env.CI
+  ? 1
+  : (requestedWorkers ?? (e2eDatabaseUrl.startsWith('sqlite') ? 1 : undefined));
 
 /**
  * @see https://playwright.dev/docs/test-configuration
@@ -23,7 +38,7 @@ module.exports = defineConfig({
   /* Retry on CI only */
   retries: process.env.CI ? 2 : 0,
   /* Opt out of parallel tests on CI. */
-  workers: process.env.CI ? 1 : undefined,
+  workers,
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
   reporter: 'html',
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */

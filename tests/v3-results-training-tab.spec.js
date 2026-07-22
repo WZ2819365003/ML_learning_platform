@@ -17,8 +17,7 @@
 
 const { test, expect } = require('@playwright/test');
 const { ensureSuccessfulTrainingTasks } = require('./helpers/training-tasks');
-
-const WEB_BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
+const { WEB_BASE } = require('./helpers/e2e-env');
 
 let classificationTaskId;
 let regressionTaskId;
@@ -141,11 +140,10 @@ test.describe('RunInspector DL training visualization', () => {
             id: runId,
             params: { task_type: 'classification' },
             metrics: {
-              history: {
-                train_loss: [1.0, 0.6],
-                val_loss: [1.2, 0.8],
-                val_rmse: [1.1, 0.7],
-              },
+              history: [
+                { epoch: 1, train_loss: 1.0, val_loss: 1.2, val_rmse: 1.1 },
+                { epoch: 2, train_loss: 0.6, val_loss: 0.8, val_rmse: 0.7 },
+              ],
             },
             status: 'SUCCESS',
           },
@@ -176,7 +174,7 @@ test.describe('RunInspector DL training visualization', () => {
     await expect(drawer).toBeVisible();
     await drawer.getByRole('tab', { name: '训练可视化' }).click();
 
-    await expect(drawer.getByText('Epoch 训练历史')).toBeVisible();
+    await expect(drawer.getByText('训练与验证损失')).toBeVisible();
     await expect(drawer.getByRole('link', { name: '查看完整 DL 结果' }))
       .toHaveAttribute('href', `/dl/results?taskId=${dlTaskId}`);
     await expect(drawer.getByText('混淆矩阵')).toHaveCount(0);

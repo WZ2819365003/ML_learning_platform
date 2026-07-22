@@ -1,9 +1,8 @@
 const { test, expect } = require('@playwright/test');
 const path = require('path');
+const { WEB_BASE: BASE, API_ROOT: API } = require('./helpers/e2e-env');
 
 const datasetPath = path.resolve(__dirname, '..', 'examples', 'data', 'predictive_maintenance.csv');
-const BASE = process.env.BASE_UI || 'http://127.0.0.1:3000';
-const API = (process.env.BASE_API || 'http://127.0.0.1:8000').replace(/\/api\/?$/, '');
 
 test('upload dataset and start a V3 training task from the frontend', async ({ page }) => {
   test.setTimeout(180_000);

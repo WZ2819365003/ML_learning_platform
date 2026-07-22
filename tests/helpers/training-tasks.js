@@ -1,6 +1,6 @@
-const DEFAULT_API_ROOT = 'http://127.0.0.1:8000';
 const fs = require('fs');
 const path = require('path');
+const { API_ROOT } = require('./e2e-env');
 
 const DATASET_PATH = path.resolve(__dirname, '..', '..', 'examples', 'data', 'predictive_maintenance.csv');
 
@@ -11,7 +11,7 @@ const REGRESSION_MODELS = new Set([
 ]);
 
 function apiRoot() {
-  return (process.env.BASE_API || DEFAULT_API_ROOT).replace(/\/api\/?$/, '');
+  return API_ROOT;
 }
 
 async function findSuccessfulTrainingTasks(request) {
