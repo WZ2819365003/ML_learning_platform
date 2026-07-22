@@ -239,6 +239,33 @@ async def task_leaderboard(
     return await modeling_task_service.task_leaderboard(db, task_id, top_k=top_k)
 
 
+@router.post("/{task_id}/automl", summary="Launch an AutoML sweep from the candidate registry")
+async def launch_automl_route(
+    task_id: str,
+    name: str | None = None,
+    max_trials: int | None = Query(default=None, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """AutoML is a strategy of the normal batch pipeline, not a parallel path.
+
+    Going through ``dispatch_experiment_batch`` is what makes its runs carry
+    ``evaluation_mode``, land on the leaderboard, qualify for final evaluation
+    and appear in the report — and what gives them M2c's atomic write-back.
+    The previous standalone implementation had none of that.
+    """
+    from app.services.tuning_service import dispatch_experiment_batch
+
+    return await dispatch_experiment_batch(
+        db,
+        modeling_task_id=task_id,
+        name=name or "AutoML",
+        strategy_type="automl",
+        selected_models=[],
+        search_space={},
+        budget_config={"max_trials": max_trials} if max_trials else {},
+    )
+
+
 @router.get(
     "/{task_id}/report.md",
     summary="Download the finalized task report as Markdown",

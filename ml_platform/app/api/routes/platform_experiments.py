@@ -165,44 +165,6 @@ async def get_leaderboard(
 # AutoML: submit N parallel runs
 # ---------------------------------------------------------------------------
 
-@router.post("/{experiment_id}/automl", summary="Submit custom AutoML candidates")
-async def submit_automl(
-    experiment_id: str,
-    body: AutoMLRequest,
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
-    """Submit an explicit list of candidate configs as parallel training runs."""
-    if not body.candidates:
-        raise HTTPException(status_code=422, detail="candidates list cannot be empty")
-    runs = await experiment_service.submit_automl_experiment(
-        db, experiment_id=experiment_id, candidates=body.candidates
-    )
-    return {"submitted": len(runs), "runs": runs}
-
-
-@router.post("/{experiment_id}/automl/registry", summary="Launch AutoML from built-in registry")
-async def submit_automl_registry(
-    experiment_id: str,
-    body: AutoMLRegistryRequest,
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
-    """
-    One-click AutoML: load candidates from registry/automl_candidates.yaml and
-    submit them all as parallel asyncio training runs.  No Celery worker required.
-    """
-    from app.services.automl_service import submit_automl_from_registry
-    return await submit_automl_from_registry(
-        db,
-        experiment_id=experiment_id,
-        dataset_id=body.dataset_id,
-        target_column=body.target_column,
-        task_type=body.task_type,
-        eval_metrics=body.eval_metrics,
-        test_size=body.test_size,
-        max_candidates=body.max_candidates,
-    )
-
-
 @router.get("/automl/candidates", summary="List available AutoML candidate models")
 async def list_automl_candidates(
     task_type: str = "classification",

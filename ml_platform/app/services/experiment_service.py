@@ -340,76 +340,9 @@ async def _refresh_leaderboard(db: AsyncSession, experiment_id: str) -> None:
 # AutoML: submit multiple runs in parallel via Celery
 # ---------------------------------------------------------------------------
 
-async def submit_automl_experiment(
-    db: AsyncSession,
-    experiment_id: str,
-    candidates: list[dict],
-) -> list[dict[str, Any]]:
-    """
-    Submit N AutoML candidate runs.
 
-    `candidates` is a list of dicts like:
-      {"model_type": "RandomForestClassifier", "hyperparameters": {...}, "dataset_id": "...", ...}
-
-    Each candidate creates:
-      1. An ExperimentRun
-      2. A domain TrainingTask (training_tasks table)
-      3. A PlatformTask (platform_tasks table) dispatched to Celery
-    """
-    from app.scheduler.task_runner import submit_task
-    from app.services.training_service import create_training_task_record
-
-    exp = await _get_experiment_or_404(db, experiment_id)
-    if exp.status not in ("CREATED", "FAILED"):
-        raise HTTPException(status_code=400, detail="Experiment is already running or completed")
-
-    exp.status = "RUNNING"
-    await db.flush()
-
-    submitted_runs = []
-    asyncio_tasks = []
-
-    for candidate in candidates:
-        # 1. Create domain training task record
-        domain_task = await create_training_task_record(db, candidate)
-
-        # 2. Create ExperimentRun
-        run = ExperimentRun(
-            experiment_id=experiment_id,
-            params=candidate,
-            status="PENDING",
-        )
-        db.add(run)
-        await db.flush()
-        await db.refresh(run)
-
-        # 3. Register PlatformTask (asyncio mode — no Celery dispatch)
-        from app.scheduler.task_runner import register_domain_task
-        ptask = await register_domain_task(
-            db=db,
-            kind="train",
-            payload_ref=f"train:{domain_task.id}",
-        )
-
-        # Link run → task
-        run.task_id = ptask.id
-        await db.flush()
-
-        submitted_runs.append(_serialize_run(run))
-        asyncio_tasks.append((domain_task.id, ptask.id, run.id))
-
-    await db.commit()
-
-    # 4. Fire asyncio training coroutines concurrently (Celery substitute for dev mode)
-    from app.services.automl_service import _run_automl_candidate
-    for domain_task_id, platform_task_id, run_id in asyncio_tasks:
-        asyncio.create_task(
-            _run_automl_candidate(
-                domain_task_id=domain_task_id,
-                platform_task_id=platform_task_id,
-                run_id=run_id,
-                experiment_id=experiment_id,
-            )
-        )
-
-    return submitted_runs
+# ``submit_automl_experiment`` lived here until M3-3. It hand-rolled AutoML
+# dispatch against the legacy experiment API; AutoML is now
+# ``strategy_type="automl"`` in tuning_service, which reuses the batch
+# pipeline's persist → schedule → M2c write-back path. The route that reached
+# this function was removed with it.

@@ -364,7 +364,7 @@ async def create_training_task_record(db: AsyncSession, candidate: dict) -> Trai
     """
     Create a TrainingTask DB row from a candidate dict WITHOUT launching execution.
 
-    Used by experiment_service.submit_automl_experiment to pre-create domain tasks
+    Used by the V3 batch pipeline to pre-create domain tasks
     before dispatching them to Celery via PlatformTask.
 
     candidate keys (all optional except dataset_id, model_type, target_column):

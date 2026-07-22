@@ -234,14 +234,23 @@ async def dispatch_platform_task(
             run = result.scalar_one_or_none()
 
         if run is not None:
-            from app.services.automl_service import _run_automl_candidate
+            # A V3 trial (it has an ExperimentRun). Route to the same executor
+            # the batch pipeline uses, NOT to a side path: `_execute_single_trial`
+            # claims the task first and writes the terminal state through
+            # `complete_platform_task`, so a retry keeps M2c's guarantees.
+            # This previously called automl_service._run_automl_candidate, which
+            # updated the Run and the PlatformTask in two separate steps —
+            # meaning every retry of a V3 trial silently dropped back to
+            # pre-M2c semantics.
+            from app.services.tuning_service import _execute_single_trial
 
             asyncio.create_task(
-                _run_automl_candidate(
-                    domain_task_id=domain_id,
-                    platform_task_id=platform_task_id,
-                    run_id=run.id,
-                    experiment_id=run.experiment_id,
+                _execute_single_trial(
+                    domain_id,
+                    platform_task_id,
+                    run.id,
+                    run.experiment_id,
+                    kind="train",
                 )
             )
             return

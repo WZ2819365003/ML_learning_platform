@@ -323,9 +323,7 @@ export const platformExperimentsApi = {
   getRun: (experimentId, runId) => api.get(`/platform/experiments/${experimentId}/runs/${runId}`),
   getLeaderboard: (experimentId) => api.get(`/platform/experiments/${experimentId}/leaderboard`),
   // Custom candidates (explicit list)
-  submitAutoml: (experimentId, candidates) => api.post(`/platform/experiments/${experimentId}/automl`, { candidates }),
   // Registry-based one-click AutoML
-  submitAutomlRegistry: (experimentId, config) => api.post(`/platform/experiments/${experimentId}/automl/registry`, config),
   // AutoML candidate list
   listAutomlCandidates: (taskType = 'classification') => api.get('/platform/experiments/automl/candidates', { params: { task_type: taskType } }),
   triggerExplain: (experimentId, runId) => api.post(`/platform/experiments/${experimentId}/runs/${runId}/explain`),
@@ -350,6 +348,10 @@ export const modelingTaskApi = {
     api.post(`/v3/tasks/${taskId}/experiments/bulk`, data),
   tuningSpaces: (taskType) => api.get(`/v3/tasks/tuning-spaces/${taskType}`),
   progressTree: (taskId) => api.get(`/v3/tasks/${taskId}/progress-tree`),
+  // AutoML is a strategy of the normal batch pipeline — its runs land on the
+  // leaderboard and qualify for final evaluation like any other.
+  launchAutoml: (taskId, params = {}) =>
+    api.post(`/v3/tasks/${taskId}/automl`, null, { params }),
   // Markdown, not JSON — responseType keeps axios from trying to parse it.
   report: (taskId) =>
     api.get(`/v3/tasks/${taskId}/report.md`, { responseType: 'text' }),

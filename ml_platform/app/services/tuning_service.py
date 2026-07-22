@@ -324,13 +324,19 @@ def _preflight_batch(
     if (not strategy_type) and snapshot_payload.get("strategy_type"):
         strategy_type = snapshot_payload["strategy_type"]
 
-    if strategy_type not in ("baseline", "grid_search", "bayesian_search"):
+    if strategy_type not in ("baseline", "grid_search", "bayesian_search", "automl"):
         _reject(f"Unsupported strategy_type: {strategy_type!r}")
-    if not selected_models:
+    if not selected_models and strategy_type != "automl":
         _reject(f"{strategy_type} requires at least one selected model")
 
     task_type = task.task_type or "classification"
-    tuning_defaults = load_tuning_spaces(task_type)
+    try:
+        tuning_defaults = load_tuning_spaces(task_type)
+    except (ValueError, FileNotFoundError) as exc:
+        # An unsupported task_type is a client-side mistake, not a server
+        # fault. Letting the raw ValueError escape turns it into a 500 with no
+        # indication of which task types *are* supported.
+        _reject(f"不支持的任务类型 {task_type!r}: {exc}")
 
     # Re-raise with the bundle prefix: these helpers raise their own
     # HTTPException, so without this "strategy #N" would be missing on exactly
@@ -419,7 +425,16 @@ def _preflight_batch(
 
     # --- expand trials (pure) so "zero trials" is caught before any launch ---
     trials: list[dict[str, Any]] = []
-    if strategy_type == "baseline":
+    if strategy_type == "automl":
+        try:
+            trials = _expand_automl(task_type, max_trials)
+        except (FileNotFoundError, ValueError) as exc:
+            _reject(f"AutoML 候选清单不可用: {exc}")
+        if not trials:
+            _reject(f"AutoML 注册表中没有适用于 {task_type} 的候选模型")
+        total_trials = len(trials)
+        selected_models = sorted({t["model_type"] for t in trials})
+    elif strategy_type == "baseline":
         merged_overrides = dict(search_space)
         for token in dl_models:
             if token not in merged_overrides and dl_config.get(token):
@@ -579,7 +594,7 @@ async def _dispatch_experiment_batch_locked(
         task.finished_at = None  # clear previous completion timestamp
         await db.flush()
 
-    if strategy_type in ("baseline", "grid_search"):
+    if strategy_type in ("baseline", "grid_search", "automl"):
         await _persist_trials(
             db, exp, task, pf.trials, eval_metrics,
             test_size=test_size, cv_folds=cv_folds,
@@ -752,6 +767,41 @@ def _expand_baseline(
             "hyperparameters": params,
             "trial_no": idx,
             "search_meta": {"strategy": "baseline", "grid_index": None},
+        })
+    return trials
+
+
+def _expand_automl(task_type: str, max_trials: int | None = None) -> list[dict[str, Any]]:
+    """One trial per *candidate*, straight from the AutoML registry.
+
+    Deliberately not expressed as a baseline batch. ``_expand_baseline`` emits
+    one trial per ``model_type`` and keys its overrides the same way, but the
+    registry intentionally lists the same model several times with different
+    hyperparameters (five of the eleven classification candidates share a
+    model_type). Routing AutoML through baseline would silently collapse those
+    to one trial each and quietly halve the search. Grid search is no better:
+    it takes the cartesian product of a model's values, so two candidate
+    *configurations* would become four trials rather than two.
+    """
+    from app.services.automl_service import load_candidates
+
+    candidates = load_candidates(task_type)
+    if max_trials is not None:
+        candidates = candidates[:max_trials]
+
+    trials: list[dict[str, Any]] = []
+    for idx, candidate in enumerate(candidates, start=1):
+        trials.append({
+            "family": "ml",
+            "model_type": candidate["model_type"],
+            "hyperparameters": dict(candidate.get("hyperparameters") or {}),
+            "trial_no": idx,
+            "search_meta": {
+                "strategy": "automl",
+                "grid_index": None,
+                "candidate_index": idx,
+                "candidate_description": candidate.get("description"),
+            },
         })
     return trials
 
