@@ -350,6 +350,9 @@ export const modelingTaskApi = {
     api.post(`/v3/tasks/${taskId}/experiments/bulk`, data),
   tuningSpaces: (taskType) => api.get(`/v3/tasks/tuning-spaces/${taskType}`),
   progressTree: (taskId) => api.get(`/v3/tasks/${taskId}/progress-tree`),
+  // Markdown, not JSON — responseType keeps axios from trying to parse it.
+  report: (taskId) =>
+    api.get(`/v3/tasks/${taskId}/report.md`, { responseType: 'text' }),
   strategyComparison: (taskId) =>
     api.get(`/v3/tasks/${taskId}/strategy-comparison`),
   finalize: (taskId) =>

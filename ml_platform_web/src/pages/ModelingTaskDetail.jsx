@@ -7,6 +7,7 @@ import {
   ArrowLeftOutlined, ReloadOutlined, PlusOutlined, TrophyOutlined,
   NodeIndexOutlined, LineChartOutlined, ExperimentOutlined,
   CheckCircleFilled, CloseCircleFilled, ClockCircleFilled, FireOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { modelingTaskApi } from '../services/api'
@@ -15,6 +16,7 @@ import RunInspector from '../components/workbench/RunInspector'
 import TrainingPlanSnapshotView from '../components/workbench/TrainingPlanSnapshotView'
 import ProgressTree from '../components/workbench/ProgressTree'
 import ModelComparison from '../components/workbench/ModelComparison'
+import ReportView from '../components/workbench/ReportView'
 
 const { Text, Paragraph } = Typography
 
@@ -385,6 +387,14 @@ export default function ModelingTaskDetail() {
             { key: 'overview',    label: <span><ExperimentOutlined /> 任务概览</span>, children: overviewTab },
             { key: 'experiments', label: <span><NodeIndexOutlined /> 实验编排 ({experiments.length})</span>, children: experimentsTab },
             { key: 'compare',     label: <span><LineChartOutlined /> 模型对比 ({runStats.total || 0})</span>, children: compareTab },
+            {
+              key: 'report',
+              label: <span><FileTextOutlined /> 任务报告</span>,
+              // Mounted lazily by Tabs: the report is only fetched when the
+              // tab is opened, so an unfinalized task never triggers a 409
+              // on page load.
+              children: <ReportView taskId={taskId} />,
+            },
           ]}
         />
       </Card>
