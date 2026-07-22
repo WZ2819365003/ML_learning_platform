@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -236,6 +237,31 @@ async def task_leaderboard(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
     return await modeling_task_service.task_leaderboard(db, task_id, top_k=top_k)
+
+
+@router.get(
+    "/{task_id}/report.md",
+    summary="Download the finalized task report as Markdown",
+    response_class=PlainTextResponse,
+)
+async def task_report_markdown(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> PlainTextResponse:
+    """Markdown so the report stays diffable, greppable and pasteable.
+
+    Charts are deliberately absent: the frontend renders this text and draws
+    its existing ECharts figures alongside. See report_service for why.
+    """
+    from app.services.report_service import build_task_report
+
+    markdown = await build_task_report(db, task_id)
+    filename = f"report-{task_id[:8]}.md"
+    return PlainTextResponse(
+        content=markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post(
