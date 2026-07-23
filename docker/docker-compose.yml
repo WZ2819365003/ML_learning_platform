@@ -1,5 +1,5 @@
 services:
-  # MySQL —— 主元数据库；首次启动会自动加载 mysql_init/*.sql
+  # MySQL —— 主元数据库。schema 由 migrate 服务的 alembic 负责，不在此建表。
   mysql:
     image: mysql:8.0
     container_name: ml_platform_mysql
@@ -14,7 +14,12 @@ services:
       - "127.0.0.1:3307:3306"
     volumes:
       - ml_mysql_data:/var/lib/mysql
-      - ./mysql_init:/docker-entrypoint-initdb.d:ro
+      # NO schema seed here on purpose. Alembic owns the schema (see the
+      # `migrate` service below). A snapshot mounted into initdb.d is a second
+      # source of truth that drifts silently: the file this replaced was six
+      # columns and one table behind, so a fresh deploy built a database the
+      # code could not query, and the first symptom was `Unknown column …` on
+      # an unrelated endpoint.
     command: >
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci
@@ -92,6 +97,27 @@ services:
       "
     restart: "no"
 
+  # One-shot schema gate. Runs to completion before backend/worker start, so
+  # they never boot against a database that is a migration behind. Idempotent:
+  # `upgrade head` on an already-current database is a no-op.
+  migrate:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: ml_platform_migrate
+    restart: "no"
+    command: alembic upgrade head
+    working_dir: /app
+    env_file:
+      - path: .deploy_secrets
+        required: false
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-mysql+aiomysql://root:123456@mysql:3306/ml_platform}"
+      ENVIRONMENT: "${ENVIRONMENT:-production}"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
   # 后端 FastAPI（使用 MySQL，本地存储 storage/uploads,models,logs + mlruns 已 COPY 进镜像）
   backend:
     build:
@@ -125,6 +151,8 @@ services:
       # (infrastructure only) or .claude/launch.json.
       ENVIRONMENT: "${ENVIRONMENT:-production}"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       mysql:
         condition: service_healthy
       redis:
@@ -167,6 +195,8 @@ services:
       S3_ENABLED: "${S3_ENABLED:-true}"
       ENVIRONMENT: "${ENVIRONMENT:-production}"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       mysql:
         condition: service_healthy
       redis:

@@ -8,8 +8,8 @@
 
 | 类别 | 内容 | 来源 |
 |---|---|---|
-| **MySQL 元数据** | 18 张表，全部历史记录 | `mysql_init/01_data.sql` (994 KB) |
-| ├─ 数据集 | 3 条：predictive_maintenance / diabetes / ETTh1 | `datasets` |
+| **MySQL 元数据** | 19 张表（schema） | Alembic 迁移（`migrate` 服务） |
+| ├─ 演示数据集 | 首次启动时由 backend 从 `examples/data/*.csv` 导入 | `datasets` |
 | ├─ ML 训练任务 | 3 条（random_forest 系列） | `training_tasks` |
 | ├─ DL 训练任务 | 6 条（transformer / lstm / mlp_dl / cnn1d） | `dl_training_tasks` |
 | ├─ V3 平台任务 | **23 条**（17 SUCCESS / 6 FAILED） | `platform_tasks` |
@@ -47,13 +47,15 @@ docker-compose up -d
 ```
 
 启动顺序（自动）：
-1. MySQL 启动 → 自动加载 `mysql_init/01_data.sql`（首次启动 only）
-2. Redis / MinIO 启动
+1. MySQL / Redis / MinIO 启动
+2. **migrate** 一次性容器：`alembic upgrade head` 建库/升级到最新 schema，完成后退出
 3. **minio_init** 一次性容器：把 `minio_seed/` 镜像到 MinIO `ml-platform` bucket，完成后退出
-4. Backend 启动（依赖 MySQL/Redis/MinIO 健康）
+4. Backend 启动（**等待 migrate 成功完成**，再依赖 MySQL/Redis/MinIO 健康）
+   首次启动时 backend 会把 `examples/data/*.csv` 导入为演示数据集（仅当库为空）
 5. Frontend / Nginx 启动
 
-首次启动约 30-60 秒（MySQL 导入数据 + MinIO seed）。
+schema 的唯一事实源是 Alembic —— 不再有 `mysql_init` 快照。这样全新部署
+与既有库都由同一套迁移演进，不会出现"种子文件落后于代码"导致新库跑不起来。
 
 ### 3. 访问应用
 
@@ -87,8 +89,8 @@ docker-compose down
 docker-compose down -v
 ```
 
-> **重要**：`docker-compose down -v` 之后再 `up -d`，MySQL 会从 `mysql_init/01_data.sql` 重新初始化，
-> MinIO 会从 `minio_seed/` 重新 seed，恢复到出厂状态。
+> **重要**：`docker-compose down -v` 之后再 `up -d`，`migrate` 会在空库上重建 schema，
+> backend 会重新导入 `examples/data/` 演示数据，MinIO 会从 `minio_seed/` 重新 seed，恢复到出厂状态。
 
 ---
 
