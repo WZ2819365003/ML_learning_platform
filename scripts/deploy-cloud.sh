@@ -68,7 +68,8 @@ if git remote get-url origin >/dev/null 2>&1; then
 else
   git remote add origin "$REPO_URL"
 fi
-git fetch --prune origin "$BRANCH"
+git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=60 \
+  fetch --depth=1 --prune origin "$BRANCH"
 git checkout -B "$BRANCH" FETCH_HEAD
 git reset --hard FETCH_HEAD
 git clean -fd -e docker/.deploy_secrets
