@@ -107,7 +107,7 @@ SMOKE_USERNAME="${AUTH_SMOKE_USERNAME:-${AUTH_USERNAME:-}}"
 SMOKE_PASSWORD="${AUTH_SMOKE_PASSWORD:-${AUTH_PASSWORD:-}}"
 : "${SMOKE_USERNAME:?AUTH_SMOKE_USERNAME or AUTH_USERNAME must be set in docker/.deploy_secrets}"
 : "${SMOKE_PASSWORD:?AUTH_SMOKE_PASSWORD or AUTH_PASSWORD must be set in docker/.deploy_secrets}"
-LOGIN_PAYLOAD="$(python3 -c \
+LOGIN_PAYLOAD="$(SMOKE_USERNAME="$SMOKE_USERNAME" SMOKE_PASSWORD="$SMOKE_PASSWORD" python3 -c \
   'import json, os; print(json.dumps({"username": os.environ["SMOKE_USERNAME"], "password": os.environ["SMOKE_PASSWORD"]}))')"
 LOGIN_RESPONSE="$(curl -fsS \
   -H 'Content-Type: application/json' \
