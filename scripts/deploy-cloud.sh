@@ -79,8 +79,8 @@ MIGRATION_RUN=("${COMPOSE[@]}" run --rm -T -v "$APP_DIR/ml_platform:/app")
 "${MIGRATION_RUN[@]}" backend python scripts/ensure_alembic_baseline.py </dev/null
 "${MIGRATION_RUN[@]}" backend alembic upgrade head </dev/null
 
-# Step 4: build both application images only after the schema is ready.
-"${COMPOSE[@]}" build backend frontend
+# Step 4: build every application image only after the schema is ready.
+"${COMPOSE[@]}" build backend worker frontend
 
 # Step 5: reconcile the stack to the newly built images.
 "${COMPOSE[@]}" up -d
