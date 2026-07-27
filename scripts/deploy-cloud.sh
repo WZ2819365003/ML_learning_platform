@@ -46,10 +46,16 @@ if [[ ! -d .git ]]; then
     TMP_SECRETS="$(mktemp)"
     cp "$SECRETS_FILE" "$TMP_SECRETS"
   fi
-  find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name docker -exec rm -rf {} +
-  if [[ -d "$APP_DIR/docker" ]]; then
-    find "$APP_DIR/docker" -mindepth 1 ! -name .deploy_secrets -exec rm -rf {} +
-  fi
+  # Previous archive/docker-bind deployments may have left root-owned
+  # node_modules or __pycache__ files. Clean them from a short-lived root
+  # container so the deploy user can safely convert the directory to git.
+  docker run --rm -v "$APP_DIR:/workspace" alpine:3.20 sh -c '
+    set -eu
+    find /workspace -mindepth 1 -maxdepth 1 ! -name docker -exec rm -rf {} +
+    if [ -d /workspace/docker ]; then
+      find /workspace/docker -mindepth 1 ! -name .deploy_secrets -exec rm -rf {} +
+    fi
+  '
   if [[ -n "$TMP_SECRETS" ]]; then
     mkdir -p "$APP_DIR/docker"
     cp "$TMP_SECRETS" "$SECRETS_FILE"
