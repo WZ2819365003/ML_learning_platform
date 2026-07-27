@@ -73,17 +73,10 @@ COMPOSE=(docker compose -f "$COMPOSE_FILE")
 # container so schema migration still happens before the new image is built.
 MIGRATION_RUN=("${COMPOSE[@]}" run --rm -v "$APP_DIR/ml_platform:/app")
 
-# Step 3: adopt an existing production schema once, then apply every revision.
-# The application tables already match 0001; stamping records that fact without
-# replaying baseline DDL against the live database.
-HAS_ALEMBIC_VERSION="$(
-  "${MIGRATION_RUN[@]}" backend python -c \
-    'from sqlalchemy import create_engine, inspect; from app.config import get_settings; from app.models.database import _to_sync_database_url; engine = create_engine(_to_sync_database_url(get_settings().database_url)); print("yes" if inspect(engine).has_table("alembic_version") else "no")' \
-    | tail -n 1
-)"
-if [[ "$HAS_ALEMBIC_VERSION" == "no" ]]; then
-  "${MIGRATION_RUN[@]}" backend alembic stamp 0001
-fi
+# Step 3: adopt an existing legacy schema once, then apply every revision. The
+# bootstrap script is conservative: it only stamps when business tables exist
+# but Alembic has no version row.
+"${MIGRATION_RUN[@]}" backend python scripts/ensure_alembic_baseline.py
 "${MIGRATION_RUN[@]}" backend alembic upgrade head
 
 # Step 4: build both application images only after the schema is ready.
