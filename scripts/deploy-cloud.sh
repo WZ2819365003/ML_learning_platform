@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Deploy the current Git HEAD without storing credentials in the repository.
-# Override DEPLOY_HOST, DEPLOY_PORT, DEPLOY_USER, and DEPLOY_DIR in the caller
-# environment. Runtime and smoke-test credentials must live in the server's
-# docker/.deploy_secrets file.
+# Deploy by updating the source checkout on the cloud server, then building
+# there. Override DEPLOY_HOST, DEPLOY_PORT, DEPLOY_USER, DEPLOY_DIR, DEPLOY_REPO,
+# and DEPLOY_BRANCH in the caller environment. Runtime and smoke-test
+# credentials must live in the server's docker/.deploy_secrets file.
 
 set -euo pipefail
 
@@ -11,54 +11,71 @@ HOST="${DEPLOY_HOST:-your-server.example.com}"
 PORT="${DEPLOY_PORT:-22}"
 REMOTE_USER="${DEPLOY_USER:-opsadmin}"
 REMOTE_DIR="${DEPLOY_DIR:-/home/opsadmin/ml_platform}"
+REPO_URL="${DEPLOY_REPO:-https://github.com/WZ2819365003/ML_learning_platform.git}"
+BRANCH="${DEPLOY_BRANCH:-$(git branch --show-current)}"
 
 if [[ "$HOST" == "your-server.example.com" ]]; then
   echo "Set DEPLOY_HOST before running this script." >&2
   exit 2
 fi
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-REVISION="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)"
-ARCHIVE="$(mktemp "/tmp/ml-platform-${REVISION}.XXXXXX.tar.gz")"
-REMOTE_ARCHIVE="/tmp/ml-platform-${REVISION}.tar.gz"
+LOCAL_HEAD="$(git rev-parse --short=12 HEAD)"
 
-cleanup_local_archive() {
-  rm -f "$ARCHIVE"
-}
-trap cleanup_local_archive EXIT
-
-# Step 1: package the exact local HEAD; uncommitted files are intentionally
-# excluded so the deployed source is reproducible.
-git -C "$REPO_ROOT" archive --format=tar.gz --output="$ARCHIVE" HEAD
-
-# Step 2: upload the archive to the server's temporary directory.
-scp -P "$PORT" "$ARCHIVE" "${REMOTE_USER}@${HOST}:${REMOTE_ARCHIVE}"
-
-# Steps 3-6 run atomically on the server (set -e): a failed migration, build,
-# health check, or authenticated smoke test stops the deployment immediately.
+# The server performs the source update and image build. A failed fetch,
+# migration, build, health check, or authenticated smoke test stops the
+# deployment immediately.
 ssh -p "$PORT" "${REMOTE_USER}@${HOST}" bash -s -- \
-  "$REMOTE_ARCHIVE" "$REMOTE_DIR" <<'REMOTE_SCRIPT'
+  "$REPO_URL" "$BRANCH" "$LOCAL_HEAD" "$REMOTE_DIR" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
-ARCHIVE="$1"
-APP_DIR="$2"
+REPO_URL="$1"
+BRANCH="$2"
+EXPECTED_HEAD="$3"
+APP_DIR="$4"
 SECRETS_FILE="$APP_DIR/docker/.deploy_secrets"
 COMPOSE_FILE="$APP_DIR/docker/docker-compose.yml"
 
-cleanup_remote_archive() {
-  rm -f "$ARCHIVE"
-}
-trap cleanup_remote_archive EXIT
-
-# Step 2 (server): unpack into the stable application directory. The ignored
-# docker/.deploy_secrets file is retained across releases.
+# Step 1 (server): make the deployment directory a real git checkout, then
+# update it to the requested branch. Ignored runtime files and
+# docker/.deploy_secrets are retained.
 mkdir -p "$APP_DIR"
-tar -xzf "$ARCHIVE" -C "$APP_DIR"
 cd "$APP_DIR"
+if [[ ! -d .git ]]; then
+  TMP_SECRETS=""
+  if [[ -f "$SECRETS_FILE" ]]; then
+    TMP_SECRETS="$(mktemp)"
+    cp "$SECRETS_FILE" "$TMP_SECRETS"
+  fi
+  find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name docker -exec rm -rf {} +
+  if [[ -d "$APP_DIR/docker" ]]; then
+    find "$APP_DIR/docker" -mindepth 1 ! -name .deploy_secrets -exec rm -rf {} +
+  fi
+  if [[ -n "$TMP_SECRETS" ]]; then
+    mkdir -p "$APP_DIR/docker"
+    cp "$TMP_SECRETS" "$SECRETS_FILE"
+    rm -f "$TMP_SECRETS"
+  fi
+  git init
+fi
+if git remote get-url origin >/dev/null 2>&1; then
+  git remote set-url origin "$REPO_URL"
+else
+  git remote add origin "$REPO_URL"
+fi
+git fetch --prune origin "$BRANCH"
+git checkout -B "$BRANCH" FETCH_HEAD
+git reset --hard FETCH_HEAD
+git clean -fd -e docker/.deploy_secrets
 
 if [[ ! -f "$SECRETS_FILE" ]]; then
   echo "Missing server credential file: $SECRETS_FILE" >&2
   exit 3
+fi
+
+ACTUAL_HEAD="$(git rev-parse --short=12 HEAD)"
+if [[ "$ACTUAL_HEAD" != "$EXPECTED_HEAD" ]]; then
+  echo "Cloud checkout mismatch: expected $EXPECTED_HEAD, got $ACTUAL_HEAD" >&2
+  exit 5
 fi
 
 # Export server-only values for Compose interpolation and the smoke test.
@@ -125,5 +142,5 @@ curl -fsS \
   -H "Authorization: Bearer $TOKEN" \
   "$API_BASE_URL/api/v3/tasks/" >/dev/null
 
-echo "Deployment and authenticated smoke test succeeded."
+echo "Deployment and authenticated smoke test succeeded at $ACTUAL_HEAD."
 REMOTE_SCRIPT
