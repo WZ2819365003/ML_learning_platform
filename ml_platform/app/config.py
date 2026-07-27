@@ -211,7 +211,7 @@ class Settings:
         default_factory=lambda: os.getenv("DOUBAO_MODEL", "doubao-seed-1-8-251228")
     )
     doubao_timeout_s: float = field(
-        default_factory=lambda: float(os.getenv("DOUBAO_TIMEOUT_S", "30"))
+        default_factory=lambda: float(os.getenv("DOUBAO_TIMEOUT_S", "120"))
     )
     doubao_max_tokens: int = field(
         default_factory=lambda: int(os.getenv("DOUBAO_MAX_TOKENS", "1800"))

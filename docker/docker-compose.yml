@@ -159,7 +159,7 @@ services:
       DOUBAO_API_KEY: "${DOUBAO_API_KEY:-}"
       DOUBAO_BASE_URL: "${DOUBAO_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
       DOUBAO_MODEL: "${DOUBAO_MODEL:-doubao-seed-1-8-251228}"
-      DOUBAO_TIMEOUT_S: "${DOUBAO_TIMEOUT_S:-30}"
+      DOUBAO_TIMEOUT_S: "${DOUBAO_TIMEOUT_S:-120}"
       DOUBAO_MAX_TOKENS: "${DOUBAO_MAX_TOKENS:-1800}"
       # This is the PRODUCTION stack: default to production so a deploy that
       # forgets ENVIRONMENT fails fast on config validation instead of silently
@@ -218,7 +218,7 @@ services:
       DOUBAO_API_KEY: "${DOUBAO_API_KEY:-}"
       DOUBAO_BASE_URL: "${DOUBAO_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
       DOUBAO_MODEL: "${DOUBAO_MODEL:-doubao-seed-1-8-251228}"
-      DOUBAO_TIMEOUT_S: "${DOUBAO_TIMEOUT_S:-30}"
+      DOUBAO_TIMEOUT_S: "${DOUBAO_TIMEOUT_S:-120}"
       DOUBAO_MAX_TOKENS: "${DOUBAO_MAX_TOKENS:-1800}"
       ENVIRONMENT: "${ENVIRONMENT:-production}"
     depends_on:
