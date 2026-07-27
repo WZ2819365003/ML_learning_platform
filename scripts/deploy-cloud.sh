@@ -71,13 +71,13 @@ COMPOSE=(docker compose -f "$COMPOSE_FILE")
 # The previous release image already contains Alembic, but not this release's
 # migration files. Mount the freshly unpacked backend source into the one-shot
 # container so schema migration still happens before the new image is built.
-MIGRATION_RUN=("${COMPOSE[@]}" run --rm -v "$APP_DIR/ml_platform:/app")
+MIGRATION_RUN=("${COMPOSE[@]}" run --rm -T -v "$APP_DIR/ml_platform:/app")
 
 # Step 3: adopt an existing legacy schema once, then apply every revision. The
 # bootstrap script is conservative: it only stamps when business tables exist
 # but Alembic has no version row.
-"${MIGRATION_RUN[@]}" backend python scripts/ensure_alembic_baseline.py
-"${MIGRATION_RUN[@]}" backend alembic upgrade head
+"${MIGRATION_RUN[@]}" backend python scripts/ensure_alembic_baseline.py </dev/null
+"${MIGRATION_RUN[@]}" backend alembic upgrade head </dev/null
 
 # Step 4: build both application images only after the schema is ready.
 "${COMPOSE[@]}" build backend frontend
