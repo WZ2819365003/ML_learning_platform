@@ -49,16 +49,20 @@ def main() -> None:
     api = args.api.rstrip("/")
 
     # -----------------------------------------------------------------------
-    # 0. Pick the largest classification dataset (predictive_maintenance.csv)
+    # 0. Pick the largest classification dataset (predictive maintenance)
     # -----------------------------------------------------------------------
     step("Resolving target dataset")
     ds_resp = http("GET", f"{api}/data/list?page=1&page_size=20")
     pm = next(
-        (d for d in ds_resp.get("items", []) if d["name"] == "predictive_maintenance.csv"),
+        (
+            d
+            for d in ds_resp.get("items", [])
+            if "predictive_maintenance" in d.get("name", "")
+        ),
         None,
     )
     if not pm:
-        sys.exit("predictive_maintenance.csv not found in datasets list")
+        sys.exit("predictive maintenance dataset not found in datasets list")
     print(f"  ✓ dataset_id={pm['id']}  rows={pm.get('row_count')}  target=Target")
     DATASET_ID = pm["id"]
     TARGET = "Target"

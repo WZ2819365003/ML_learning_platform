@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +49,7 @@ from app.services.object_storage import (
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 5_000
+_UPLOAD_CHUNK_SIZE_BYTES = 4 * 1024 * 1024
 _PREDICTION_COLUMN = "prediction"
 
 
@@ -77,12 +78,43 @@ def _predictions_dir() -> Path:
     return path
 
 
+async def _write_batch_input_file(
+    input_path: Path,
+    *,
+    content: bytes | None = None,
+    file: UploadFile | None = None,
+) -> None:
+    """Persist either in-memory test content or a streaming UploadFile."""
+    if (content is None) == (file is None):
+        raise ValueError("exactly one of content or file must be provided")
+
+    has_non_blank_payload = False
+    with input_path.open("wb") as out:
+        if content is not None:
+            has_non_blank_payload = bool(content.strip())
+            out.write(content)
+        else:
+            assert file is not None
+            while True:
+                chunk = await file.read(_UPLOAD_CHUNK_SIZE_BYTES)
+                if not chunk:
+                    break
+                if not has_non_blank_payload and chunk.strip():
+                    has_non_blank_payload = True
+                out.write(chunk)
+
+    if not has_non_blank_payload:
+        input_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="上传的文件为空")
+
+
 async def create_batch_job(
     db: AsyncSession,
     *,
     deployment_id: str,
     filename: str,
-    content: bytes,
+    content: bytes | None = None,
+    file: UploadFile | None = None,
 ) -> dict[str, Any]:
     """Persist the upload, create a PENDING job, and dispatch it.
 
@@ -102,7 +134,11 @@ async def create_batch_job(
         raise HTTPException(status_code=400, detail="部署已暂停，无法提交预测任务")
     if not filename.lower().endswith(".csv"):
         raise HTTPException(status_code=422, detail="批量预测目前仅支持 CSV 文件")
-    if not content.strip():
+    if content is None and file is None:
+        raise ValueError("content or file is required")
+    if content is not None and file is not None:
+        raise ValueError("content and file are mutually exclusive")
+    if content is not None and not content.strip():
         raise HTTPException(status_code=422, detail="上传的文件为空")
 
     job = InferenceJob(deployment_id=deployment_id, status="pending")
@@ -110,7 +146,7 @@ async def create_batch_job(
     await db.flush()
 
     input_path = _predictions_dir() / f"{job.id}-input.csv"
-    input_path.write_bytes(content)
+    await _write_batch_input_file(input_path, content=content, file=file)
     job.input_path = str(input_path)
 
     # Upload the input too, not just the result. Without it the volume is the
@@ -138,6 +174,21 @@ async def create_batch_job(
         "deployment_id": deployment_id,
         "status": "pending",
     }
+
+
+async def create_batch_job_from_upload(
+    db: AsyncSession,
+    *,
+    deployment_id: str,
+    file: UploadFile,
+) -> dict[str, Any]:
+    """Create a batch job from FastAPI's UploadFile without route-level buffering."""
+    return await create_batch_job(
+        db,
+        deployment_id=deployment_id,
+        filename=file.filename or "upload.csv",
+        file=file,
+    )
 
 
 async def _load_predictor(db: AsyncSession, deployment_id: str):

@@ -22,6 +22,7 @@ EXPECTED_VERSION="${EXPECTED_VERSION:-}"
 
 step() { echo ""; echo "===> $*"; }
 ok()   { echo "  ✓ $*"; }
+warn() { echo "  ! $*" >&2; }
 fail() { echo "  ✗ $*" >&2; exit 1; }
 
 step "Pre-flight: git state"
@@ -34,7 +35,7 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 ok "branch=$BRANCH head=$HEAD$DIRTY"
 if [ -z "$EXPECTED_VERSION" ]; then
-  EXPECTED_VERSION=$(grep -oE '"3\.[0-9]+\.[0-9]+"' ml_platform/app/main.py | head -1 | tr -d '"')
+  EXPECTED_VERSION=$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' ml_platform/app/main.py | head -1 | tr -d '"')
   ok "auto-detected EXPECTED_VERSION=$EXPECTED_VERSION from ml_platform/app/main.py"
 fi
 
@@ -74,7 +75,7 @@ step "Restoring seeded dataset files (image-baked storage is wiped on rebuild)"
 # early-returns when any Dataset row exists, so we put the files back here.
 # No-op if they're already present.
 SEED_FILES=(
-  "0c11479d4a68-predictive_maintenance.csv|examples/data/predictive_maintenance.csv"
+  "0c8cac7cf134-codex_predictive_maintenance_clean.csv|examples/data/codex_predictive_maintenance_clean.csv"
   "518f51347f96-diabetes.csv|examples/data/diabetes.csv"
   "5a1846755b6f-ETTh1.csv|examples/data/ETTh1.csv"
 )

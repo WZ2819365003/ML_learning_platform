@@ -18,7 +18,7 @@ export default function ExperimentBatchModal({ open, task, onClose, onSubmitted 
       onCancel={onClose}
       footer={null}
       width={780}
-      destroyOnClose
+      destroyOnHidden
     >
       <ExperimentBatchForm
         task={task}

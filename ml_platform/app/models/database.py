@@ -634,11 +634,44 @@ class ModelingTask(Base):
         cascade="all, delete-orphan",
         foreign_keys="PlatformExperiment.modeling_task_id",
     )
+    ai_report_archives: Mapped[list["AIReportArchive"]] = relationship(
+        back_populates="modeling_task",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return (
             f"<ModelingTask id={self.id!r} name={self.name!r} status={self.status!r}>"
         )
+
+
+# ---------------------------------------------------------------------------
+# V3 Platform: AI Report Archive
+# ---------------------------------------------------------------------------
+
+class AIReportArchive(Base):
+    """Versioned AI-generated report payload for a ModelingTask."""
+    __tablename__ = "ai_report_archives"
+    __table_args__ = (
+        Index("ix_ai_report_archives_task_id", "task_id"),
+        Index("ix_ai_report_archives_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("modeling_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="AI 建模报告")
+    model: Mapped[str | None] = mapped_column(String(128), default=None)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="doubao")
+    markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    modeling_task: Mapped["ModelingTask"] = relationship(back_populates="ai_report_archives")
+
+    def __repr__(self) -> str:
+        return f"<AIReportArchive id={self.id!r} task_id={self.task_id!r}>"
 
 
 # ---------------------------------------------------------------------------

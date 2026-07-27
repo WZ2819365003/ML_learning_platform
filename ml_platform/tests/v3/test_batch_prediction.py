@@ -12,6 +12,8 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
+from httpx import ASGITransport, AsyncClient
+from starlette.datastructures import UploadFile
 
 from app.models.database import (
     Dataset,
@@ -310,3 +312,48 @@ async def test_executor_still_fails_when_object_storage_has_nothing(db, session_
     with patch.object(bps, "restore_batch_file", lambda *a, **k: None):
         with pytest.raises(FileNotFoundError, match="无可恢复副本"):
             await bps.run_batch_prediction(submitted["job_id"], submitted["platform_task_id"])
+
+
+async def test_batch_predict_route_hands_upload_to_service_without_buffering(monkeypatch):
+    """The FastAPI route must not call UploadFile.read() and buffer the whole CSV.
+
+    The service owns persistence/streaming; the route boundary should only pass
+    the UploadFile through.
+    """
+    from app.api.routes.deploy import get_db
+    from app.main import create_app
+
+    async def no_db():
+        yield object()
+
+    async def fail_if_route_buffers(self, size=-1):  # noqa: ARG001
+        raise AssertionError("route buffered the entire uploaded file")
+
+    async def fake_create_batch_job(db, *, deployment_id, file):  # noqa: ARG001
+        return {
+            "job_id": "job-1",
+            "platform_task_id": "task-1",
+            "deployment_id": deployment_id,
+            "status": "pending",
+            "filename": file.filename,
+        }
+
+    monkeypatch.setattr(UploadFile, "read", fail_if_route_buffers)
+    monkeypatch.setattr(bps, "create_batch_job_from_upload", fake_create_batch_job, raising=False)
+
+    app = create_app()
+    app.dependency_overrides[get_db] = no_db
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            response = await client.post(
+                "/inference/dep-1/batch-predict",
+                files={"file": ("in.csv", b"a,b\n1,2\n", "text/csv")},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["filename"] == "in.csv"

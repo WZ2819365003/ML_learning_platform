@@ -1,4 +1,4 @@
-// Current V3 release smoke tests. Fixtures are discovered at runtime so the
+// Current V2.0.0 release smoke tests. Fixtures are discovered at runtime so the
 // suite works against both a clean database and a populated developer stack.
 
 const { test, expect, request } = require('@playwright/test');
@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { WEB_BASE, API_ROOT: API_BASE } = require('./helpers/e2e-env');
 
-const DATASET_PATH = path.resolve(__dirname, '..', 'examples', 'data', 'predictive_maintenance.csv');
+const DATASET_PATH = path.resolve(__dirname, '..', 'examples', 'data', 'codex_predictive_maintenance_clean.csv');
 let fixture;
 
 async function findTaskWithSuccessfulRun(api) {
@@ -70,19 +70,19 @@ async function ensureSuccessfulRun(api) {
   return { task, run: successfulRun };
 }
 
-test.describe('V3 current release smoke', () => {
+test.describe('V2.0.0 release smoke', () => {
   test.setTimeout(150_000);
 
   test.beforeAll(async ({ request: api }) => {
     fixture = await ensureSuccessfulRun(api);
   });
 
-  test('health endpoint reports the frontend-compatible 3.3 release', async () => {
+  test('health endpoint reports the frontend-compatible V2.0.0 release', async () => {
     const api = await request.newContext();
     const resp = await api.get(`${API_BASE}/health`);
     expect(resp.ok()).toBeTruthy();
     const body = await resp.json();
-    expect(body.version).toBe('3.3.0');
+    expect(body.version).toBe('2.0.0');
   });
 
   test('strategy-comparison endpoint returns the documented shape', async () => {

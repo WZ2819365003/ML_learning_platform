@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
   Card, Button, Tabs, Tag, Space, Table, Descriptions, Typography, Empty,
-  Row, Col, Spin, Alert, Statistic, Breadcrumb, message,
+  Row, Col, Spin, Alert, Statistic, Breadcrumb, Modal, List, message,
 } from 'antd'
 import {
   ArrowLeftOutlined, ReloadOutlined, PlusOutlined, TrophyOutlined,
   NodeIndexOutlined, LineChartOutlined, ExperimentOutlined,
   CheckCircleFilled, CloseCircleFilled, ClockCircleFilled, FireOutlined,
   FileTextOutlined,
-  ThunderboltOutlined,
+  ThunderboltOutlined, BulbOutlined, HistoryOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { modelingTaskApi } from '../services/api'
@@ -18,6 +18,7 @@ import TrainingPlanSnapshotView from '../components/workbench/TrainingPlanSnapsh
 import ProgressTree from '../components/workbench/ProgressTree'
 import ModelComparison from '../components/workbench/ModelComparison'
 import ReportView from '../components/workbench/ReportView'
+import AiReportModal from '../components/workbench/AiReportModal'
 
 const { Text, Paragraph } = Typography
 
@@ -60,6 +61,13 @@ export default function ModelingTaskDetail() {
   const [automlLoading, setAutomlLoading] = useState(false)
   const [inspectorRunId, setInspectorRunId] = useState(null)
   const [inspectorTab, setInspectorTab] = useState('overview')
+  const [aiReportOpen, setAiReportOpen] = useState(false)
+  const [aiReportInitial, setAiReportInitial] = useState(null)
+  const [latestInlineAiReport, setLatestInlineAiReport] = useState(null)
+  const [aiReportArchiveOpen, setAiReportArchiveOpen] = useState(false)
+  const [aiReportArchives, setAiReportArchives] = useState([])
+  const [aiReportArchiveLoading, setAiReportArchiveLoading] = useState(false)
+  const [aiReportDetailLoading, setAiReportDetailLoading] = useState(false)
 
   // Open the run inspector on a specific tab (overview for baseline click,
   // 'shap' when the user asks for explanation from the Runs 表格).
@@ -144,10 +152,55 @@ export default function ModelingTaskDetail() {
     }
   }
 
+  const openNewAiReport = () => {
+    setAiReportInitial(null)
+    setAiReportOpen(true)
+  }
+
+  const loadAiReportArchives = useCallback(async () => {
+    if (!taskId) return
+    setAiReportArchiveLoading(true)
+    try {
+      const resp = await modelingTaskApi.aiReportArchives(taskId)
+      setAiReportArchives(resp?.items || [])
+    } catch (err) {
+      message.error(err?.response?.data?.detail || err?.message || '加载 AI 报告归档失败')
+    } finally {
+      setAiReportArchiveLoading(false)
+    }
+  }, [taskId])
+
+  const openAiReportArchives = async () => {
+    setAiReportArchiveOpen(true)
+    await loadAiReportArchives()
+  }
+
+  const openArchivedAiReport = async (archiveId) => {
+    setAiReportDetailLoading(true)
+    try {
+      const payload = await modelingTaskApi.aiReportArchive(taskId, archiveId)
+      setAiReportInitial(payload)
+      setAiReportOpen(true)
+      setAiReportArchiveOpen(false)
+    } catch (err) {
+      message.error(err?.response?.data?.detail || err?.message || '打开 AI 报告归档失败')
+    } finally {
+      setAiReportDetailLoading(false)
+    }
+  }
+
+  const handleAiReportGenerated = useCallback((payload) => {
+    setAiReportInitial(payload)
+    setLatestInlineAiReport(payload)
+    if (aiReportArchiveOpen) void loadAiReportArchives()
+  }, [aiReportArchiveOpen, loadAiReportArchives])
+
   if (loading && !task) {
     return (
       <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}>
-        <Spin size="large" tip="加载建模任务中..." />
+        <Spin size="large" tip="加载建模任务中...">
+          <div style={{ minHeight: 80, minWidth: 120 }} />
+        </Spin>
       </div>
     )
   }
@@ -163,9 +216,13 @@ export default function ModelingTaskDetail() {
   const overviewTab = (
     <Row gutter={[12, 12]}>
       <Col span={16}>
-        <Card size="small" title="任务信息" bodyStyle={{ padding: 14 }}>
-          <Descriptions column={2} size="small" bordered
-            labelStyle={{ background: '#f8fafc', width: 110 }}>
+        <Card size="small" title="任务信息" styles={{ body: { padding: 14 } }}>
+          <Descriptions
+            column={2}
+            size="small"
+            bordered
+            styles={{ label: { background: '#f8fafc', width: 110 } }}
+          >
             <Descriptions.Item label="任务 ID" span={2}>
               <code style={{ fontSize: 12 }}>{task.id}</code>
             </Descriptions.Item>
@@ -194,7 +251,7 @@ export default function ModelingTaskDetail() {
 
       <Col span={8}>
         <Card size="small" title={<span><TrophyOutlined style={{ color: '#f59e0b' }} /> 最佳 Run</span>}
-          bodyStyle={{ padding: 14 }}>
+          styles={{ body: { padding: 14 } }}>
           {task.best_run_id ? (
             <>
               <Statistic
@@ -232,23 +289,23 @@ export default function ModelingTaskDetail() {
       </Col>
 
       <Col span={6}>
-        <Card size="small" bodyStyle={{ padding: 14 }}>
+        <Card size="small" styles={{ body: { padding: 14 } }}>
           <Statistic title="实验批次数" value={experiments.length} prefix={<NodeIndexOutlined />} />
         </Card>
       </Col>
       <Col span={6}>
-        <Card size="small" bodyStyle={{ padding: 14 }}>
+        <Card size="small" styles={{ body: { padding: 14 } }}>
           <Statistic title="Run 总数" value={runStats.total || 0} prefix={<LineChartOutlined />} />
         </Card>
       </Col>
       <Col span={6}>
-        <Card size="small" bodyStyle={{ padding: 14 }}>
+        <Card size="small" styles={{ body: { padding: 14 } }}>
           <Statistic title="成功 Run" value={runStats.success || 0}
             valueStyle={{ color: '#10b981' }} prefix={<CheckCircleFilled />} />
         </Card>
       </Col>
       <Col span={6}>
-        <Card size="small" bodyStyle={{ padding: 14 }}>
+        <Card size="small" styles={{ body: { padding: 14 } }}>
           <Statistic title="失败 Run" value={runStats.failed || 0}
             valueStyle={{ color: '#ef4444' }} prefix={<CloseCircleFilled />} />
         </Card>
@@ -256,7 +313,7 @@ export default function ModelingTaskDetail() {
 
       {task.summary_snapshot && Object.keys(task.summary_snapshot).length > 0 && (
         <Col span={24}>
-          <Card size="small" title="任务快照" bodyStyle={{ padding: 14 }}>
+          <Card size="small" title="任务快照" styles={{ body: { padding: 14 } }}>
             <pre style={{ margin: 0, fontSize: 11, background: '#f8fafc',
               padding: 8, borderRadius: 4, maxHeight: 220, overflow: 'auto' }}>
               {JSON.stringify(task.summary_snapshot, null, 2)}
@@ -316,7 +373,7 @@ export default function ModelingTaskDetail() {
   ]
 
   const experimentsTab = (
-    <Card size="small" bodyStyle={{ padding: 0 }}>
+    <Card size="small" styles={{ body: { padding: 0 } }}>
       <div style={{ padding: '10px 14px', borderBottom: '1px solid #f1f5f9',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Space>
@@ -358,7 +415,7 @@ export default function ModelingTaskDetail() {
   return (
     <div style={{ padding: 16 }}>
       {/* ── Header strip ────────────────────────────────────────────────── */}
-      <Card bordered={false} bodyStyle={{ padding: '12px 16px' }}
+      <Card variant="borderless" styles={{ body: { padding: '12px 16px' } }}
         style={{ marginBottom: 12, boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 280 }}>
@@ -384,6 +441,12 @@ export default function ModelingTaskDetail() {
           <Space>
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/v3/tasks')}>返回</Button>
             <Button icon={<ReloadOutlined />} onClick={refreshAll}>刷新</Button>
+            <Button icon={<BulbOutlined />} onClick={openNewAiReport}>
+              AI 报告
+            </Button>
+            <Button icon={<HistoryOutlined />} onClick={() => void openAiReportArchives()}>
+              报告归档
+            </Button>
             <Button
               icon={<ThunderboltOutlined />}
               loading={automlLoading}
@@ -400,7 +463,7 @@ export default function ModelingTaskDetail() {
       </Card>
 
       {/* ── Tabs ────────────────────────────────────────────────────────── */}
-      <Card bordered={false} bodyStyle={{ padding: '0 16px 16px' }}
+      <Card variant="borderless" styles={{ body: { padding: '0 16px 16px' } }}
         style={{ boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)' }}>
         <Tabs
           activeKey={activeTab}
@@ -415,7 +478,13 @@ export default function ModelingTaskDetail() {
               // Mounted lazily by Tabs: the report is only fetched when the
               // tab is opened, so an unfinalized task never triggers a 409
               // on page load.
-              children: <ReportView taskId={taskId} />,
+              children: (
+                <ReportView
+                  taskId={taskId}
+                  taskName={task.name}
+                  generatedAiReport={latestInlineAiReport}
+                />
+              ),
             },
           ]}
         />
@@ -438,6 +507,72 @@ export default function ModelingTaskDetail() {
         defaultTab={inspectorTab}
         onClose={() => setInspectorRunId(null)}
       />
+      <AiReportModal
+        open={aiReportOpen}
+        taskId={taskId}
+        taskName={task.name}
+        initialReport={aiReportInitial}
+        onGenerated={handleAiReportGenerated}
+        onClose={() => {
+          setAiReportOpen(false)
+          setAiReportInitial(null)
+        }}
+      />
+      <Modal
+        open={aiReportArchiveOpen}
+        title={<Space><HistoryOutlined />AI 报告归档</Space>}
+        footer={[
+          <Button key="refresh" icon={<ReloadOutlined />} loading={aiReportArchiveLoading} onClick={() => void loadAiReportArchives()}>
+            刷新
+          </Button>,
+          <Button key="close" type="primary" onClick={() => setAiReportArchiveOpen(false)}>
+            关闭
+          </Button>,
+        ]}
+        width={720}
+        destroyOnHidden
+        onCancel={() => setAiReportArchiveOpen(false)}
+      >
+        <Spin spinning={aiReportArchiveLoading || aiReportDetailLoading}>
+          <List
+            dataSource={aiReportArchives}
+            locale={{ emptyText: <Empty description="还没有归档报告，先生成一次 AI 报告" /> }}
+            renderItem={(item) => {
+              const time = item.archived_at || item.generated_at
+              return (
+                <List.Item
+                  actions={[
+                    <Button
+                      key="open"
+                      size="small"
+                      type="link"
+                      onClick={() => void openArchivedAiReport(item.id)}
+                    >
+                      打开
+                    </Button>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={
+                      <Space size={8} wrap>
+                        <Text strong>{item.title || 'AI 建模报告'}</Text>
+                        {item.ai_score && <Tag color="green">{item.ai_score}</Tag>}
+                      </Space>
+                    }
+                    description={
+                      <Space size={8} wrap>
+                        <Text type="secondary">{time ? new Date(time).toLocaleString('zh-CN', { hour12: false }) : '时间未知'}</Text>
+                        <Text type="secondary">{item.model || item.source || 'doubao'}</Text>
+                        <Text code style={{ fontSize: 11 }}>{String(item.id).slice(0, 12)}</Text>
+                      </Space>
+                    }
+                  />
+                </List.Item>
+              )
+            }}
+          />
+        </Spin>
+      </Modal>
     </div>
   )
 }

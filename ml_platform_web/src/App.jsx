@@ -74,7 +74,9 @@ function AppShell() {
         <Content style={{ margin: '0 20px 20px', padding: 0, background: 'transparent' }}>
           <Suspense fallback={(
             <div style={{ display: 'grid', placeItems: 'center', minHeight: 320 }}>
-              <Spin size="large" tip="页面加载中" />
+              <Spin size="large" tip="页面加载中">
+                <div style={{ minHeight: 80, minWidth: 120 }} />
+              </Spin>
             </div>
           )}>
           <Routes>

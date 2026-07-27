@@ -80,3 +80,38 @@ open http://localhost:8000/docs
 - File naming: `{uuid_12}-{original_name}` for uploads
 - UI language: simplified Chinese
 - Git branch: `dev` for development, `main` for releases
+
+## User Preferences For This Platform
+
+### AI Task Reports
+
+- Reports are single-task research reports, not generic model reports. They must help the reader understand the task objective, executed process, model behavior, and final effect.
+- The main evidence scope should stay focused: dataset overview, parameter settings, training process data, and model evaluation. Avoid adding unrelated sections just to make the report longer.
+- Use formal hierarchy: `第一章`, `1.1`, `1.1.1`. Start important paragraphs with a clear conclusion sentence, then explain the evidence in natural language.
+- Keep report language professional and non-colloquial. Avoid mechanically listing JSON keys or metrics without interpretation.
+- Put charts and tables between relevant paragraphs. Do not stack every table or chart at the top.
+- Use ECharts for dense process evidence such as loss curves, prediction curves, training metric trends, or trial-level trajectories.
+- Use tables for low-density comparison facts such as final accuracy, F1, ROC-AUC, parameter settings, and dataset field summaries.
+- Do not render run success rate as a major chart. It can be mentioned briefly as context when all runs completed or failures affect interpretation.
+- Translate metric meaning for readers while keeping source keys visible where helpful. Example: write "最终测试准确率（final_test_accuracy）为 0.9790".
+- Map dataset fields to readable Chinese labels when possible, while keeping original names visible. Example: `Torque [Nm]` can be shown as `扭矩（Torque [Nm]）`.
+- Do not translate model identifiers into awkward Chinese names. Preserve names such as `random_forest`, `logistic_regression`, `XGBoost`, `LightGBM`, and `ARIMA`.
+- Explain input and output explicitly: input dataset, target column, task type, selected models/strategies, model predictions, evaluation metrics, generated report archive.
+- AI reports must be archived and viewable from the task page. The report tab should prefer the latest AI archive, with legacy Markdown as fallback.
+- When a new AI report is generated from the modal, the report tab should update dynamically without requiring page refresh.
+
+### Modeling Workbench UX
+
+- The task detail page should use progressive disclosure: task summary and key actions first, tabs for overview/experiments/model comparison/report, then deeper drill-down.
+- The report tab should render the rich AI report directly in the page area, not only inside a modal.
+- Use a large modal for generated report preview, but keep the same report reader component shared between modal and inline report display.
+- Display source state clearly, such as `AI 报告` and archive id, so users know whether they are reading generated AI content or the legacy basic report.
+- Keep information density balanced. Metric strips are acceptable for high-level scanning, but detailed evidence should live in the corresponding chapter.
+- Avoid all-table pages. Charts, tables, and prose should each be used where they are strongest.
+- Validate important UI changes with Playwright screenshots on the real local page.
+
+### Training And Tuning Semantics
+
+- Do not conflate tuning strategy with a detached later module. For future tuning work, strategy should be configured when setting up mixed training or single-model training.
+- If baseline, grid search, and Bayesian search are all selected, interpret it as `n x 3` groups of model runs, where `n` is the number of selected models.
+- This tuning semantics note is a future design preference; do not refactor it unless the user explicitly asks.

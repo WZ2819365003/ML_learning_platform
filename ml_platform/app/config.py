@@ -16,8 +16,10 @@ from dotenv import load_dotenv
 # Resolve the project root (ml_platform/) relative to this file's location
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Load .env from the project root
+# Load .env from the project root. Local overrides are intentionally separate
+# so API keys can stay off the tracked ml_platform/.env file.
 load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env.local", override=True)
 
 
 def _resolve_path(raw: str) -> Path:
@@ -184,6 +186,32 @@ class Settings:
     )
     pipeline_code_timeout_s: float = field(
         default_factory=lambda: float(os.getenv("PIPELINE_CODE_TIMEOUT_S", "60"))
+    )
+
+    # Doubao / Volcengine Ark (OpenAI-compatible) report generation.
+    # The platform only reads these values when the user explicitly generates
+    # an AI report; the normal deterministic Markdown report remains offline.
+    doubao_api_key: str = field(
+        default_factory=lambda: (
+            os.getenv("DOUBAO_API_KEY")
+            or os.getenv("ARK_API_KEY")
+            or ""
+        )
+    )
+    doubao_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "DOUBAO_BASE_URL",
+            "https://ark.cn-beijing.volces.com/api/v3",
+        ).rstrip("/")
+    )
+    doubao_model: str = field(
+        default_factory=lambda: os.getenv("DOUBAO_MODEL", "doubao-seed-1-8-251228")
+    )
+    doubao_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("DOUBAO_TIMEOUT_S", "30"))
+    )
+    doubao_max_tokens: int = field(
+        default_factory=lambda: int(os.getenv("DOUBAO_MAX_TOKENS", "1800"))
     )
 
     # Convenience: project root

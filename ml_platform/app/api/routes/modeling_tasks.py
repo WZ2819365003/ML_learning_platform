@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_db
-from app.services import modeling_task_service
+from app.services import ai_report_service, modeling_task_service
 from app.services.progress_tree_service import get_progress_tree
 
 logger = logging.getLogger(__name__)
@@ -289,6 +289,40 @@ async def task_report_markdown(
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post(
+    "/{task_id}/ai-report",
+    summary="Generate an AI-assisted task report with Doubao/Ark",
+)
+async def task_ai_report(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    return await ai_report_service.generate_ai_task_report(db, task_id)
+
+
+@router.get(
+    "/{task_id}/ai-reports",
+    summary="List archived AI-assisted task reports",
+)
+async def list_task_ai_reports(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    return {"items": await ai_report_service.list_ai_report_archives(db, task_id)}
+
+
+@router.get(
+    "/{task_id}/ai-reports/{report_id}",
+    summary="Get an archived AI-assisted task report",
+)
+async def get_task_ai_report_archive(
+    task_id: str,
+    report_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    return await ai_report_service.get_ai_report_archive(db, task_id, report_id)
 
 
 @router.post(

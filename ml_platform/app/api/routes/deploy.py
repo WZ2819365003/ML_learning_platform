@@ -125,14 +125,12 @@ async def batch_predict_route(
     Returns immediately with a job id; poll the status endpoint. Unlike the
     synchronous route this never materialises the whole file in memory.
     """
-    from app.services.batch_prediction_service import create_batch_job
+    from app.services.batch_prediction_service import create_batch_job_from_upload
 
-    content = await file.read()
-    return await create_batch_job(
+    return await create_batch_job_from_upload(
         db,
         deployment_id=deployment_id,
-        filename=file.filename or "upload.csv",
-        content=content,
+        file=file,
     )
 
 

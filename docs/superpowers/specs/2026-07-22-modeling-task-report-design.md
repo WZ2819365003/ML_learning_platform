@@ -117,7 +117,7 @@ async def build_task_report(db, task_id: str) -> str:
 | 冠军超参 | 冠军 `ExperimentRun.params` |
 | 特征重要性 | 冠军 `ExperimentRun.metrics["shap_importances"]` |
 | 评估方法（CV 折数/划分比例/随机种子） | 冠军 run 的 `params` 与 `search_meta` |
-| 平台版本 | `app.main` 中的 `version`（当前 3.3.0），不硬编码 |
+| 平台版本 | `app.main` 中的 `version`（当前 2.0.0），不硬编码 |
 
 > 冠军 run 必须由 `winner_run_id` 定位而非 leaderboard 第一名：leaderboard 按
 > selection 指标排序，而 finalize 时的冠军是当时冻结的那一个。若之后又有新

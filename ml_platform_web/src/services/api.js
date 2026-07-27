@@ -369,6 +369,12 @@ export const modelingTaskApi = {
   // Markdown, not JSON — responseType keeps axios from trying to parse it.
   report: (taskId) =>
     api.get(`/v3/tasks/${taskId}/report.md`, { responseType: 'text' }),
+  aiReport: (taskId) =>
+    api.post(`/v3/tasks/${taskId}/ai-report`, null, { timeout: 150000 }),
+  aiReportArchives: (taskId) =>
+    api.get(`/v3/tasks/${taskId}/ai-reports`),
+  aiReportArchive: (taskId, reportId) =>
+    api.get(`/v3/tasks/${taskId}/ai-reports/${reportId}`),
   strategyComparison: (taskId) =>
     api.get(`/v3/tasks/${taskId}/strategy-comparison`),
   finalize: (taskId) =>
