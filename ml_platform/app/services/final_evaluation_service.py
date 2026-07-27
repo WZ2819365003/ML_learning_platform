@@ -44,16 +44,26 @@ ACTIVE_RUN_STATUSES = ("PENDING", "QUEUED", "RUNNING")
 async def finalize_task_winner(
     db: AsyncSession,
     modeling_task_id: str,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     async with task_lifecycle_guard(modeling_task_id):
-        return await _finalize_task_winner_locked(db, modeling_task_id)
+        return await _finalize_task_winner_locked(
+            db,
+            modeling_task_id,
+            owner_username=owner_username,
+        )
 
 
 async def _finalize_task_winner_locked(
     db: AsyncSession,
     modeling_task_id: str,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    task = await _lock_modeling_task(db, modeling_task_id)
+    task = await _lock_modeling_task(
+        db,
+        modeling_task_id,
+        owner_username=owner_username,
+    )
     current = task_final_evaluation_state(task)
     if current.get("state") == "FINALIZED":
         return {"status": "already_finalized", "final_evaluation": current}
@@ -102,7 +112,11 @@ async def _finalize_task_winner_locked(
             detail=f"仍有 {int(active_count)} 个 Run 运行中，全部结束后才能确认最终模型。",
         )
 
-    winner, run = await _validate_finalization_winner(db, modeling_task_id)
+    winner, run = await _validate_finalization_winner(
+        db,
+        modeling_task_id,
+        owner_username=owner_username,
+    )
     now = datetime.now(timezone.utc)
     claim_id = str(uuid4())
     claim = {
@@ -117,7 +131,11 @@ async def _finalize_task_winner_locked(
     await db.commit()
 
     try:
-        result = await evaluate_task_winner(db, modeling_task_id)
+        result = await evaluate_task_winner(
+            db,
+            modeling_task_id,
+            owner_username=owner_username,
+        )
         if result.get("status") not in {"evaluated", "skipped"}:
             raise HTTPException(
                 status_code=422,
@@ -129,7 +147,11 @@ async def _finalize_task_winner_locked(
                 detail=f"当前冠军不能最终确认：{result.get('reason')}",
             )
 
-        locked_task = await _lock_modeling_task(db, modeling_task_id)
+        locked_task = await _lock_modeling_task(
+            db,
+            modeling_task_id,
+            owner_username=owner_username,
+        )
         locked_state = task_final_evaluation_state(locked_task)
         _assert_claim_owner(locked_state, claim_id)
         locked_run = (
@@ -163,14 +185,15 @@ async def _finalize_task_winner_locked(
         raise
 
 
-async def _lock_modeling_task(db: AsyncSession, task_id: str) -> ModelingTask:
-    task = (
-        await db.execute(
-            select(ModelingTask)
-            .where(ModelingTask.id == task_id)
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
+async def _lock_modeling_task(
+    db: AsyncSession,
+    task_id: str,
+    owner_username: str | None = None,
+) -> ModelingTask:
+    stmt = select(ModelingTask).where(ModelingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(ModelingTask.owner_username == owner_username)
+    task = (await db.execute(stmt.with_for_update())).scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail=f"ModelingTask {task_id!r} not found")
     return task
@@ -179,8 +202,14 @@ async def _lock_modeling_task(db: AsyncSession, task_id: str) -> ModelingTask:
 async def _validate_finalization_winner(
     db: AsyncSession,
     modeling_task_id: str,
+    owner_username: str | None = None,
 ) -> tuple[dict[str, Any], ExperimentRun]:
-    board = await task_leaderboard(db, modeling_task_id, top_k=1)
+    board = await task_leaderboard(
+        db,
+        modeling_task_id,
+        top_k=1,
+        owner_username=owner_username,
+    )
     if not board:
         raise HTTPException(status_code=422, detail="没有可确认的成功 Run。")
     winner = board[0]
@@ -238,8 +267,14 @@ async def _persist_failed_claim(
 async def evaluate_task_winner(
     db: AsyncSession,
     modeling_task_id: str,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    board = await task_leaderboard(db, modeling_task_id, top_k=1)
+    board = await task_leaderboard(
+        db,
+        modeling_task_id,
+        top_k=1,
+        owner_username=owner_username,
+    )
     if not board:
         return {"status": "skipped", "reason": "no_successful_run"}
 

@@ -562,10 +562,32 @@ async def _run_dl_training_by_id(
 # Public API
 # ---------------------------------------------------------------------------
 
-async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingTask:
+async def _get_dl_task_or_404(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLTrainingTask:
+    stmt = select(DLTrainingTask).where(DLTrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(DLTrainingTask.owner_username == owner_username)
+    res = await db.execute(stmt)
+    task = res.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="DL task not found")
+    return task
+
+
+async def start_dl_training(
+    request_data: dict,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLTrainingTask:
     # Validate dataset
     dataset_id = request_data["dataset_id"]
-    res = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    dataset_stmt = select(Dataset).where(Dataset.id == dataset_id)
+    if owner_username:
+        dataset_stmt = dataset_stmt.where(Dataset.owner_username == owner_username)
+    res = await db.execute(dataset_stmt)
     dataset = res.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -585,6 +607,7 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
     import uuid as _uuid_mod
     short_id = str(_uuid_mod.uuid4())[:8]
     task = DLTrainingTask(
+        owner_username=owner_username or dataset.owner_username,
         dataset_id=dataset_id,
         name=f"{request_data['model_type']}_{short_id}",
         target_column=request_data["target_column"],
@@ -620,13 +643,14 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
     return task
 
 
-async def stop_dl_training(task_id: str, db: AsyncSession) -> DLTrainingTask:
+async def stop_dl_training(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLTrainingTask:
     from app.models.database import PlatformTask
 
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     if task.status not in ("PENDING", "RUNNING"):
         raise HTTPException(status_code=400, detail=f"Cannot stop task with status '{task.status}'")
     if task_id in _running_tasks:
@@ -649,22 +673,29 @@ async def stop_dl_training(task_id: str, db: AsyncSession) -> DLTrainingTask:
     return task
 
 
-async def get_dl_status(task_id: str, db: AsyncSession) -> DLTrainingTask:
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
-    return task
+async def get_dl_status(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLTrainingTask:
+    return await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
 
 
 async def list_dl_tasks(
-    db: AsyncSession, page: int = 1, page_size: int = 20, status_filter: str | None = None
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+    status_filter: str | None = None,
+    owner_username: str | None = None,
 ) -> dict:
     stmt = select(DLTrainingTask)
     count_stmt = select(func.count(DLTrainingTask.id))
     if status_filter:
         stmt = stmt.where(DLTrainingTask.status == status_filter)
         count_stmt = count_stmt.where(DLTrainingTask.status == status_filter)
+    if owner_username:
+        stmt = stmt.where(DLTrainingTask.owner_username == owner_username)
+        count_stmt = count_stmt.where(DLTrainingTask.owner_username == owner_username)
 
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
@@ -673,23 +704,26 @@ async def list_dl_tasks(
     return {"items": tasks, "total": total, "page": page, "page_size": page_size}
 
 
-async def rename_dl_task(task_id: str, name: str, db: AsyncSession) -> DLTrainingTask:
+async def rename_dl_task(
+    task_id: str,
+    name: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLTrainingTask:
     """Rename a DL training task."""
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     task.name = name
     await db.flush()
     return task
 
 
-async def delete_dl_task(task_id: str, db: AsyncSession) -> None:
+async def delete_dl_task(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> None:
     """Delete a DL training task (not allowed while RUNNING)."""
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     if task.status == "RUNNING":
         raise HTTPException(status_code=422, detail="Cannot delete a running task. Stop it first.")
     await db.delete(task)
@@ -697,11 +731,17 @@ async def delete_dl_task(task_id: str, db: AsyncSession) -> None:
 
 
 async def list_dl_trained_models(
-    db: AsyncSession, page: int = 1, page_size: int = 20
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+    owner_username: str | None = None,
 ) -> dict:
     """Return paginated list of successfully completed DL tasks (i.e. trained models)."""
     stmt = select(DLTrainingTask).where(DLTrainingTask.status == "SUCCESS")
     count_stmt = select(func.count(DLTrainingTask.id)).where(DLTrainingTask.status == "SUCCESS")
+    if owner_username:
+        stmt = stmt.where(DLTrainingTask.owner_username == owner_username)
+        count_stmt = count_stmt.where(DLTrainingTask.owner_username == owner_username)
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
     stmt = stmt.order_by(DLTrainingTask.created_at.desc()).offset(offset).limit(page_size)
@@ -710,9 +750,14 @@ async def list_dl_trained_models(
 
 
 async def list_dl_epochs(
-    task_id: str, db: AsyncSession, page: int = 1, page_size: int = 100
+    task_id: str,
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 100,
+    owner_username: str | None = None,
 ) -> dict:
     """Return paginated epoch records for a DL task (ordered by epoch asc)."""
+    await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     count_stmt = select(func.count(DLTrainingEpoch.id)).where(DLTrainingEpoch.task_id == task_id)
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
@@ -728,9 +773,14 @@ async def list_dl_epochs(
 
 
 async def list_dl_epoch_history(
-    task_id: str, db: AsyncSession, page: int = 1, page_size: int = 20
+    task_id: str,
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+    owner_username: str | None = None,
 ) -> dict:
     """Return paginated epoch records ordered by newest epoch first."""
+    await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     count_stmt = select(func.count(DLTrainingEpoch.id)).where(DLTrainingEpoch.task_id == task_id)
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
@@ -751,8 +801,10 @@ async def list_dl_logs(
     level: str | None = None,
     page: int = 1,
     page_size: int = 200,
+    owner_username: str | None = None,
 ) -> dict:
     """Return paginated persisted DL log entries ordered by creation time."""
+    await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     stmt = select(DLTrainingLog).where(DLTrainingLog.task_id == task_id)
     count_stmt = select(func.count(DLTrainingLog.id)).where(DLTrainingLog.task_id == task_id)
     if level:
@@ -774,13 +826,14 @@ async def list_dl_logs(
 
 
 async def update_dl_task_meta(
-    task_id: str, notes: str | None, tags: list[str] | None, db: AsyncSession
+    task_id: str,
+    notes: str | None,
+    tags: list[str] | None,
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> DLTrainingTask:
     """Update notes and/or tags of a DL training task."""
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     if notes is not None:
         task.notes = notes
     if tags is not None:
@@ -794,12 +847,13 @@ async def update_dl_task_meta(
 # ---------------------------------------------------------------------------
 
 async def create_dl_deployment(
-    dl_task_id: str, name: str, description: str | None, db: AsyncSession
+    dl_task_id: str,
+    name: str,
+    description: str | None,
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> DLModelDeployment:
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == dl_task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(dl_task_id, db, owner_username=owner_username)
     if task.status != "SUCCESS":
         raise HTTPException(status_code=422, detail="只有训练成功的模型才能部署")
     dep = DLModelDeployment(
@@ -811,26 +865,46 @@ async def create_dl_deployment(
     return dep
 
 
-async def list_dl_deployments(db: AsyncSession) -> dict:
-    stmt = select(DLModelDeployment).order_by(DLModelDeployment.created_at.desc())
+async def list_dl_deployments(
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> dict:
+    stmt = select(DLModelDeployment)
+    if owner_username:
+        stmt = stmt.join(
+            DLTrainingTask,
+            DLTrainingTask.id == DLModelDeployment.dl_task_id,
+        ).where(DLTrainingTask.owner_username == owner_username)
+    stmt = stmt.order_by(DLModelDeployment.created_at.desc())
     deps = (await db.execute(stmt)).scalars().all()
     return {"deployments": deps, "total": len(deps)}
 
 
-async def delete_dl_deployment(dep_id: str, db: AsyncSession) -> None:
+async def delete_dl_deployment(
+    dep_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> None:
     res = await db.execute(select(DLModelDeployment).where(DLModelDeployment.id == dep_id))
     dep = res.scalar_one_or_none()
     if dep is None:
         raise HTTPException(status_code=404, detail="DL deployment not found")
+    await _get_dl_task_or_404(dep.dl_task_id, db, owner_username=owner_username)
     await db.delete(dep)
     await db.flush()
 
 
-async def toggle_dl_deployment_status(dep_id: str, status: str, db: AsyncSession) -> DLModelDeployment:
+async def toggle_dl_deployment_status(
+    dep_id: str,
+    status: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLModelDeployment:
     res = await db.execute(select(DLModelDeployment).where(DLModelDeployment.id == dep_id))
     dep = res.scalar_one_or_none()
     if dep is None:
         raise HTTPException(status_code=404, detail="DL deployment not found")
+    await _get_dl_task_or_404(dep.dl_task_id, db, owner_username=owner_username)
     if status not in ("active", "paused"):
         raise HTTPException(status_code=422, detail="status must be 'active' or 'paused'")
     dep.status = status
@@ -839,7 +913,10 @@ async def toggle_dl_deployment_status(dep_id: str, status: str, db: AsyncSession
 
 
 async def predict_dl_deployment(
-    dep_id: str, rows: list[dict], db: AsyncSession
+    dep_id: str,
+    rows: list[dict],
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> dict:
     """Load DL model and run inference for the given deployment."""
 
@@ -853,10 +930,11 @@ async def predict_dl_deployment(
     if dep.status == "paused":
         raise HTTPException(status_code=422, detail="部署已暂停，请先恢复部署")
 
-    res2 = await db.execute(
-        select(DLTrainingTask).where(DLTrainingTask.id == dep.dl_task_id)
+    task = await _get_dl_task_or_404(
+        dep.dl_task_id,
+        db,
+        owner_username=owner_username,
     )
-    task = res2.scalar_one_or_none()
     if task is None or not task.model_path:
         raise HTTPException(status_code=404, detail="模型文件不存在")
 
@@ -918,13 +996,13 @@ async def predict_dl_deployment(
 
 
 async def predict_dl_task_direct(
-    task_id: str, rows: list[dict], db: AsyncSession
+    task_id: str,
+    rows: list[dict],
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> dict:
     """Direct inference against a DL task without requiring a deployment."""
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     if task.status != "SUCCESS" or not task.model_path:
         raise HTTPException(status_code=422, detail="模型未就绪（训练未完成或文件不存在）")
 

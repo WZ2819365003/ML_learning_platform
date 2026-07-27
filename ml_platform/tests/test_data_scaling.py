@@ -76,7 +76,7 @@ async def test_upload_streams_to_temp_file_and_records_digest(monkeypatch, tmp_p
     settings = SimpleNamespace(storage_uploads=tmp_path, max_upload_size=1024)
     db = _Db()
 
-    async def no_duplicate(_db, content_sha256, file_size):
+    async def no_duplicate(_db, content_sha256, file_size, **_kwargs):
         assert content_sha256 == hashlib.sha256(payload).hexdigest()
         assert file_size == len(payload)
         return None

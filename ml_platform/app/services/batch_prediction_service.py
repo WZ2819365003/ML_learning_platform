@@ -115,6 +115,7 @@ async def create_batch_job(
     filename: str,
     content: bytes | None = None,
     file: UploadFile | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Persist the upload, create a PENDING job, and dispatch it.
 
@@ -123,11 +124,14 @@ async def create_batch_job(
     the request handler, which is exactly the blocking behaviour this path
     exists to avoid.
     """
-    deployment = (
-        await db.execute(
-            select(ModelDeployment).where(ModelDeployment.id == deployment_id)
+    deployment_stmt = select(ModelDeployment).where(ModelDeployment.id == deployment_id)
+    if owner_username:
+        deployment_stmt = (
+            deployment_stmt
+            .join(TrainingTask, TrainingTask.id == ModelDeployment.task_id)
+            .where(TrainingTask.owner_username == owner_username)
         )
-    ).scalar_one_or_none()
+    deployment = (await db.execute(deployment_stmt)).scalar_one_or_none()
     if deployment is None:
         raise HTTPException(status_code=404, detail="部署不存在")
     if deployment.status != "active":
@@ -181,6 +185,7 @@ async def create_batch_job_from_upload(
     *,
     deployment_id: str,
     file: UploadFile,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Create a batch job from FastAPI's UploadFile without route-level buffering."""
     return await create_batch_job(
@@ -188,6 +193,7 @@ async def create_batch_job_from_upload(
         deployment_id=deployment_id,
         filename=file.filename or "upload.csv",
         file=file,
+        owner_username=owner_username,
     )
 
 
@@ -321,15 +327,24 @@ async def run_batch_prediction(domain_task_id: str, platform_task_id: str) -> di
     return {"metrics": {"processed_rows": processed}, "result_path": str(result_path)}
 
 
-async def get_batch_job(db: AsyncSession, deployment_id: str, job_id: str) -> InferenceJob:
-    job = (
-        await db.execute(
-            select(InferenceJob).where(
-                InferenceJob.id == job_id,
-                InferenceJob.deployment_id == deployment_id,
-            )
+async def get_batch_job(
+    db: AsyncSession,
+    deployment_id: str,
+    job_id: str,
+    owner_username: str | None = None,
+) -> InferenceJob:
+    stmt = select(InferenceJob).where(
+        InferenceJob.id == job_id,
+        InferenceJob.deployment_id == deployment_id,
+    )
+    if owner_username:
+        stmt = (
+            stmt
+            .join(ModelDeployment, ModelDeployment.id == InferenceJob.deployment_id)
+            .join(TrainingTask, TrainingTask.id == ModelDeployment.task_id)
+            .where(TrainingTask.owner_username == owner_username)
         )
-    ).scalar_one_or_none()
+    job = (await db.execute(stmt)).scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="预测任务不存在")
     return job

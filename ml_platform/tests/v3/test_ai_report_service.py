@@ -620,7 +620,7 @@ async def test_ai_report_route_returns_markdown_payload(
         async with session_factory() as session:
             yield session
 
-    async def fake_generate(db, task_id):
+    async def fake_generate(db, task_id, **_kwargs):
         return {
             "task_id": task_id,
             "archive_id": "report-1",
@@ -637,7 +637,7 @@ async def test_ai_report_route_returns_markdown_payload(
             "report_blocks": [{"type": "markdown", "id": "conclusion", "markdown": "## 一、结论\n\n总分：80/100。"}],
         }
 
-    async def fake_list(db, task_id):
+    async def fake_list(db, task_id, **_kwargs):
         return [{
             "id": "report-1",
             "task_id": task_id,
@@ -648,7 +648,7 @@ async def test_ai_report_route_returns_markdown_payload(
             "ai_score": "80/100",
         }]
 
-    async def fake_get(db, task_id, report_id):
+    async def fake_get(db, task_id, report_id, **_kwargs):
         assert report_id == "report-1"
         payload = await fake_generate(db, task_id)
         payload["archive_id"] = report_id

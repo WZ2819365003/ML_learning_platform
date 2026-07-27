@@ -5,7 +5,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.core.auth import issue_token, verify_password, verify_token
+from app.core.auth import authenticate_user, issue_token, verify_token
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -22,12 +22,7 @@ async def login(body: LoginRequest) -> dict:
         # Keep the frontend flow working in dev: hand out a token nobody checks.
         token, expires_at = issue_token(body.username or "dev")
         return {"token": token, "username": body.username or "dev", "expires_at": expires_at}
-    ok = (
-        body.username == settings.auth_username
-        and bool(settings.auth_password)
-        and verify_password(body.password, settings.auth_password)
-    )
-    if not ok:
+    if not authenticate_user(body.username, body.password):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token, expires_at = issue_token(body.username)
     return {"token": token, "username": body.username, "expires_at": expires_at}

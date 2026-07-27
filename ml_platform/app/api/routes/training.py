@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import current_username_from_authorization, owner_scope_username
 from app.core.model_registry import (
     CATEGORY_REGISTRY,
     CLASSIFICATION_EVAL_METRICS,
@@ -38,9 +39,14 @@ router = APIRouter(prefix="/training", tags=["Training"])
 async def start_training_route(
     request: TrainingRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Submit a new training job."""
-    task = await start_training(request.model_dump(), db)
+    task = await start_training(
+        request.model_dump(),
+        db,
+        owner_username=owner_scope_username(username),
+    )
     return task
 
 
@@ -48,18 +54,28 @@ async def start_training_route(
 async def get_training_status_route(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Return the current status of a training task."""
-    return await get_training_status(task_id, db)
+    return await get_training_status(
+        task_id,
+        db,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.post("/{task_id}/stop", response_model=TrainingTaskResponse)
 async def stop_training_route(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Request cancellation of a running training task."""
-    return await stop_training(task_id, db)
+    return await stop_training(
+        task_id,
+        db,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.get("/list", response_model=TrainingListResponse)
@@ -68,9 +84,16 @@ async def list_training_tasks_route(
     page_size: int = Query(default=20, ge=1, le=100, description="Items per page"),
     status: Optional[str] = Query(default=None, description="Filter by status (PENDING, RUNNING, SUCCESS, FAILED)"),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """List all training tasks with optional filtering and pagination."""
-    return await list_training_tasks(db, page=page, page_size=page_size, status_filter=status)
+    return await list_training_tasks(
+        db,
+        page=page,
+        page_size=page_size,
+        status_filter=status,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.patch("/{task_id}/name", response_model=TrainingTaskResponse)
@@ -78,9 +101,15 @@ async def rename_training_task_route(
     task_id: str,
     body: TaskRenameRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Rename a training task."""
-    return await rename_training_task(task_id, body.name, db)
+    return await rename_training_task(
+        task_id,
+        body.name,
+        db,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.patch("/{task_id}/meta", response_model=TrainingTaskResponse)
@@ -88,18 +117,30 @@ async def update_training_task_meta_route(
     task_id: str,
     body: ModelMetaUpdateRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Update notes and/or tags of a training task."""
-    return await update_training_task_meta(task_id, body.notes, body.tags, db)
+    return await update_training_task_meta(
+        task_id,
+        body.notes,
+        body.tags,
+        db,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.delete("/{task_id}", status_code=204)
 async def delete_training_task_route(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Delete a training task (not allowed while RUNNING)."""
-    await delete_training_task(task_id, db)
+    await delete_training_task(
+        task_id,
+        db,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.get("/models", response_model=ModelsListResponse)

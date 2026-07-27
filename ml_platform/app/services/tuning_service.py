@@ -218,13 +218,13 @@ def _validate_search_space(
 async def _lock_task_for_experiment_dispatch(
     db: AsyncSession,
     modeling_task_id: str,
+    owner_username: str | None = None,
 ) -> ModelingTask:
+    stmt = select(ModelingTask).where(ModelingTask.id == modeling_task_id)
+    if owner_username:
+        stmt = stmt.where(ModelingTask.owner_username == owner_username)
     task = (
-        await db.execute(
-            select(ModelingTask)
-            .where(ModelingTask.id == modeling_task_id)
-            .with_for_update()
-        )
+        await db.execute(stmt.with_for_update())
     ).scalar_one_or_none()
     if task is None:
         raise HTTPException(
@@ -488,6 +488,7 @@ async def dispatch_experiment_batch(
     description: str | None = None,
     model_family: str | None = None,
     dl_config: dict[str, Any] | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     async with task_lifecycle_guard(modeling_task_id):
         return await _dispatch_experiment_batch_locked(
@@ -502,6 +503,7 @@ async def dispatch_experiment_batch(
             description=description,
             model_family=model_family,
             dl_config=dl_config,
+            owner_username=owner_username,
         )
 
 
@@ -518,6 +520,7 @@ async def _dispatch_experiment_batch_locked(
     description: str | None = None,
     model_family: str | None = None,
     dl_config: dict[str, Any] | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """
     Create a PlatformExperiment for this batch, expand trials, and launch them.
@@ -534,7 +537,11 @@ async def _dispatch_experiment_batch_locked(
     by ``dl_service._run_dl_training_by_id``.  DL models are baseline-only in
     Phase 1; grid/bayesian requests that include DL tokens fail fast with 422.
     """
-    task = await _lock_task_for_experiment_dispatch(db, modeling_task_id)
+    task = await _lock_task_for_experiment_dispatch(
+        db,
+        modeling_task_id,
+        owner_username=owner_username,
+    )
     if not task.dataset_id or not task.target_column:
         raise HTTPException(
             status_code=400,
@@ -637,6 +644,7 @@ async def dispatch_experiment_bundle(
     name: str,
     strategies: list[dict[str, Any]],
     description: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Submit several strategy batches for the same modeling task in one call."""
     if not strategies:
@@ -652,9 +660,10 @@ async def dispatch_experiment_bundle(
     # DL outside baseline, budget ranges, zero-trial expansions, bayesian under
     # Celery) is enforced across the bundle before batch #1 commits. A partial
     # check here would silently reintroduce partial launches.
-    task = (
-        await db.execute(select(ModelingTask).where(ModelingTask.id == modeling_task_id))
-    ).scalar_one_or_none()
+    task_stmt = select(ModelingTask).where(ModelingTask.id == modeling_task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(ModelingTask.owner_username == owner_username)
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail=f"Modeling task {modeling_task_id} not found")
     if not task.dataset_id or not task.target_column:
@@ -697,6 +706,7 @@ async def dispatch_experiment_bundle(
             budget_config=spec.get("budget_config") or {},
             eval_metrics=spec.get("eval_metrics"),
             description=spec.get("description") or description,
+            owner_username=owner_username,
         )
         submitted.append(result)
         strategy_types.append(strategy_type)
@@ -934,6 +944,7 @@ async def _persist_trials(
                 model_type=trial["model_type"],
                 config=trial["hyperparameters"],
                 test_size=test_size,
+                owner_username=task.owner_username,
             )
             kind = "dl_train"
             payload_ref = f"dl_train:{domain_task.id}"
@@ -948,6 +959,7 @@ async def _persist_trials(
                     "test_size": test_size,
                     "cv_folds": cv_folds,
                     "eval_metrics": eval_metrics,
+                    "owner_username": task.owner_username,
                 },
             )
             kind = "train"
@@ -1001,6 +1013,7 @@ async def _create_dl_training_task_record(
     model_type: str,
     config: dict[str, Any],
     test_size: float,
+    owner_username: str | None = None,
 ) -> DLTrainingTask:
     """Create a DLTrainingTask row without auto-launching it."""
     from app.core.dl_registry import get_dl_trainer_registry
@@ -1018,6 +1031,7 @@ async def _create_dl_training_task_record(
     train_config.setdefault("test_size", test_size)
     short_id = str(_uuid_mod.uuid4())[:8]
     task = DLTrainingTask(
+        owner_username=owner_username,
         dataset_id=dataset_id,
         name=f"{model_type}_{short_id}",
         target_column=target_column,

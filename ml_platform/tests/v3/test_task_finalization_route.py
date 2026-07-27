@@ -69,7 +69,7 @@ async def test_task_finalize_route_returns_service_result(
         await db.commit()
         task_id = task.id
 
-    async def fake_finalize(db, modeling_task_id):
+    async def fake_finalize(db, modeling_task_id, **_kwargs):
         assert modeling_task_id == task_id
         return {
             "status": "finalized",

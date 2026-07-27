@@ -86,6 +86,7 @@ def serialize_modeling_task(task: ModelingTask) -> dict[str, Any]:
     public_config.pop(FINAL_EVALUATION_CONFIG_KEY, None)
     return {
         "id": task.id,
+        "owner_username": task.owner_username,
         "name": task.name,
         "description": task.description,
         "dataset_id": task.dataset_id,
@@ -140,8 +141,15 @@ def serialize_experiment(exp: PlatformExperiment) -> dict[str, Any]:
 # Lookups
 # ---------------------------------------------------------------------------
 
-async def _get_task_or_404(db: AsyncSession, task_id: str) -> ModelingTask:
-    result = await db.execute(select(ModelingTask).where(ModelingTask.id == task_id))
+async def _get_task_or_404(
+    db: AsyncSession,
+    task_id: str,
+    owner_username: str | None = None,
+) -> ModelingTask:
+    stmt = select(ModelingTask).where(ModelingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(ModelingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail=f"ModelingTask {task_id!r} not found")
@@ -159,6 +167,7 @@ async def list_modeling_tasks(
     page_size: int = 20,
     status: str | None = None,
     dataset_id: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     stmt = select(ModelingTask)
     count_stmt = select(func.count(ModelingTask.id))
@@ -168,6 +177,9 @@ async def list_modeling_tasks(
     if dataset_id:
         stmt = stmt.where(ModelingTask.dataset_id == dataset_id)
         count_stmt = count_stmt.where(ModelingTask.dataset_id == dataset_id)
+    if owner_username:
+        stmt = stmt.where(ModelingTask.owner_username == owner_username)
+        count_stmt = count_stmt.where(ModelingTask.owner_username == owner_username)
 
     total = (await db.execute(count_stmt)).scalar_one()
     rows = await db.execute(
@@ -216,6 +228,7 @@ async def create_modeling_task(
     dataset_version_id: str | None = None,
     config: dict | None = None,
     training_plan_id: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     if task_type not in ("classification", "regression"):
         raise HTTPException(status_code=422, detail="task_type must be classification|regression")
@@ -225,7 +238,10 @@ async def create_modeling_task(
     dataset_name: str | None = None
     ds: Dataset | None = None
     if dataset_id:
-        ds = (await db.execute(select(Dataset).where(Dataset.id == dataset_id))).scalar_one_or_none()
+        ds_stmt = select(Dataset).where(Dataset.id == dataset_id)
+        if owner_username:
+            ds_stmt = ds_stmt.where(Dataset.owner_username == owner_username)
+        ds = (await db.execute(ds_stmt)).scalar_one_or_none()
         if ds is None:
             raise HTTPException(status_code=404, detail=f"Dataset {dataset_id!r} not found")
         dataset_name = ds.name
@@ -241,6 +257,25 @@ async def create_modeling_task(
             raise HTTPException(
                 status_code=404, detail=f"DatasetVersion {dataset_version_id!r} not found"
             )
+        if dataset_id and dv.dataset_id != dataset_id:
+            raise HTTPException(
+                status_code=422,
+                detail="DatasetVersion does not belong to the selected Dataset",
+            )
+        if owner_username:
+            owner_dataset = (
+                await db.execute(
+                    select(Dataset).where(
+                        Dataset.id == dv.dataset_id,
+                        Dataset.owner_username == owner_username,
+                    )
+                )
+            ).scalar_one_or_none()
+            if owner_dataset is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"DatasetVersion {dataset_version_id!r} not found",
+                )
 
     # -----------------------------------------------------------------------
     # V3 Phase 2 — bind to a TrainingPlan and freeze a snapshot.
@@ -254,11 +289,10 @@ async def create_modeling_task(
         from app.models.database import TrainingPlan
         from app.services.training_plan_service import capture_snapshot, mark_used
 
-        plan = (
-            await db.execute(
-                select(TrainingPlan).where(TrainingPlan.id == training_plan_id)
-            )
-        ).scalar_one_or_none()
+        plan_stmt = select(TrainingPlan).where(TrainingPlan.id == training_plan_id)
+        if owner_username:
+            plan_stmt = plan_stmt.where(TrainingPlan.owner_username == owner_username)
+        plan = (await db.execute(plan_stmt)).scalar_one_or_none()
         if plan is None:
             raise HTTPException(
                 status_code=404,
@@ -274,10 +308,11 @@ async def create_modeling_task(
             )
         training_plan_snapshot = capture_snapshot(plan)
         # Track usage — side effect, does not alter the snapshot
-        await mark_used(db, plan.id)
+        await mark_used(db, plan.id, owner_username=owner_username)
 
     task = ModelingTask(
         name=name,
+        owner_username=owner_username or (ds.owner_username if ds else None),
         description=description,
         dataset_id=dataset_id,
         dataset_name=dataset_name,
@@ -372,8 +407,12 @@ def _validate_target_column(
         )
 
 
-async def get_modeling_task(db: AsyncSession, task_id: str) -> dict[str, Any]:
-    task = await _get_task_or_404(db, task_id)
+async def get_modeling_task(
+    db: AsyncSession,
+    task_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    task = await _get_task_or_404(db, task_id, owner_username=owner_username)
     payload = serialize_modeling_task(task)
 
     # -----------------------------------------------------------------------
@@ -446,8 +485,9 @@ async def update_modeling_task(
     status: str | None = None,
     objective_metric: str | None = None,
     objective_direction: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    task = await _get_task_or_404(db, task_id)
+    task = await _get_task_or_404(db, task_id, owner_username=owner_username)
     final_state = task_final_evaluation_state(task)
     objective_changes = (
         objective_metric is not None and objective_metric != task.objective_metric
@@ -482,8 +522,12 @@ async def update_modeling_task(
     return serialize_modeling_task(task)
 
 
-async def delete_modeling_task(db: AsyncSession, task_id: str) -> None:
-    task = await _get_task_or_404(db, task_id)
+async def delete_modeling_task(
+    db: AsyncSession,
+    task_id: str,
+    owner_username: str | None = None,
+) -> None:
+    task = await _get_task_or_404(db, task_id, owner_username=owner_username)
     if task.status == "RUNNING":
         raise HTTPException(status_code=400, detail="Cannot delete a running modeling task")
     await db.delete(task)
@@ -509,12 +553,17 @@ def _objective_metric_payload(metrics: dict, metric_key: str) -> dict[str, Any]:
     }
 
 
-async def task_leaderboard(db: AsyncSession, task_id: str, top_k: int = 20) -> list[dict[str, Any]]:
+async def task_leaderboard(
+    db: AsyncSession,
+    task_id: str,
+    top_k: int = 20,
+    owner_username: str | None = None,
+) -> list[dict[str, Any]]:
     """
     Global leaderboard: best runs across every experiment under this task,
     ranked by the task's objective metric.
     """
-    task = await _get_task_or_404(db, task_id)
+    task = await _get_task_or_404(db, task_id, owner_username=owner_username)
 
     exp_rows = await db.execute(
         select(PlatformExperiment.id, PlatformExperiment.name, PlatformExperiment.strategy_type)
@@ -584,9 +633,10 @@ async def task_runs(
     task_id: str,
     *,
     status: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Return all runs for a modeling task, including scheduler progress."""
-    task = await _get_task_or_404(db, task_id)
+    task = await _get_task_or_404(db, task_id, owner_username=owner_username)
 
     exp_rows = await db.execute(
         select(PlatformExperiment)
@@ -690,6 +740,7 @@ async def deploy_run(
     name: str,
     description: str | None = None,
     max_batch_size: int = 100,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Deploy the model trained by a V3 ExperimentRun.
 
@@ -697,7 +748,7 @@ async def deploy_run(
     the run's parent PlatformTask.payload_ref resolves to the ML TrainingTask
     (family "ml") or DLTrainingTask (family "dl") that owns the model file.
     """
-    await _get_task_or_404(db, task_id)
+    await _get_task_or_404(db, task_id, owner_username=owner_username)
 
     run = (
         await db.execute(select(ExperimentRun).where(ExperimentRun.id == run_id))
@@ -733,13 +784,20 @@ async def deploy_run(
             db=db,
             description=description,
             max_batch_size=max_batch_size,
+            owner_username=owner_username,
         )
         return {"family": "ml", "domain_task_id": domain_task_id, **result}
 
     if family == "dl":
         from app.services.dl_service import create_dl_deployment
 
-        dep = await create_dl_deployment(domain_task_id, name, description, db)
+        dep = await create_dl_deployment(
+            domain_task_id,
+            name,
+            description,
+            db,
+            owner_username=owner_username,
+        )
         return {
             "family": "dl",
             "domain_task_id": domain_task_id,
@@ -767,6 +825,7 @@ async def list_all_runs(
     strategy_type: str | None = None,
     task_type: str | None = None,
     limit: int = 500,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Return a flat list of every ExperimentRun across every ModelingTask.
 
@@ -778,7 +837,10 @@ async def list_all_runs(
     label reflects the per-row metric.
     """
     # 1. All modeling tasks (index for name / metric / direction)
-    task_rows = await db.execute(select(ModelingTask))
+    task_stmt = select(ModelingTask)
+    if owner_username:
+        task_stmt = task_stmt.where(ModelingTask.owner_username == owner_username)
+    task_rows = await db.execute(task_stmt)
     task_by_id = {t.id: t for t in task_rows.scalars().all()}
     if not task_by_id:
         return {"items": [], "total": 0}
@@ -880,7 +942,11 @@ def _quartiles(values: list[float]) -> dict[str, float] | None:
     }
 
 
-async def strategy_comparison(db: AsyncSession, task_id: str) -> dict[str, Any]:
+async def strategy_comparison(
+    db: AsyncSession,
+    task_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
     """Compare baseline vs grid_search vs bayesian_search for this task.
 
     For each strategy:
@@ -890,7 +956,7 @@ async def strategy_comparison(db: AsyncSession, task_id: str) -> dict[str, Any]:
     Also returns `raw_points` — one row per SUCCESS run — so the UI can
     render a box plot, strip plot, or table without a second round-trip.
     """
-    task = await _get_task_or_404(db, task_id)
+    task = await _get_task_or_404(db, task_id, owner_username=owner_username)
     metric_name = task.objective_metric or "accuracy"
     reverse = (task.objective_direction or "max") == "max"
 

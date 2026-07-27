@@ -35,6 +35,7 @@ def _utcnow() -> datetime:
 def _serialise(plan: TrainingPlan) -> dict[str, Any]:
     return {
         "id": plan.id,
+        "owner_username": plan.owner_username,
         "name": plan.name,
         "description": plan.description,
         "task_type": plan.task_type,
@@ -176,8 +177,15 @@ def _fill_dl_config_defaults(
     return out
 
 
-async def _get_or_404(db: AsyncSession, plan_id: str) -> TrainingPlan:
-    result = await db.execute(select(TrainingPlan).where(TrainingPlan.id == plan_id))
+async def _get_or_404(
+    db: AsyncSession,
+    plan_id: str,
+    owner_username: str | None = None,
+) -> TrainingPlan:
+    stmt = select(TrainingPlan).where(TrainingPlan.id == plan_id)
+    if owner_username:
+        stmt = stmt.where(TrainingPlan.owner_username == owner_username)
+    result = await db.execute(stmt)
     plan = result.scalar_one_or_none()
     if plan is None:
         raise HTTPException(status_code=404, detail=f"TrainingPlan {plan_id!r} not found")
@@ -193,12 +201,16 @@ async def list_plans(
     task_type: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     stmt = select(TrainingPlan)
     count_stmt = select(func.count(TrainingPlan.id))
     if task_type:
         stmt = stmt.where(TrainingPlan.task_type == task_type)
         count_stmt = count_stmt.where(TrainingPlan.task_type == task_type)
+    if owner_username:
+        stmt = stmt.where(TrainingPlan.owner_username == owner_username)
+        count_stmt = count_stmt.where(TrainingPlan.owner_username == owner_username)
 
     total = (await db.execute(count_stmt)).scalar_one()
     # MySQL doesn't support NULLS LAST — emulate with an extra IS NULL ordering
@@ -220,7 +232,11 @@ async def list_plans(
     }
 
 
-async def create_plan(db: AsyncSession, data: dict[str, Any]) -> dict[str, Any]:
+async def create_plan(
+    db: AsyncSession,
+    data: dict[str, Any],
+    owner_username: str | None = None,
+) -> dict[str, Any]:
     _validate_shape(data)
     if not data.get("name"):
         raise HTTPException(status_code=422, detail="name is required")
@@ -232,6 +248,7 @@ async def create_plan(db: AsyncSession, data: dict[str, Any]) -> dict[str, Any]:
     dl_config = _fill_dl_config_defaults(dl_tokens, data.get("dl_config"))
 
     plan = TrainingPlan(
+        owner_username=owner_username,
         name=data["name"],
         description=data.get("description"),
         task_type=data.get("task_type", "classification"),
@@ -255,15 +272,22 @@ async def create_plan(db: AsyncSession, data: dict[str, Any]) -> dict[str, Any]:
     return _serialise(plan)
 
 
-async def get_plan(db: AsyncSession, plan_id: str) -> dict[str, Any]:
-    return _serialise(await _get_or_404(db, plan_id))
+async def get_plan(
+    db: AsyncSession,
+    plan_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    return _serialise(await _get_or_404(db, plan_id, owner_username=owner_username))
 
 
 async def update_plan(
-    db: AsyncSession, plan_id: str, data: dict[str, Any]
+    db: AsyncSession,
+    plan_id: str,
+    data: dict[str, Any],
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     _validate_shape(data)
-    plan = await _get_or_404(db, plan_id)
+    plan = await _get_or_404(db, plan_id, owner_username=owner_username)
 
     # If selected_models or model_family change, re-validate the combination
     # against the registries so we never persist an inconsistent plan.
@@ -303,15 +327,23 @@ async def update_plan(
     return _serialise(plan)
 
 
-async def delete_plan(db: AsyncSession, plan_id: str) -> None:
-    plan = await _get_or_404(db, plan_id)
+async def delete_plan(
+    db: AsyncSession,
+    plan_id: str,
+    owner_username: str | None = None,
+) -> None:
+    plan = await _get_or_404(db, plan_id, owner_username=owner_username)
     await db.delete(plan)
     await db.flush()
 
 
-async def mark_used(db: AsyncSession, plan_id: str) -> dict[str, Any]:
+async def mark_used(
+    db: AsyncSession,
+    plan_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
     """Bump use_count + last_used_at (called when a batch is dispatched with this plan)."""
-    plan = await _get_or_404(db, plan_id)
+    plan = await _get_or_404(db, plan_id, owner_username=owner_username)
     plan.use_count = (plan.use_count or 0) + 1
     plan.last_used_at = _utcnow()
     await db.flush()

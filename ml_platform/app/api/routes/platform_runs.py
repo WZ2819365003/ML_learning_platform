@@ -24,6 +24,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import current_username_from_authorization, owner_scope_username
+from app.core.ownership import ensure_task_owner
 from app.models.database import (
     Dataset,
     DLTrainingLog,
@@ -40,6 +42,15 @@ from app.models.database import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/platform/runs", tags=["V3 Run Inspector"])
+
+
+async def owned_run_id(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
+) -> str:
+    await ensure_task_owner(db, run_id, owner_scope_username(username))
+    return run_id
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +172,7 @@ def _serialize_log(
 
 @router.get("/{run_id}/inspector", summary="Aggregated run detail for the Run Inspector drawer")
 async def inspect_run(
-    run_id: str,
+    run_id: str = Depends(owned_run_id),
     log_limit: int = Query(100, ge=1, le=500),
     include_siblings: bool = Query(True),
     db: AsyncSession = Depends(get_db),
@@ -450,7 +461,7 @@ async def inspect_run(
     summary="Full SHAP payload for a run (inline importances + per-sample values)",
 )
 async def get_shap_payload(
-    run_id: str,
+    run_id: str = Depends(owned_run_id),
     compute: bool = Query(False, description="Compute on-demand if no cached payload exists"),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:

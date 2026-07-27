@@ -329,7 +329,7 @@ async def test_batch_predict_route_hands_upload_to_service_without_buffering(mon
     async def fail_if_route_buffers(self, size=-1):  # noqa: ARG001
         raise AssertionError("route buffered the entire uploaded file")
 
-    async def fake_create_batch_job(db, *, deployment_id, file):  # noqa: ARG001
+    async def fake_create_batch_job(db, *, deployment_id, file, **_kwargs):  # noqa: ARG001
         return {
             "job_id": "job-1",
             "platform_task_id": "task-1",

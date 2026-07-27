@@ -205,9 +205,13 @@ async def predict_rows(
     rows: list[dict[str, Any]],
     db: AsyncSession,
     include_probabilities: bool = True,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Run inference against a saved model using inline JSON rows."""
-    task_result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    task_stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(TrainingTask.owner_username == owner_username)
+    task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")

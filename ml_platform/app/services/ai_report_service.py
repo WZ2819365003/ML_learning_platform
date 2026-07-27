@@ -2023,11 +2023,18 @@ def _archive_created_at(archive: AIReportArchive) -> str | None:
     return created.isoformat(timespec="seconds") if created else None
 
 
-async def archive_ai_report(db: AsyncSession, report: dict[str, Any]) -> dict[str, Any]:
+async def archive_ai_report(
+    db: AsyncSession,
+    report: dict[str, Any],
+    owner_username: str | None = None,
+) -> dict[str, Any]:
     task_id = report.get("task_id")
     if not task_id:
         raise HTTPException(status_code=400, detail="AI 报告缺少 task_id，无法归档。")
-    task = await db.get(ModelingTask, str(task_id))
+    task_stmt = select(ModelingTask).where(ModelingTask.id == str(task_id))
+    if owner_username:
+        task_stmt = task_stmt.where(ModelingTask.owner_username == owner_username)
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail=f"建模任务 {task_id} 不存在")
 
@@ -2050,8 +2057,15 @@ async def archive_ai_report(db: AsyncSession, report: dict[str, Any]) -> dict[st
     return payload
 
 
-async def list_ai_report_archives(db: AsyncSession, task_id: str) -> list[dict[str, Any]]:
-    task = await db.get(ModelingTask, task_id)
+async def list_ai_report_archives(
+    db: AsyncSession,
+    task_id: str,
+    owner_username: str | None = None,
+) -> list[dict[str, Any]]:
+    task_stmt = select(ModelingTask).where(ModelingTask.id == task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(ModelingTask.owner_username == owner_username)
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail=f"建模任务 {task_id} 不存在")
     rows = await db.execute(
@@ -2075,7 +2089,18 @@ async def list_ai_report_archives(db: AsyncSession, task_id: str) -> list[dict[s
     ]
 
 
-async def get_ai_report_archive(db: AsyncSession, task_id: str, report_id: str) -> dict[str, Any]:
+async def get_ai_report_archive(
+    db: AsyncSession,
+    task_id: str,
+    report_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    task_stmt = select(ModelingTask).where(ModelingTask.id == task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(ModelingTask.owner_username == owner_username)
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"建模任务 {task_id} 不存在")
     row = await db.execute(
         select(AIReportArchive).where(
             AIReportArchive.id == report_id,
@@ -2133,10 +2158,15 @@ def _serialize_leaderboard_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def build_task_report_context(db: AsyncSession, task_id: str) -> dict[str, Any]:
-    task = (
-        await db.execute(select(ModelingTask).where(ModelingTask.id == task_id))
-    ).scalar_one_or_none()
+async def build_task_report_context(
+    db: AsyncSession,
+    task_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    task_stmt = select(ModelingTask).where(ModelingTask.id == task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(ModelingTask.owner_username == owner_username)
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail=f"建模任务 {task_id} 不存在")
 
@@ -2175,7 +2205,12 @@ async def build_task_report_context(db: AsyncSession, task_id: str) -> dict[str,
         )
         runs = run_rows.scalars().all()
 
-    leaderboard = await task_leaderboard(db, task_id, top_k=_TOP_RUNS)
+    leaderboard = await task_leaderboard(
+        db,
+        task_id,
+        top_k=_TOP_RUNS,
+        owner_username=owner_username,
+    )
     failed_runs = [run for run in runs if run.status == "FAILED"][:3]
     successful_runs = [run for run in runs if run.status == "SUCCESS"][:_TOP_RUNS]
 
@@ -2497,16 +2532,21 @@ async def generate_ai_task_report(
     task_id: str,
     *,
     settings: Any | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
     _require_api_key(settings)
-    context = await build_task_report_context(db, task_id)
+    context = await build_task_report_context(
+        db,
+        task_id,
+        owner_username=owner_username,
+    )
     report = await generate_ai_report_from_context(
         context,
         task_id=task_id,
         settings=settings,
     )
-    return await archive_ai_report(db, report)
+    return await archive_ai_report(db, report, owner_username=owner_username)
 
 
 async def check_doubao_reachability(settings: Any | None = None) -> dict[str, Any]:

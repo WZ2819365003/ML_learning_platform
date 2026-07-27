@@ -492,7 +492,7 @@ async def test_concurrent_finalization_waits_for_task_lifecycle_lock(
     evaluation_started = asyncio.Event()
     release_evaluation = asyncio.Event()
 
-    async def blocking_evaluate(db, modeling_task_id):
+    async def blocking_evaluate(db, modeling_task_id, **_kwargs):
         evaluation_started.set()
         await release_evaluation.wait()
         return {

@@ -10,6 +10,8 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.auth import current_username_from_authorization, owner_scope_username
+from app.core.ownership import ensure_task_owner
 from app.models.database import (
     Dataset,
     DLTrainingTask,
@@ -51,9 +53,16 @@ async def list_model_assets_route(
     page_size: int = Query(20, ge=1, le=100),
     runtime_type: str | None = Query(default=None, pattern="^(ml|dl)$"),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """List ML and DL models through a unified asset view."""
-    return await list_model_assets(db=db, page=page, page_size=page_size, runtime_type=runtime_type)
+    return await list_model_assets(
+        db=db,
+        page=page,
+        page_size=page_size,
+        runtime_type=runtime_type,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.get("/list")
@@ -62,8 +71,10 @@ async def list_models(
     page_size: int = Query(20, ge=1, le=500),
     model_type: str | None = Query(None, description="Filter by model type"),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """List all successfully trained models."""
+    owner_username = owner_scope_username(username)
     stmt = select(TrainingTask).where(
         TrainingTask.status == "SUCCESS",
         TrainingTask.model_path.is_not(None),
@@ -76,6 +87,9 @@ async def list_models(
     if model_type:
         stmt = stmt.where(TrainingTask.model_type == model_type)
         count_stmt = count_stmt.where(TrainingTask.model_type == model_type)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+        count_stmt = count_stmt.where(TrainingTask.owner_username == owner_username)
 
     count_result = await db.execute(count_stmt)
     total = count_result.scalar_one()
@@ -128,6 +142,7 @@ async def list_models(
 async def compare_models(
     task_ids: str = Query(..., description="Comma-separated task IDs to compare"),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> list[dict[str, Any]]:
     """Compare metrics of multiple trained models."""
     ids = [tid.strip() for tid in task_ids.split(",") if tid.strip()]
@@ -135,8 +150,12 @@ async def compare_models(
         raise HTTPException(status_code=400, detail="Provide at least 2 task IDs")
 
     results = []
+    owner_username = owner_scope_username(username)
     for tid in ids:
-        result = await db.execute(select(TrainingTask).where(TrainingTask.id == tid))
+        task_stmt = select(TrainingTask).where(TrainingTask.id == tid)
+        if owner_username:
+            task_stmt = task_stmt.where(TrainingTask.owner_username == owner_username)
+        result = await db.execute(task_stmt)
         task = result.scalar_one_or_none()
         if task is None:
             continue
@@ -250,9 +269,14 @@ async def delete_tag_from_library(
 async def model_detail(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """Get detailed info about a saved model."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    owner_username = owner_scope_username(username)
+    task_stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(task_stmt)
     task = result.scalar_one_or_none()
     if task is None:
         # V3 runs and purged legacy rows may still have a valid model artifact
@@ -260,6 +284,7 @@ async def model_detail(
         # show detail metadata for those recovered tasks as well.
         from app.services.resolver import resolve_task_and_dataset
 
+        await ensure_task_owner(db, task_id, owner_username)
         recovered_task, dataset = await resolve_task_and_dataset(task_id, db)
         model_path = recovered_task.model_path
         model_size = None
@@ -338,13 +363,21 @@ async def model_detail(
 async def download_model_file(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> FileResponse:
     """Download a saved ML (.joblib) or DL (.pt) model file."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    owner_username = owner_scope_username(username)
+    task_stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(task_stmt)
     task = result.scalar_one_or_none()
     if task is None:
+        dl_stmt = select(DLTrainingTask).where(DLTrainingTask.id == task_id)
+        if owner_username:
+            dl_stmt = dl_stmt.where(DLTrainingTask.owner_username == owner_username)
         result = await db.execute(
-            select(DLTrainingTask).where(DLTrainingTask.id == task_id)
+            dl_stmt
         )
         task = result.scalar_one_or_none()
     if task is None:
@@ -366,9 +399,14 @@ async def download_model_file(
 async def delete_model(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict:
     """Delete a saved model file (keeps the task record)."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    owner_username = owner_scope_username(username)
+    task_stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(task_stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
@@ -388,6 +426,7 @@ async def predict_model(
     task_id: str,
     request: PredictionRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> PredictionResponse:
     """Run prediction against a saved model using inline JSON rows."""
     result = await predict_rows(
@@ -395,5 +434,6 @@ async def predict_model(
         rows=request.rows,
         include_probabilities=request.include_probabilities,
         db=db,
+        owner_username=owner_scope_username(username),
     )
     return PredictionResponse(**result)

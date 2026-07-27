@@ -27,18 +27,30 @@ def _build_predict_url(deployment_id: str) -> str:
     return f"http://127.0.0.1:8000/api/ts/deployments/{deployment_id}/predict"
 
 
-async def _get_dataset_or_404(db: AsyncSession, dataset_id: str) -> Dataset:
-    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+async def _get_dataset_or_404(
+    db: AsyncSession,
+    dataset_id: str,
+    owner_username: str | None = None,
+) -> Dataset:
+    stmt = select(Dataset).where(Dataset.id == dataset_id)
+    if owner_username:
+        stmt = stmt.where(Dataset.owner_username == owner_username)
+    result = await db.execute(stmt)
     dataset = result.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
     return dataset
 
 
-async def _get_deployment_or_404(db: AsyncSession, deployment_id: str) -> TimeSeriesDeployment:
-    result = await db.execute(
-        select(TimeSeriesDeployment).where(TimeSeriesDeployment.id == deployment_id)
-    )
+async def _get_deployment_or_404(
+    db: AsyncSession,
+    deployment_id: str,
+    owner_username: str | None = None,
+) -> TimeSeriesDeployment:
+    stmt = select(TimeSeriesDeployment).where(TimeSeriesDeployment.id == deployment_id)
+    if owner_username:
+        stmt = stmt.where(TimeSeriesDeployment.owner_username == owner_username)
+    result = await db.execute(stmt)
     deployment = result.scalar_one_or_none()
     if deployment is None:
         raise HTTPException(status_code=404, detail="Time-series deployment not found")
@@ -102,12 +114,18 @@ async def list_ts_deployments(
     db: AsyncSession,
     page: int = 1,
     page_size: int = 20,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    count_result = await db.execute(select(func.count(TimeSeriesDeployment.id)))
+    count_stmt = select(func.count(TimeSeriesDeployment.id))
+    stmt = select(TimeSeriesDeployment)
+    if owner_username:
+        count_stmt = count_stmt.where(TimeSeriesDeployment.owner_username == owner_username)
+        stmt = stmt.where(TimeSeriesDeployment.owner_username == owner_username)
+    count_result = await db.execute(count_stmt)
     total = count_result.scalar_one()
 
     rows = await db.execute(
-        select(TimeSeriesDeployment)
+        stmt
         .order_by(TimeSeriesDeployment.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -127,8 +145,10 @@ async def create_ts_deployment(
     description: str | None = None,
     backend_label: str = "amazon/chronos-t5-small",
     config: dict[str, Any] | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     deployment = TimeSeriesDeployment(
+        owner_username=owner_username,
         name=name,
         description=description,
         backend_label=backend_label,
@@ -145,20 +165,21 @@ async def create_ts_deployment(
 async def ensure_default_ts_deployment(
     db: AsyncSession,
     backend_label: str = "amazon/chronos-t5-small",
+    owner_username: str | None = None,
 ) -> TimeSeriesDeployment:
-    result = await db.execute(
-        select(TimeSeriesDeployment)
-        .where(
-            TimeSeriesDeployment.name == "TimesFM 默认部署",
-            TimeSeriesDeployment.backend_label == backend_label,
-        )
-        .limit(1)
+    stmt = select(TimeSeriesDeployment).where(
+        TimeSeriesDeployment.name == "TimesFM 默认部署",
+        TimeSeriesDeployment.backend_label == backend_label,
     )
+    if owner_username:
+        stmt = stmt.where(TimeSeriesDeployment.owner_username == owner_username)
+    result = await db.execute(stmt.limit(1))
     deployment = result.scalar_one_or_none()
     if deployment is not None:
         return deployment
 
     deployment = TimeSeriesDeployment(
+        owner_username=owner_username,
         name="TimesFM 默认部署",
         description="兼容旧版 /api/timesfm 接口自动创建",
         backend_label=backend_label,
@@ -171,8 +192,16 @@ async def ensure_default_ts_deployment(
     return deployment
 
 
-async def get_ts_deployment(db: AsyncSession, deployment_id: str) -> dict[str, Any]:
-    deployment = await _get_deployment_or_404(db, deployment_id)
+async def get_ts_deployment(
+    db: AsyncSession,
+    deployment_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    deployment = await _get_deployment_or_404(
+        db,
+        deployment_id,
+        owner_username=owner_username,
+    )
     return _serialize_deployment(deployment)
 
 
@@ -180,15 +209,28 @@ async def update_ts_deployment_status(
     db: AsyncSession,
     deployment_id: str,
     status: str,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    deployment = await _get_deployment_or_404(db, deployment_id)
+    deployment = await _get_deployment_or_404(
+        db,
+        deployment_id,
+        owner_username=owner_username,
+    )
     deployment.status = status
     await db.flush()
     return _serialize_deployment(deployment)
 
 
-async def delete_ts_deployment(db: AsyncSession, deployment_id: str) -> None:
-    deployment = await _get_deployment_or_404(db, deployment_id)
+async def delete_ts_deployment(
+    db: AsyncSession,
+    deployment_id: str,
+    owner_username: str | None = None,
+) -> None:
+    deployment = await _get_deployment_or_404(
+        db,
+        deployment_id,
+        owner_username=owner_username,
+    )
     await db.delete(deployment)
     await db.flush()
 
@@ -201,12 +243,21 @@ async def run_ts_deployment_prediction(
     time_column: str | None,
     horizon: int,
     frequency: str,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    deployment = await _get_deployment_or_404(db, deployment_id)
+    deployment = await _get_deployment_or_404(
+        db,
+        deployment_id,
+        owner_username=owner_username,
+    )
     if deployment.status != "active":
         raise HTTPException(status_code=400, detail="Deployment is paused")
 
-    dataset = await _get_dataset_or_404(db, dataset_id)
+    dataset = await _get_dataset_or_404(
+        db,
+        dataset_id,
+        owner_username=owner_username,
+    )
     result = await run_forecast_async(
         file_path=dataset.file_path,
         value_column=value_column,
@@ -325,13 +376,23 @@ async def create_ts_task(
     time_column: str | None,
     horizon: int,
     frequency: str,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    deployment = await _get_deployment_or_404(db, deployment_id)
+    deployment = await _get_deployment_or_404(
+        db,
+        deployment_id,
+        owner_username=owner_username,
+    )
     if deployment.status != "active":
         raise HTTPException(status_code=400, detail="Deployment is paused")
-    dataset = await _get_dataset_or_404(db, dataset_id)
+    dataset = await _get_dataset_or_404(
+        db,
+        dataset_id,
+        owner_username=owner_username,
+    )
 
     task = TimeSeriesForecastTask(
+        owner_username=owner_username or dataset.owner_username,
         dataset_id=dataset.id,
         dataset_name=dataset.name,
         value_column=value_column,
@@ -366,8 +427,13 @@ async def create_legacy_ts_task(
     horizon: int,
     frequency: str,
     model_name: str,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    deployment = await ensure_default_ts_deployment(db, backend_label=model_name)
+    deployment = await ensure_default_ts_deployment(
+        db,
+        backend_label=model_name,
+        owner_username=owner_username,
+    )
     return await create_ts_task(
         db=db,
         dataset_id=dataset_id,
@@ -376,6 +442,7 @@ async def create_legacy_ts_task(
         time_column=time_column,
         horizon=horizon,
         frequency=frequency,
+        owner_username=owner_username,
     )
 
 
@@ -386,6 +453,7 @@ async def list_ts_tasks(
     status: str | None = None,
     dataset_id: str | None = None,
     deployment_id: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     stmt = select(TimeSeriesForecastTask)
     count_stmt = select(func.count(TimeSeriesForecastTask.id))
@@ -399,6 +467,9 @@ async def list_ts_tasks(
     if deployment_id:
         stmt = stmt.where(TimeSeriesForecastTask.model_name == deployment_id)
         count_stmt = count_stmt.where(TimeSeriesForecastTask.model_name == deployment_id)
+    if owner_username:
+        stmt = stmt.where(TimeSeriesForecastTask.owner_username == owner_username)
+        count_stmt = count_stmt.where(TimeSeriesForecastTask.owner_username == owner_username)
 
     total = (await db.execute(count_stmt)).scalar_one()
 
@@ -445,10 +516,15 @@ async def list_ts_tasks(
     }
 
 
-async def get_ts_task(db: AsyncSession, task_id: str) -> dict[str, Any]:
-    result = await db.execute(
-        select(TimeSeriesForecastTask).where(TimeSeriesForecastTask.id == task_id)
-    )
+async def get_ts_task(
+    db: AsyncSession,
+    task_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    stmt = select(TimeSeriesForecastTask).where(TimeSeriesForecastTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TimeSeriesForecastTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Forecast task not found")
@@ -456,10 +532,15 @@ async def get_ts_task(db: AsyncSession, task_id: str) -> dict[str, Any]:
     return _serialize_task(task, deployment=deployment, include_result=True)
 
 
-async def delete_ts_task(db: AsyncSession, task_id: str) -> None:
-    result = await db.execute(
-        select(TimeSeriesForecastTask).where(TimeSeriesForecastTask.id == task_id)
-    )
+async def delete_ts_task(
+    db: AsyncSession,
+    task_id: str,
+    owner_username: str | None = None,
+) -> None:
+    stmt = select(TimeSeriesForecastTask).where(TimeSeriesForecastTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TimeSeriesForecastTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Forecast task not found")
@@ -474,10 +555,12 @@ async def update_ts_task_meta(
     task_id: str,
     notes: str | None,
     tags: list[str] | None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    result = await db.execute(
-        select(TimeSeriesForecastTask).where(TimeSeriesForecastTask.id == task_id)
-    )
+    stmt = select(TimeSeriesForecastTask).where(TimeSeriesForecastTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TimeSeriesForecastTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Forecast task not found")

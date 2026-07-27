@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import current_username_from_authorization, owner_scope_username
 from app.models.database import get_db
 from app.models.schemas import (
     DeployRequest,
@@ -38,6 +39,7 @@ async def list_unified_deployments_route(
     page_size: int = Query(default=20, ge=1, le=100),
     runtime_type: str | None = Query(default=None, pattern="^(ml|dl)$"),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """List ML and DL deployments through one standardized view."""
     return await list_unified_deployments(
@@ -45,6 +47,7 @@ async def list_unified_deployments_route(
         page=page,
         page_size=page_size,
         runtime_type=runtime_type,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -53,6 +56,7 @@ async def deploy_model(
     task_id: str,
     body: DeployRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Deploy a trained model and get prediction URLs."""
     result = await create_deployment(
@@ -61,6 +65,7 @@ async def deploy_model(
         description=body.description,
         max_batch_size=body.max_batch_size,
         db=db,
+        owner_username=owner_scope_username(username),
     )
     return DeploymentResponse(**result)
 
@@ -72,18 +77,29 @@ async def list_deployments_route(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """List all model deployments with pagination."""
-    return await list_deployments(page=page, page_size=page_size, db=db)
+    return await list_deployments(
+        page=page,
+        page_size=page_size,
+        db=db,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @deploy_router.delete("/{deployment_id}")
 async def delete_deployment_route(
     deployment_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Delete a deployment and evict it from the model cache."""
-    await delete_deployment(deployment_id=deployment_id, db=db)
+    await delete_deployment(
+        deployment_id=deployment_id,
+        db=db,
+        owner_username=owner_scope_username(username),
+    )
     return {"message": "Deployment deleted", "id": deployment_id}
 
 
@@ -92,9 +108,15 @@ async def update_status_route(
     deployment_id: str,
     status: str = Query(..., pattern="^(active|paused)$"),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Pause or resume a deployment."""
-    await update_deployment_status(deployment_id=deployment_id, status=status, db=db)
+    await update_deployment_status(
+        deployment_id=deployment_id,
+        status=status,
+        db=db,
+        owner_username=owner_scope_username(username),
+    )
     return {"message": f"Status updated to {status}"}
 
 
@@ -103,6 +125,7 @@ async def predict_route(
     deployment_id: str,
     body: InferenceRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Submit prediction request (url1). Returns result immediately."""
     result = await run_inference(
@@ -110,6 +133,7 @@ async def predict_route(
         rows=body.rows,
         include_probabilities=body.include_probabilities,
         db=db,
+        owner_username=owner_scope_username(username),
     )
     return InferenceJobResponse(**result)
 
@@ -119,6 +143,7 @@ async def batch_predict_route(
     deployment_id: str,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict:
     """Submit a CSV for asynchronous batch prediction.
 
@@ -131,6 +156,7 @@ async def batch_predict_route(
         db,
         deployment_id=deployment_id,
         file=file,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -139,10 +165,18 @@ async def batch_predict_status_route(
     deployment_id: str,
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict:
     from app.services.batch_prediction_service import get_batch_job, serialize_batch_job
 
-    return serialize_batch_job(await get_batch_job(db, deployment_id, job_id))
+    return serialize_batch_job(
+        await get_batch_job(
+            db,
+            deployment_id,
+            job_id,
+            owner_username=owner_scope_username(username),
+        )
+    )
 
 
 @inference_router.get("/{deployment_id}/batch-predict/{job_id}/download")
@@ -150,6 +184,7 @@ async def batch_predict_download_route(
     deployment_id: str,
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Stream the result CSV. 409 while the job is still running so the caller
     never receives a truncated file that looks complete."""
@@ -157,7 +192,12 @@ async def batch_predict_download_route(
 
     from app.services.batch_prediction_service import get_batch_job
 
-    job = await get_batch_job(db, deployment_id, job_id)
+    job = await get_batch_job(
+        db,
+        deployment_id,
+        job_id,
+        owner_username=owner_scope_username(username),
+    )
     if job.status != "completed" or not job.result_path:
         raise HTTPException(
             status_code=409,
@@ -184,9 +224,13 @@ async def get_result_route(
     deployment_id: str,
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ):
     """Get prediction result by job ID (url2)."""
     result = await get_inference_result(
-        deployment_id=deployment_id, job_id=job_id, db=db
+        deployment_id=deployment_id,
+        job_id=job_id,
+        db=db,
+        owner_username=owner_scope_username(username),
     )
     return InferenceJobResponse(**result)

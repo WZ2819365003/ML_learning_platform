@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import current_username_from_authorization, owner_scope_username
 from app.models.database import get_db
 from app.services import experiment_service
 
@@ -70,14 +71,22 @@ async def list_experiments(
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await experiment_service.list_experiments(db, page=page, page_size=page_size, status=status)
+    return await experiment_service.list_experiments(
+        db,
+        page=page,
+        page_size=page_size,
+        status=status,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.post("/", summary="Create an experiment", status_code=201)
 async def create_experiment(
     body: CreateExperimentRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     return await experiment_service.create_experiment(
         db,
@@ -88,6 +97,7 @@ async def create_experiment(
         objective_direction=body.objective_direction,
         kind=body.kind,
         config=body.config,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -95,16 +105,26 @@ async def create_experiment(
 async def get_experiment(
     experiment_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await experiment_service.get_experiment(db, experiment_id)
+    return await experiment_service.get_experiment(
+        db,
+        experiment_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.delete("/{experiment_id}", summary="Delete experiment")
 async def delete_experiment(
     experiment_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, str]:
-    await experiment_service.delete_experiment(db, experiment_id)
+    await experiment_service.delete_experiment(
+        db,
+        experiment_id,
+        owner_username=owner_scope_username(username),
+    )
     return {"message": "deleted"}
 
 
@@ -118,8 +138,15 @@ async def list_runs(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await experiment_service.list_runs(db, experiment_id, page=page, page_size=page_size)
+    return await experiment_service.list_runs(
+        db,
+        experiment_id,
+        page=page,
+        page_size=page_size,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.post("/{experiment_id}/runs", summary="Create a run", status_code=201)
@@ -127,6 +154,7 @@ async def create_run(
     experiment_id: str,
     body: CreateRunRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     return await experiment_service.create_run(
         db,
@@ -134,6 +162,7 @@ async def create_run(
         params=body.params,
         parent_run_id=body.parent_run_id,
         notes=body.notes,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -142,8 +171,13 @@ async def get_run(
     experiment_id: str,
     run_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    run = await experiment_service.get_run(db, run_id)
+    run = await experiment_service.get_run(
+        db,
+        run_id,
+        owner_username=owner_scope_username(username),
+    )
     if run["experiment_id"] != experiment_id:
         raise HTTPException(status_code=404, detail="Run not found in this experiment")
     return run
@@ -157,8 +191,13 @@ async def get_run(
 async def get_leaderboard(
     experiment_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> list[dict[str, Any]]:
-    return await experiment_service.get_leaderboard(db, experiment_id)
+    return await experiment_service.get_leaderboard(
+        db,
+        experiment_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +230,7 @@ async def trigger_explain(
     experiment_id: str,
     run_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """
     Trigger a SHAP explanation for a successful ExperimentRun.
@@ -204,7 +244,11 @@ async def trigger_explain(
     from app.scheduler.task_runner import register_domain_task, update_platform_task_status
     from app.services.explain_service import run_shap_explanation
 
-    run = await experiment_service.get_run(db, run_id)
+    run = await experiment_service.get_run(
+        db,
+        run_id,
+        owner_username=owner_scope_username(username),
+    )
     if run["experiment_id"] != experiment_id:
         raise HTTPException(status_code=404, detail="Run not found in this experiment")
     if run["status"] != "SUCCESS":
@@ -243,9 +287,14 @@ async def get_explain_result(
     experiment_id: str,
     run_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any] | None:
     from app.services.explain_service import get_shap_result
-    run = await experiment_service.get_run(db, run_id)
+    run = await experiment_service.get_run(
+        db,
+        run_id,
+        owner_username=owner_scope_username(username),
+    )
     if run["experiment_id"] != experiment_id:
         raise HTTPException(status_code=404, detail="Run not found in this experiment")
     result = await get_shap_result(run_id)

@@ -18,6 +18,7 @@ class DatasetResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    owner_username: str | None = None
     name: str
     file_size: int
     row_count: int | None = None
@@ -90,6 +91,7 @@ class TrainingTaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    owner_username: str | None = None
     name: str | None = None
     dataset_id: str
     model_type: str

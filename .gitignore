@@ -74,4 +74,5 @@ docker/.deploy_secrets
 # 本地产物 / 临时工作区（不入库）
 screenshots/
 .claude/worktrees/
+docs/superpowers/plans/
 ml_platform/storage/backups/

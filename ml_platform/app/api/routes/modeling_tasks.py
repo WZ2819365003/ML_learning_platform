@@ -15,6 +15,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import current_username_from_authorization, owner_scope_username
 from app.models.database import get_db
 from app.services import ai_report_service, modeling_task_service
 from app.services.progress_tree_service import get_progress_tree
@@ -132,9 +133,15 @@ async def list_modeling_tasks(
     status: str | None = Query(None),
     dataset_id: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     return await modeling_task_service.list_modeling_tasks(
-        db, page=page, page_size=page_size, status=status, dataset_id=dataset_id
+        db,
+        page=page,
+        page_size=page_size,
+        status=status,
+        dataset_id=dataset_id,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -142,6 +149,7 @@ async def list_modeling_tasks(
 async def create_modeling_task(
     body: CreateModelingTaskRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     return await modeling_task_service.create_modeling_task(
         db,
@@ -155,6 +163,7 @@ async def create_modeling_task(
         description=body.description,
         config=body.config,
         training_plan_id=body.training_plan_id,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -162,8 +171,13 @@ async def create_modeling_task(
 async def get_modeling_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await modeling_task_service.get_modeling_task(db, task_id)
+    return await modeling_task_service.get_modeling_task(
+        db,
+        task_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.patch("/{task_id}", summary="Update modeling task")
@@ -171,6 +185,7 @@ async def update_modeling_task(
     task_id: str,
     body: UpdateModelingTaskRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     return await modeling_task_service.update_modeling_task(
         db,
@@ -180,6 +195,7 @@ async def update_modeling_task(
         status=body.status,
         objective_metric=body.objective_metric,
         objective_direction=body.objective_direction,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -187,8 +203,13 @@ async def update_modeling_task(
 async def delete_modeling_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, str]:
-    await modeling_task_service.delete_modeling_task(db, task_id)
+    await modeling_task_service.delete_modeling_task(
+        db,
+        task_id,
+        owner_username=owner_scope_username(username),
+    )
     return {"message": "deleted"}
 
 
@@ -203,6 +224,7 @@ async def delete_modeling_task(
 async def task_progress_tree(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """
     Powers the ProgressTree widget on ModelingTaskDetail.
@@ -223,7 +245,11 @@ async def task_progress_tree(
     ML vs DL icons.  ``current_step`` is a short human string like
     ``"epoch 12/50"`` (DL) or ``"训练中 (60%)"`` (ML).
     """
-    return await get_progress_tree(db, task_id)
+    return await get_progress_tree(
+        db,
+        task_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -235,8 +261,14 @@ async def task_leaderboard(
     task_id: str,
     top_k: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> list[dict[str, Any]]:
-    return await modeling_task_service.task_leaderboard(db, task_id, top_k=top_k)
+    return await modeling_task_service.task_leaderboard(
+        db,
+        task_id,
+        top_k=top_k,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.post("/{task_id}/automl", summary="Launch an AutoML sweep from the candidate registry")
@@ -245,6 +277,7 @@ async def launch_automl_route(
     name: str | None = None,
     max_trials: int | None = Query(default=None, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """AutoML is a strategy of the normal batch pipeline, not a parallel path.
 
@@ -263,6 +296,7 @@ async def launch_automl_route(
         selected_models=[],
         search_space={},
         budget_config={"max_trials": max_trials} if max_trials else {},
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -274,6 +308,7 @@ async def launch_automl_route(
 async def task_report_markdown(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> PlainTextResponse:
     """Markdown so the report stays diffable, greppable and pasteable.
 
@@ -282,6 +317,11 @@ async def task_report_markdown(
     """
     from app.services.report_service import build_task_report
 
+    await modeling_task_service.get_modeling_task(
+        db,
+        task_id,
+        owner_username=owner_scope_username(username),
+    )
     markdown = await build_task_report(db, task_id)
     filename = f"report-{task_id[:8]}.md"
     return PlainTextResponse(
@@ -298,8 +338,13 @@ async def task_report_markdown(
 async def task_ai_report(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await ai_report_service.generate_ai_task_report(db, task_id)
+    return await ai_report_service.generate_ai_task_report(
+        db,
+        task_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.get(
@@ -309,8 +354,15 @@ async def task_ai_report(
 async def list_task_ai_reports(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return {"items": await ai_report_service.list_ai_report_archives(db, task_id)}
+    return {
+        "items": await ai_report_service.list_ai_report_archives(
+            db,
+            task_id,
+            owner_username=owner_scope_username(username),
+        )
+    }
 
 
 @router.get(
@@ -321,8 +373,14 @@ async def get_task_ai_report_archive(
     task_id: str,
     report_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await ai_report_service.get_ai_report_archive(db, task_id, report_id)
+    return await ai_report_service.get_ai_report_archive(
+        db,
+        task_id,
+        report_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.post(
@@ -332,10 +390,15 @@ async def get_task_ai_report_archive(
 async def finalize_task_winner_route(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     from app.services import final_evaluation_service
 
-    return await final_evaluation_service.finalize_task_winner(db, task_id)
+    return await final_evaluation_service.finalize_task_winner(
+        db,
+        task_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.get(
@@ -345,6 +408,7 @@ async def finalize_task_winner_route(
 async def task_strategy_comparison(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """Per-strategy five-number summary + best run + raw points.
 
@@ -352,7 +416,11 @@ async def task_strategy_comparison(
     cards (baseline / grid / bayesian best value), a box plot from the
     per-strategy stats, and a ranking table driven by raw_points.
     """
-    return await modeling_task_service.strategy_comparison(db, task_id)
+    return await modeling_task_service.strategy_comparison(
+        db,
+        task_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.get("/{task_id}/runs", summary="All runs with scheduler progress")
@@ -360,8 +428,14 @@ async def task_runs(
     task_id: str,
     status: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await modeling_task_service.task_runs(db, task_id, status=status)
+    return await modeling_task_service.task_runs(
+        db,
+        task_id,
+        status=status,
+        owner_username=owner_scope_username(username),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +447,7 @@ async def create_experiment_batch(
     task_id: str,
     body: CreateExperimentBatchRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """
     V3 experiment dispatch.
@@ -401,6 +476,7 @@ async def create_experiment_batch(
             description=body.description,
             model_family=body.model_family,
             dl_config=body.dl_config,
+            owner_username=owner_scope_username(username),
         )
     except ImportError as exc:
         # Usually a transient optional dependency (optuna / sklearn) missing —
@@ -418,6 +494,7 @@ async def create_experiment_bundle(
     task_id: str,
     body: CreateExperimentBundleRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """Submit baseline/grid/bayesian batches together from the V3 workbench."""
     from app.services import tuning_service
@@ -429,6 +506,7 @@ async def create_experiment_bundle(
         name=body.name,
         strategies=strategies,
         description=body.description,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -438,6 +516,7 @@ async def deploy_run_route(
     run_id: str,
     body: DeployRunRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """Bridge a V3 run to a live deployment (workflow 部署上线 step).
 
@@ -452,6 +531,7 @@ async def deploy_run_route(
         name=body.name,
         description=body.description,
         max_batch_size=body.max_batch_size,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -460,6 +540,7 @@ async def config_exec_route(
     task_id: str,
     body: ConfigExecRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """Execute the user's Python (must set `config`) and dispatch the resulting
     experiment batch through the normal tuning pipeline (workflow 代码配置)."""
@@ -486,6 +567,7 @@ async def config_exec_route(
             eval_metrics=cfg.get("eval_metrics"),
             model_family=cfg.get("model_family"),
             dl_config=cfg.get("dl_config"),
+            owner_username=owner_scope_username(username),
         )
     except ImportError as exc:
         raise HTTPException(status_code=501, detail=f"Tuning engine unavailable: {exc}") from exc

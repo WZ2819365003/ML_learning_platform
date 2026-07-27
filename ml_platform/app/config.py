@@ -6,6 +6,7 @@ through a Settings dataclass. Uses lru_cache to ensure a single
 Settings instance is reused across the application.
 """
 
+import json
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -157,10 +158,9 @@ class Settings:
         default_factory=lambda: os.getenv("S3_ENABLED", "false").lower() == "true"
     )
 
-    # Authentication (single-admin). Env-configurable with an environment-aware
-    # default: production defaults ON, everything else defaults OFF — local
-    # dev and the test suite stay unauthenticated with zero config. An
-    # explicit AUTH_ENABLED always wins.
+    # Authentication. The legacy single-admin pair remains supported through
+    # AUTH_USERNAME/AUTH_PASSWORD; production can define multiple user accounts
+    # with AUTH_USERS_JSON='{"alice":"...","bob":"..."}'.
     auth_enabled: bool = field(
         default_factory=lambda: (
             os.getenv("AUTH_ENABLED").lower() == "true"
@@ -173,6 +173,9 @@ class Settings:
     )
     auth_password: str = field(
         default_factory=lambda: os.getenv("AUTH_PASSWORD", "")
+    )
+    auth_users_json: str = field(
+        default_factory=lambda: os.getenv("AUTH_USERS_JSON", "")
     )
     auth_secret_key: str = field(
         default_factory=lambda: os.getenv("AUTH_SECRET_KEY", "dev-secret-not-for-production")
@@ -244,8 +247,18 @@ class Settings:
         # Auth defaults ON in production; explicitly disabling it is allowed
         # (env-configurable by design) but the enabled path must be complete.
         if self.auth_enabled:
-            if not self.auth_password:
-                problems.append("AUTH_PASSWORD 未配置")
+            if not self.auth_password and not self.auth_users_json:
+                problems.append("AUTH_PASSWORD 或 AUTH_USERS_JSON 未配置")
+            if self.auth_users_json:
+                try:
+                    users = json.loads(self.auth_users_json)
+                except json.JSONDecodeError:
+                    problems.append("AUTH_USERS_JSON 不是合法 JSON")
+                else:
+                    if not isinstance(users, dict) or not any(
+                        str(k).strip() and str(v) for k, v in users.items()
+                    ):
+                        problems.append("AUTH_USERS_JSON 必须是包含账号密码的 JSON 对象")
             if len(self.auth_secret_key) < 32 or self.auth_secret_key == "dev-secret-not-for-production":
                 problems.append("AUTH_SECRET_KEY 缺失或过短（需 ≥32 位随机串）")
         if problems:

@@ -86,6 +86,7 @@ async def list_model_assets(
     page: int = 1,
     page_size: int = 20,
     runtime_type: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
 
@@ -96,6 +97,8 @@ async def list_model_assets(
             .where(TrainingTask.status == "SUCCESS", TrainingTask.model_path.is_not(None))
             .order_by(TrainingTask.finished_at.desc(), TrainingTask.created_at.desc())
         )
+        if owner_username:
+            ml_stmt = ml_stmt.where(TrainingTask.owner_username == owner_username)
         ml_tasks = (await db.execute(ml_stmt)).scalars().all()
 
     dl_tasks: list[DLTrainingTask] = []
@@ -105,6 +108,8 @@ async def list_model_assets(
             .where(DLTrainingTask.status == "SUCCESS", DLTrainingTask.model_path.is_not(None))
             .order_by(DLTrainingTask.finished_at.desc(), DLTrainingTask.created_at.desc())
         )
+        if owner_username:
+            dl_stmt = dl_stmt.where(DLTrainingTask.owner_username == owner_username)
         dl_tasks = (await db.execute(dl_stmt)).scalars().all()
 
     dataset_ids = {task.dataset_id for task in ml_tasks}
@@ -208,6 +213,7 @@ async def list_unified_deployments(
     page: int = 1,
     page_size: int = 20,
     runtime_type: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     deployments: list[dict[str, Any]] = []
 
@@ -227,16 +233,22 @@ async def list_unified_deployments(
 
     ml_task_map: dict[str, TrainingTask] = {}
     if ml_deployments:
-        ml_tasks_result = await db.execute(
-            select(TrainingTask).where(TrainingTask.id.in_([dep.task_id for dep in ml_deployments]))
+        ml_task_stmt = select(TrainingTask).where(
+            TrainingTask.id.in_([dep.task_id for dep in ml_deployments])
         )
+        if owner_username:
+            ml_task_stmt = ml_task_stmt.where(TrainingTask.owner_username == owner_username)
+        ml_tasks_result = await db.execute(ml_task_stmt)
         ml_task_map = {task.id: task for task in ml_tasks_result.scalars().all()}
 
     dl_task_map: dict[str, DLTrainingTask] = {}
     if dl_deployments:
-        dl_tasks_result = await db.execute(
-            select(DLTrainingTask).where(DLTrainingTask.id.in_([dep.dl_task_id for dep in dl_deployments]))
+        dl_task_stmt = select(DLTrainingTask).where(
+            DLTrainingTask.id.in_([dep.dl_task_id for dep in dl_deployments])
         )
+        if owner_username:
+            dl_task_stmt = dl_task_stmt.where(DLTrainingTask.owner_username == owner_username)
+        dl_tasks_result = await db.execute(dl_task_stmt)
         dl_task_map = {task.id: task for task in dl_tasks_result.scalars().all()}
 
     for dep in ml_deployments:

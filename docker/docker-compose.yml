@@ -106,7 +106,7 @@ services:
       dockerfile: docker/Dockerfile.backend
     container_name: ml_platform_migrate
     restart: "no"
-    command: alembic upgrade head
+    command: sh -c "python scripts/ensure_alembic_baseline.py && alembic upgrade head"
     working_dir: /app
     env_file:
       - path: .deploy_secrets
@@ -114,6 +114,11 @@ services:
     environment:
       DATABASE_URL: "${DATABASE_URL:-mysql+aiomysql://root:123456@mysql:3306/ml_platform}"
       ENVIRONMENT: "${ENVIRONMENT:-production}"
+      AUTH_ENABLED: "${AUTH_ENABLED:-true}"
+      AUTH_USERNAME: "${AUTH_USERNAME:-admin}"
+      AUTH_PASSWORD: "${AUTH_PASSWORD:-}"
+      AUTH_USERS_JSON: "${AUTH_USERS_JSON:-}"
+      AUTH_SECRET_KEY: "${AUTH_SECRET_KEY:-}"
     depends_on:
       mysql:
         condition: service_healthy
@@ -145,6 +150,17 @@ services:
       S3_SECRET_KEY: "${S3_SECRET_KEY:-mlplatform123}"
       S3_BUCKET: "${S3_BUCKET:-ml-platform}"
       S3_ENABLED: "${S3_ENABLED:-true}"
+      AUTH_ENABLED: "${AUTH_ENABLED:-true}"
+      AUTH_USERNAME: "${AUTH_USERNAME:-admin}"
+      AUTH_PASSWORD: "${AUTH_PASSWORD:-}"
+      AUTH_USERS_JSON: "${AUTH_USERS_JSON:-}"
+      AUTH_SECRET_KEY: "${AUTH_SECRET_KEY:-}"
+      ARK_API_KEY: "${ARK_API_KEY:-}"
+      DOUBAO_API_KEY: "${DOUBAO_API_KEY:-}"
+      DOUBAO_BASE_URL: "${DOUBAO_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
+      DOUBAO_MODEL: "${DOUBAO_MODEL:-doubao-seed-1-8-251228}"
+      DOUBAO_TIMEOUT_S: "${DOUBAO_TIMEOUT_S:-30}"
+      DOUBAO_MAX_TOKENS: "${DOUBAO_MAX_TOKENS:-1800}"
       # This is the PRODUCTION stack: default to production so a deploy that
       # forgets ENVIRONMENT fails fast on config validation instead of silently
       # booting with auth disabled. Local dev uses the root docker-compose.yml
@@ -193,6 +209,17 @@ services:
       S3_SECRET_KEY: "${S3_SECRET_KEY:-mlplatform123}"
       S3_BUCKET: "${S3_BUCKET:-ml-platform}"
       S3_ENABLED: "${S3_ENABLED:-true}"
+      AUTH_ENABLED: "${AUTH_ENABLED:-true}"
+      AUTH_USERNAME: "${AUTH_USERNAME:-admin}"
+      AUTH_PASSWORD: "${AUTH_PASSWORD:-}"
+      AUTH_USERS_JSON: "${AUTH_USERS_JSON:-}"
+      AUTH_SECRET_KEY: "${AUTH_SECRET_KEY:-}"
+      ARK_API_KEY: "${ARK_API_KEY:-}"
+      DOUBAO_API_KEY: "${DOUBAO_API_KEY:-}"
+      DOUBAO_BASE_URL: "${DOUBAO_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
+      DOUBAO_MODEL: "${DOUBAO_MODEL:-doubao-seed-1-8-251228}"
+      DOUBAO_TIMEOUT_S: "${DOUBAO_TIMEOUT_S:-30}"
+      DOUBAO_MAX_TOKENS: "${DOUBAO_MAX_TOKENS:-1800}"
       ENVIRONMENT: "${ENVIRONMENT:-production}"
     depends_on:
       migrate:

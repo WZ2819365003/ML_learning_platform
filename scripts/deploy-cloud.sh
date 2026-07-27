@@ -106,12 +106,16 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 
-# Step 6b: authenticate with server-only credentials, then prove a protected
-# endpoint accepts the issued bearer token.
-: "${AUTH_USERNAME:?AUTH_USERNAME must be set in docker/.deploy_secrets}"
-: "${AUTH_PASSWORD:?AUTH_PASSWORD must be set in docker/.deploy_secrets}"
+# Step 6b: authenticate with server-only credentials, then prove protected
+# endpoints accept the issued bearer token. Multi-account deployments can set
+# AUTH_SMOKE_USERNAME/AUTH_SMOKE_PASSWORD while keeping AUTH_USERS_JSON as the
+# application credential source.
+SMOKE_USERNAME="${AUTH_SMOKE_USERNAME:-${AUTH_USERNAME:-}}"
+SMOKE_PASSWORD="${AUTH_SMOKE_PASSWORD:-${AUTH_PASSWORD:-}}"
+: "${SMOKE_USERNAME:?AUTH_SMOKE_USERNAME or AUTH_USERNAME must be set in docker/.deploy_secrets}"
+: "${SMOKE_PASSWORD:?AUTH_SMOKE_PASSWORD or AUTH_PASSWORD must be set in docker/.deploy_secrets}"
 LOGIN_PAYLOAD="$(python3 -c \
-  'import json, os; print(json.dumps({"username": os.environ["AUTH_USERNAME"], "password": os.environ["AUTH_PASSWORD"]}))')"
+  'import json, os; print(json.dumps({"username": os.environ["SMOKE_USERNAME"], "password": os.environ["SMOKE_PASSWORD"]}))')"
 LOGIN_RESPONSE="$(curl -fsS \
   -H 'Content-Type: application/json' \
   --data "$LOGIN_PAYLOAD" \
@@ -121,6 +125,12 @@ TOKEN="$(printf '%s' "$LOGIN_RESPONSE" | python3 -c \
 curl -fsS \
   -H "Authorization: Bearer $TOKEN" \
   "$API_BASE_URL/api/auth/me" >/dev/null
+curl -fsS \
+  -H "Authorization: Bearer $TOKEN" \
+  "$API_BASE_URL/api/data/list" >/dev/null
+curl -fsS \
+  -H "Authorization: Bearer $TOKEN" \
+  "$API_BASE_URL/api/v3/tasks/" >/dev/null
 
 echo "Deployment and authenticated smoke test succeeded."
 REMOTE_SCRIPT

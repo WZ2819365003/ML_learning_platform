@@ -378,6 +378,7 @@ async def create_training_task_record(db: AsyncSession, candidate: dict) -> Trai
     dataset = result.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id!r} not found")
+    owner_username = candidate.get("owner_username") or dataset.owner_username
 
     available = list_available_models()
     model_type = candidate["model_type"]
@@ -396,6 +397,7 @@ async def create_training_task_record(db: AsyncSession, candidate: dict) -> Trai
         # committed domain row, so persist the top-level option with it.
         hyperparameters["class_weight"] = candidate["class_weight"]
     task = TrainingTask(
+        owner_username=owner_username,
         dataset_id=dataset_id,
         model_type=model_type,
         name=f"{model_type}_{short_id}",
@@ -494,13 +496,17 @@ async def _run_training_sync_by_id(
         raise
 
 
-async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
+async def start_training(
+    request_data: dict,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> TrainingTask:
     """Create a training task, register it in the unified platform, and launch it."""
     # Validate dataset exists
     dataset_id = request_data["dataset_id"]
     result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
     dataset = result.scalar_one_or_none()
-    if dataset is None:
+    if dataset is None or (owner_username and dataset.owner_username != owner_username):
         raise HTTPException(status_code=404, detail="Dataset not found")
     restored_dataset = restore_dataset_file(dataset.id, dataset.file_path)
     if restored_dataset is None:
@@ -523,6 +529,7 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     if request_data.get("class_weight"):
         hyperparameters["class_weight"] = request_data["class_weight"]
     task = TrainingTask(
+        owner_username=owner_username or dataset.owner_username,
         dataset_id=dataset_id,
         model_type=request_data["model_type"],
         name=f"{request_data['model_type']}_{short_id}",
@@ -561,20 +568,34 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     return task
 
 
-async def get_training_status(task_id: str, db: AsyncSession) -> TrainingTask:
+async def get_training_status(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> TrainingTask:
     """Retrieve the current state of a training task."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
     return task
 
 
-async def stop_training(task_id: str, db: AsyncSession) -> TrainingTask:
+async def stop_training(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> TrainingTask:
     """Cancel a pending or running training task."""
     from app.models.database import PlatformTask
 
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
@@ -609,6 +630,7 @@ async def list_training_tasks(
     page: int = 1,
     page_size: int = 20,
     status_filter: str | None = None,
+    owner_username: str | None = None,
 ) -> dict:
     """Return a paginated list of training tasks."""
     stmt = select(TrainingTask)
@@ -617,6 +639,9 @@ async def list_training_tasks(
     if status_filter:
         stmt = stmt.where(TrainingTask.status == status_filter)
         count_stmt = count_stmt.where(TrainingTask.status == status_filter)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+        count_stmt = count_stmt.where(TrainingTask.owner_username == owner_username)
 
     count_result = await db.execute(count_stmt)
     total = count_result.scalar_one()
@@ -634,9 +659,17 @@ async def list_training_tasks(
     }
 
 
-async def rename_training_task(task_id: str, name: str, db: AsyncSession) -> TrainingTask:
+async def rename_training_task(
+    task_id: str,
+    name: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> TrainingTask:
     """Rename a training task."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
@@ -645,9 +678,16 @@ async def rename_training_task(task_id: str, name: str, db: AsyncSession) -> Tra
     return task
 
 
-async def delete_training_task(task_id: str, db: AsyncSession) -> None:
+async def delete_training_task(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> None:
     """Delete a training task (only if not RUNNING)."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
@@ -658,10 +698,17 @@ async def delete_training_task(task_id: str, db: AsyncSession) -> None:
 
 
 async def update_training_task_meta(
-    task_id: str, notes: str | None, tags: list[str] | None, db: AsyncSession
+    task_id: str,
+    notes: str | None,
+    tags: list[str] | None,
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> TrainingTask:
     """Update notes and/or tags of a training task."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")

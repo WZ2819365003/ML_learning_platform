@@ -58,8 +58,12 @@ async def _find_existing_dataset_by_content(
     db: AsyncSession,
     content_sha256: str,
     file_size: int,
+    owner_username: str | None = None,
 ) -> Dataset | None:
-    result = await db.execute(select(Dataset).where(Dataset.file_size == file_size))
+    stmt = select(Dataset).where(Dataset.file_size == file_size)
+    if owner_username:
+        stmt = stmt.where(Dataset.owner_username == owner_username)
+    result = await db.execute(stmt)
     for dataset in result.scalars():
         stored_digest = getattr(dataset, "content_sha256", None)
         if stored_digest:
@@ -404,6 +408,7 @@ async def upload_dataset(
     db: AsyncSession,
     *,
     content_length: int | None = None,
+    owner_username: str | None = None,
 ) -> Dataset:
     """Validate, persist, and catalogue an uploaded dataset file.
 
@@ -478,6 +483,7 @@ async def upload_dataset(
         db,
         content_sha256=content_sha256,
         file_size=file_size,
+        owner_username=owner_username,
     )
     if existing_dataset is not None:
         dest_path.unlink(missing_ok=True)
@@ -499,6 +505,7 @@ async def upload_dataset(
         ) from exc
 
     dataset = Dataset(
+        owner_username=owner_username,
         name=original_name,
         file_path=to_portable_storage_path(dest_path),
         file_size=file_size,
@@ -548,12 +555,16 @@ async def get_dataset_preview(
     dataset_id: str,
     db: AsyncSession,
     rows: int = 100,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Return a preview of the dataset including sample rows and statistics.
 
     Raises ``HTTPException(404)`` when the dataset is not found.
     """
-    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    stmt = select(Dataset).where(Dataset.id == dataset_id)
+    if owner_username:
+        stmt = stmt.where(Dataset.owner_username == owner_username)
+    result = await db.execute(stmt)
     dataset: Dataset | None = result.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -600,20 +611,22 @@ async def list_datasets(
     db: AsyncSession,
     page: int = 1,
     page_size: int = 20,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Return a paginated list of datasets ordered by creation date (newest first)."""
     # total count
-    count_result = await db.execute(select(func.count(Dataset.id)))
+    count_stmt = select(func.count(Dataset.id))
+    if owner_username:
+        count_stmt = count_stmt.where(Dataset.owner_username == owner_username)
+    count_result = await db.execute(count_stmt)
     total: int = count_result.scalar_one()
 
     # paginated query
     offset = (page - 1) * page_size
-    stmt = (
-        select(Dataset)
-        .order_by(Dataset.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
+    stmt = select(Dataset)
+    if owner_username:
+        stmt = stmt.where(Dataset.owner_username == owner_username)
+    stmt = stmt.order_by(Dataset.created_at.desc()).offset(offset).limit(page_size)
     result = await db.execute(stmt)
     datasets = result.scalars().all()
 
@@ -621,6 +634,7 @@ async def list_datasets(
         "items": [
             {
                 "id": ds.id,
+                "owner_username": ds.owner_username,
                 "name": ds.name,
                 "file_size": ds.file_size,
                 "row_count": ds.row_count,
@@ -640,9 +654,13 @@ async def get_correlation(
     dataset_id: str,
     db: AsyncSession,
     method: str = "pearson",
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Return the correlation matrix for all numeric columns in the dataset."""
-    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    stmt = select(Dataset).where(Dataset.id == dataset_id)
+    if owner_username:
+        stmt = stmt.where(Dataset.owner_username == owner_username)
+    result = await db.execute(stmt)
     dataset: Dataset | None = result.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -678,9 +696,13 @@ async def get_target_distribution(
     dataset_id: str,
     target_column: str,
     db: AsyncSession,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Return value-count distribution and descriptive stats for target_column."""
-    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    stmt = select(Dataset).where(Dataset.id == dataset_id)
+    if owner_username:
+        stmt = stmt.where(Dataset.owner_username == owner_username)
+    result = await db.execute(stmt)
     dataset: Dataset | None = result.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -733,13 +755,20 @@ async def get_target_distribution(
     }
 
 
-async def delete_dataset(dataset_id: str, db: AsyncSession) -> bool:
+async def delete_dataset(
+    dataset_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> bool:
     """Delete a dataset's file from disk and its record from the database.
 
     Raises ``HTTPException(404)`` when the dataset is not found.
     Returns ``True`` on success.
     """
-    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    stmt = select(Dataset).where(Dataset.id == dataset_id)
+    if owner_username:
+        stmt = stmt.where(Dataset.owner_username == owner_username)
+    result = await db.execute(stmt)
     dataset: Dataset | None = result.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")

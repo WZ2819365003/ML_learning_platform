@@ -71,9 +71,13 @@ async def create_deployment(
     db: AsyncSession,
     description: str | None = None,
     max_batch_size: int = 100,
+    owner_username: str | None = None,
 ) -> dict:
     # Verify task exists and is complete
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    task_stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(task_stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
@@ -107,13 +111,31 @@ async def create_deployment(
     }
 
 
-async def list_deployments(db: AsyncSession, page: int = 1, page_size: int = 20) -> dict:
-    count_result = await db.execute(select(func.count(ModelDeployment.id)))
+async def list_deployments(
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+    owner_username: str | None = None,
+) -> dict:
+    count_stmt = select(func.count(ModelDeployment.id))
+    stmt = select(ModelDeployment)
+    if owner_username:
+        count_stmt = (
+            count_stmt
+            .join(TrainingTask, TrainingTask.id == ModelDeployment.task_id)
+            .where(TrainingTask.owner_username == owner_username)
+        )
+        stmt = (
+            stmt
+            .join(TrainingTask, TrainingTask.id == ModelDeployment.task_id)
+            .where(TrainingTask.owner_username == owner_username)
+        )
+    count_result = await db.execute(count_stmt)
     total: int = count_result.scalar_one()
 
     offset = (page - 1) * page_size
     result = await db.execute(
-        select(ModelDeployment)
+        stmt
         .order_by(ModelDeployment.created_at.desc())
         .offset(offset)
         .limit(page_size)
@@ -136,12 +158,22 @@ async def list_deployments(db: AsyncSession, page: int = 1, page_size: int = 20)
     return {"deployments": items, "total": total, "page": page, "page_size": page_size}
 
 
-async def delete_deployment(deployment_id: str, db: AsyncSession) -> None:
+async def delete_deployment(
+    deployment_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> None:
     result = await db.execute(
         select(ModelDeployment).where(ModelDeployment.id == deployment_id)
     )
     deployment = result.scalar_one_or_none()
     if deployment is None:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    task_stmt = select(TrainingTask).where(TrainingTask.id == deployment.task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(TrainingTask.owner_username == owner_username)
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
+    if task is None:
         raise HTTPException(status_code=404, detail="Deployment not found")
     _model_cache.evict(deployment_id)
     await db.delete(deployment)
@@ -149,13 +181,22 @@ async def delete_deployment(deployment_id: str, db: AsyncSession) -> None:
 
 
 async def update_deployment_status(
-    deployment_id: str, status: str, db: AsyncSession
+    deployment_id: str,
+    status: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> None:
     result = await db.execute(
         select(ModelDeployment).where(ModelDeployment.id == deployment_id)
     )
     deployment = result.scalar_one_or_none()
     if deployment is None:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    task_stmt = select(TrainingTask).where(TrainingTask.id == deployment.task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(TrainingTask.owner_username == owner_username)
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
+    if task is None:
         raise HTTPException(status_code=404, detail="Deployment not found")
     deployment.status = status
     await db.flush()
@@ -166,6 +207,7 @@ async def run_inference(
     rows: list[dict],
     db: AsyncSession,
     include_probabilities: bool = True,
+    owner_username: str | None = None,
 ) -> dict:
     result = await db.execute(
         select(ModelDeployment).where(ModelDeployment.id == deployment_id)
@@ -177,9 +219,10 @@ async def run_inference(
         raise HTTPException(status_code=400, detail="Deployment is paused")
 
     # Load task and model
-    task_result = await db.execute(
-        select(TrainingTask).where(TrainingTask.id == deployment.task_id)
-    )
+    task_stmt = select(TrainingTask).where(TrainingTask.id == deployment.task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(TrainingTask.owner_username == owner_username)
+    task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
     if task is None or not task.model_path:
         raise HTTPException(status_code=404, detail="Associated task or model not found")
@@ -243,8 +286,22 @@ async def run_inference(
 
 
 async def get_inference_result(
-    deployment_id: str, job_id: str, db: AsyncSession
+    deployment_id: str,
+    job_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> dict:
+    if owner_username:
+        deployment_result = await db.execute(
+            select(ModelDeployment)
+            .join(TrainingTask, TrainingTask.id == ModelDeployment.task_id)
+            .where(
+                ModelDeployment.id == deployment_id,
+                TrainingTask.owner_username == owner_username,
+            )
+        )
+        if deployment_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Inference job not found")
     result = await db.execute(
         select(InferenceJob).where(
             InferenceJob.id == job_id,

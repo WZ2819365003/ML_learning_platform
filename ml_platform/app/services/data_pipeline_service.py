@@ -33,6 +33,7 @@ async def run_data_pipeline(
     dataset_id: str,
     code: str,
     save_as: str | None = None,
+    owner_username: str | None = None,
 ) -> Dataset:
     """Execute ``code`` against the dataset's DataFrame and save the result as a
     new Dataset. Returns the new Dataset ORM row."""
@@ -40,7 +41,7 @@ async def run_data_pipeline(
         raise HTTPException(status_code=400, detail="代码为空")
 
     src = await db.get(Dataset, dataset_id)
-    if src is None:
+    if src is None or (owner_username and src.owner_username != owner_username):
         raise HTTPException(status_code=404, detail="源数据集不存在")
     source_path = restore_dataset_file(src.id, src.file_path)
     if source_path is None:
@@ -72,6 +73,7 @@ async def run_data_pipeline(
         raise HTTPException(status_code=400, detail=f"Pipeline 输出无法读取: {exc}") from exc
 
     dataset = Dataset(
+        owner_username=owner_username,
         name=name,
         file_path=to_portable_storage_path(dest),
         file_size=dest.stat().st_size,

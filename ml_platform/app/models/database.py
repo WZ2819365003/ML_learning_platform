@@ -112,10 +112,14 @@ class Base(DeclarativeBase):
 
 class Dataset(Base):
     __tablename__ = "datasets"
+    __table_args__ = (
+        Index("ix_datasets_owner_username", "owner_username"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=_uuid
     )
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
@@ -145,10 +149,14 @@ class Dataset(Base):
 
 class TrainingTask(Base):
     __tablename__ = "training_tasks"
+    __table_args__ = (
+        Index("ix_training_tasks_owner_username", "owner_username"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=_uuid
     )
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
     dataset_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
@@ -326,8 +334,12 @@ class InferenceJob(Base):
 
 class DLTrainingTask(Base):
     __tablename__ = "dl_training_tasks"
+    __table_args__ = (
+        Index("ix_dl_training_tasks_owner_username", "owner_username"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
     dataset_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
@@ -470,8 +482,12 @@ class ModelTagLibrary(Base):
 
 class TimeSeriesDeployment(Base):
     __tablename__ = "ts_deployments"
+    __table_args__ = (
+        Index("ix_ts_deployments_owner_username", "owner_username"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, default=None)
     backend_label: Mapped[str] = mapped_column(
@@ -494,11 +510,13 @@ class TimeSeriesDeployment(Base):
 class TimeSeriesForecastTask(Base):
     __tablename__ = "ts_forecast_tasks"
     __table_args__ = (
+        Index("ix_ts_forecast_tasks_owner_username", "owner_username"),
         Index("ix_ts_forecast_tasks_created_at", "created_at"),
         Index("ix_ts_forecast_tasks_status", "status"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
 
     # Input configuration
     dataset_id: Mapped[str] = mapped_column(String(36), nullable=False)
@@ -571,12 +589,14 @@ class ModelingTask(Base):
     """
     __tablename__ = "modeling_tasks"
     __table_args__ = (
+        Index("ix_modeling_tasks_owner_username", "owner_username"),
         Index("ix_modeling_tasks_status", "status"),
         Index("ix_modeling_tasks_created_at", "created_at"),
         Index("ix_modeling_tasks_dataset_id", "dataset_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, default=None)
 
@@ -895,11 +915,13 @@ class TrainingPlan(Base):
     """
     __tablename__ = "training_plans"
     __table_args__ = (
+        Index("ix_training_plans_owner_username", "owner_username"),
         Index("ix_training_plans_task_type", "task_type"),
         Index("ix_training_plans_created_at", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, default=None)
 

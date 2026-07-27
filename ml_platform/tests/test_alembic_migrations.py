@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, inspect
 
 from app.config import get_settings
 from app.models.database import Base
+from scripts.ensure_alembic_baseline import detect_legacy_revision
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,40 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def _alembic_config() -> Config:
     return Config(str(PROJECT_ROOT / "alembic.ini"))
+
+
+def test_legacy_baseline_revision_detection_is_incremental():
+    tables = {
+        "datasets",
+        "experiment_runs",
+        "platform_tasks",
+        "inference_jobs",
+        "ai_report_archives",
+        "training_tasks",
+        "dl_training_tasks",
+        "modeling_tasks",
+        "training_plans",
+        "ts_forecast_tasks",
+        "ts_deployments",
+    }
+    columns = {
+        "datasets": {"content_sha256", "owner_username"},
+        "experiment_runs": {"error_message"},
+        "platform_tasks": {"attempt_token"},
+        "inference_jobs": {"input_path", "result_path", "processed_rows"},
+        "training_tasks": {"owner_username"},
+        "dl_training_tasks": {"owner_username"},
+        "modeling_tasks": {"owner_username"},
+        "training_plans": {"owner_username"},
+        "ts_forecast_tasks": {"owner_username"},
+        "ts_deployments": {"owner_username"},
+    }
+
+    assert detect_legacy_revision(tables, columns) == "0007"
+    columns["ts_deployments"] = set()
+    assert detect_legacy_revision(tables, columns) == "0006"
+    tables.remove("ai_report_archives")
+    assert detect_legacy_revision(tables, columns) == "0005"
 
 
 def test_frozen_baseline_then_incremental_upgrade_preserves_data(tmp_path, monkeypatch):
