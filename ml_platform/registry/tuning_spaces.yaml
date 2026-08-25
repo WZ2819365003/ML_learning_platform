@@ -45,7 +45,13 @@ classification:
 
   random_forest:
     display_name: "Random Forest"
-    fixed: {}
+    fixed:
+      # baseline 模式(无 grid/bayesian 搜索)下 sklearn 默认 max_depth=None，
+      # 即不限树深。在大数据集(几万行以上)上会长出很深的树，
+      # 使 TreeExplainer 的 SHAP 计算开销随深度平方级增长，
+      # 曾在生产上把一次自动 SHAP 解释卡到 6 分钟以上、阻塞整个后端事件循环。
+      # 12 沿用本文件 grid_values.max_depth 里已验证过的档位，不引入新值。
+      max_depth: 12
     grid_values:
       n_estimators: [100, 200, 400]
       max_depth: [null, 6, 12]
@@ -165,7 +171,13 @@ classification:
 regression:
   random_forest_regressor:
     display_name: "Random Forest Regressor"
-    fixed: {}
+    fixed:
+      # baseline 模式(无 grid/bayesian 搜索)下 sklearn 默认 max_depth=None，
+      # 即不限树深。在大数据集(几万行以上)上会长出很深的树，
+      # 使 TreeExplainer 的 SHAP 计算开销随深度平方级增长，
+      # 曾在生产上把一次自动 SHAP 解释卡到 6 分钟以上、阻塞整个后端事件循环。
+      # 12 沿用本文件 grid_values.max_depth 里已验证过的档位，不引入新值。
+      max_depth: 12
     grid_values:
       n_estimators: [100, 200, 400]
       max_depth: [null, 6, 12]

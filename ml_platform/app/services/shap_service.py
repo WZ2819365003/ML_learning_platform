@@ -22,6 +22,7 @@ collapsing SHAP output to `feature_importances_`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -266,9 +267,30 @@ async def compute_shap_summary(
     `task_id` may be a legacy TrainingTask id, a V3 ExperimentRun id, a
     PlatformTask id, or an orphan — `resolver.resolve_task_and_dataset`
     handles the branching.
+
+    Only the task/dataset lookup runs on the event loop (it needs the async
+    DB session). Everything after that — model loading, data prep, and the
+    SHAP computation itself — is synchronous, CPU-bound scikit-learn/shap
+    code with no `await` in it, so it runs in a worker thread via
+    ``asyncio.to_thread``. Without this, one slow explanation (e.g.
+    TreeExplainer on a deep, unbounded-depth RandomForest — its cost scales
+    roughly quadratically with tree depth) blocks the *entire* event loop:
+    every other request, including the container health check, hangs for as
+    long as the computation runs. That is what "the whole backend crashed"
+    actually was on 2026-08-25 — a 6-minute SHAP call with nothing in this
+    file ever yielding control back to the loop.
     """
     task, dataset = await resolve_task_and_dataset(task_id, db)
+    return await asyncio.to_thread(_compute_shap_summary_sync, task_id, task, dataset, max_samples)
 
+
+def _compute_shap_summary_sync(
+    task_id: str,
+    task: Any,
+    dataset: Any,
+    max_samples: int,
+) -> dict[str, Any]:
+    """Synchronous body of ``compute_shap_summary`` — safe to run in a thread."""
     if isinstance(task, DLTrainingTask):
         context = build_dl_shap_context(
             task,
