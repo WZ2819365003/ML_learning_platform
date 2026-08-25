@@ -24,7 +24,30 @@
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
 
-const WS_BASE = (import.meta.env.VITE_WS_BASE || 'ws://127.0.0.1:8000').replace(/\/$/, '')
+/**
+ * Where to open the log socket.
+ *
+ * Defaults to the page's own origin, NOT a fixed localhost. The previous
+ * default (`ws://127.0.0.1:8000`) is resolved by the *browser*, so on any
+ * deployment reached over the network it pointed at the viewer's own machine
+ * rather than the server. Worse than failing outright: a developer running a
+ * local backend on :8000 got a socket that connected happily to the wrong
+ * backend, subscribed to a task id it had never heard of, and streamed
+ * nothing — which reads exactly like "the logs are lagging".
+ *
+ * Same-origin works everywhere the app is actually served: nginx proxies
+ * `/ws/` with the Upgrade headers, and the Vite dev server proxies `/ws` too.
+ * VITE_WS_BASE remains an override for split-origin setups.
+ */
+function defaultWsBase() {
+  if (typeof window === 'undefined' || !window.location?.host) {
+    return 'ws://127.0.0.1:8000'   // SSR/tests — no origin to derive from
+  }
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${scheme}//${window.location.host}`
+}
+
+const WS_BASE = (import.meta.env.VITE_WS_BASE || defaultWsBase()).replace(/\/$/, '')
 const MAX_BACKOFF_MS = 10_000
 
 export function useLogStream({ domainTaskId, enabled = true, maxEntries = 2000 } = {}) {
