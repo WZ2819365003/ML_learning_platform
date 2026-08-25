@@ -143,7 +143,14 @@ services:
       CELERY_BROKER_URL: "${CELERY_BROKER_URL:-redis://redis:6379/0}"
       CELERY_RESULT_BACKEND: "${CELERY_RESULT_BACKEND:-redis://redis:6379/1}"
       CELERY_KINDS: "${CELERY_KINDS:-}"
-      EVENT_BUS_MODE: "${EVENT_BUS_MODE:-memory}"
+      # redis, not memory. Training runs in a ThreadPoolExecutor worker, and the
+      # in-memory bus publishes with asyncio.Queue.put_nowait() straight from that
+      # thread — which is not thread-safe and does not wake a sleeping event loop,
+      # so live log lines sat undelivered until some unrelated request woke it.
+      # Measured worst-case delivery on an idle loop: 2903ms memory vs 8ms redis.
+      # The code default stays `memory` so a bare `uvicorn` run needs no Redis;
+      # inside compose Redis is always present, so redis is the right default here.
+      EVENT_BUS_MODE: "${EVENT_BUS_MODE:-redis}"
       MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI:-sqlite:////app/storage/mlflow.db}"
       S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-http://minio:9000}"
       S3_ACCESS_KEY: "${S3_ACCESS_KEY:-mlplatform}"
@@ -202,7 +209,14 @@ services:
       CELERY_BROKER_URL: "${CELERY_BROKER_URL:-redis://redis:6379/0}"
       CELERY_RESULT_BACKEND: "${CELERY_RESULT_BACKEND:-redis://redis:6379/1}"
       CELERY_KINDS: "${CELERY_KINDS:-}"
-      EVENT_BUS_MODE: "${EVENT_BUS_MODE:-memory}"
+      # redis, not memory. Training runs in a ThreadPoolExecutor worker, and the
+      # in-memory bus publishes with asyncio.Queue.put_nowait() straight from that
+      # thread — which is not thread-safe and does not wake a sleeping event loop,
+      # so live log lines sat undelivered until some unrelated request woke it.
+      # Measured worst-case delivery on an idle loop: 2903ms memory vs 8ms redis.
+      # The code default stays `memory` so a bare `uvicorn` run needs no Redis;
+      # inside compose Redis is always present, so redis is the right default here.
+      EVENT_BUS_MODE: "${EVENT_BUS_MODE:-redis}"
       MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI:-sqlite:////app/storage/mlflow.db}"
       S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-http://minio:9000}"
       S3_ACCESS_KEY: "${S3_ACCESS_KEY:-mlplatform}"

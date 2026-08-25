@@ -76,3 +76,7 @@ screenshots/
 .claude/worktrees/
 docs/superpowers/plans/
 ml_platform/storage/backups/
+
+# 本地运维时从容器里拷出来的 storage 备份（模型/日志/上传，动辄几十上百 MB）。
+# 只是临时安全网，不属于仓库内容。
+.local-storage-backup-*/

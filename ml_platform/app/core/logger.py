@@ -27,30 +27,64 @@ class EventBus:
     """Simple in-memory pub/sub for bridging training workers to WebSocket clients.
 
     Works without Redis — suitable for single-process dev mode.
+
+    ``publish`` is called from ThreadPoolExecutor workers (sklearn training runs
+    there), while subscribers are coroutines parked on ``await queue.get()``.
+    ``asyncio.Queue`` is not thread-safe: a bare ``put_nowait`` from a worker
+    thread wakes the consumer through ``loop.call_soon``, which neither is
+    thread-safe nor interrupts a sleeping event loop — so entries sat in the
+    queue until some unrelated request happened to wake it. Measured worst-case
+    delivery on an otherwise-idle loop was ~2.9s. Each queue therefore remembers
+    the loop it was created on, and off-loop publishes hop back via
+    ``call_soon_threadsafe``.
     """
 
     def __init__(self):
-        self._subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
+        # channel -> list of (queue, owning event loop)
+        self._subscribers: dict[
+            str, list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]]
+        ] = defaultdict(list)
 
     def subscribe(self, channel: str) -> asyncio.Queue:
         queue = asyncio.Queue()
-        self._subscribers[channel].append(queue)
+        # subscribe() is only ever called from a coroutine (the WebSocket
+        # handler), so the running loop here is the one that will consume.
+        self._subscribers[channel].append((queue, asyncio.get_event_loop()))
         return queue
 
     def unsubscribe(self, channel: str, queue: asyncio.Queue):
         if channel in self._subscribers:
             self._subscribers[channel] = [
-                q for q in self._subscribers[channel] if q is not queue
+                entry for entry in self._subscribers[channel] if entry[0] is not queue
             ]
             if not self._subscribers[channel]:
                 del self._subscribers[channel]
 
     def publish(self, channel: str, message: dict):
-        for queue in self._subscribers.get(channel, []):
+        for queue, loop in list(self._subscribers.get(channel, [])):
             try:
-                queue.put_nowait(message)
-            except asyncio.QueueFull:
-                pass  # drop if consumer is too slow
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is loop:
+                # Already on the consumer's loop — a direct put is correct.
+                try:
+                    queue.put_nowait(message)
+                except asyncio.QueueFull:
+                    pass  # drop if consumer is too slow
+                continue
+            try:
+                loop.call_soon_threadsafe(_put_nowait_dropping_full, queue, message)
+            except RuntimeError:
+                pass  # loop already closed; the subscriber is gone
+
+
+def _put_nowait_dropping_full(queue: asyncio.Queue, message: dict) -> None:
+    """Queue put that mirrors publish()'s drop-on-full policy. Runs on the loop."""
+    try:
+        queue.put_nowait(message)
+    except asyncio.QueueFull:
+        pass  # drop if consumer is too slow
 
 
 def _build_event_bus():
