@@ -24,6 +24,7 @@ import {
   ClearOutlined, VerticalAlignBottomOutlined, ClockCircleOutlined,
 } from '@ant-design/icons'
 import { useLogStream } from '../../hooks/useLogStream'
+import { parseServerDate } from '../../utils/formatters'
 
 const { Text } = Typography
 
@@ -45,13 +46,19 @@ function normaliseLevel(l) {
 
 function formatAbsolute(ts) {
   if (!ts) return ''
-  try { return new Date(ts).toLocaleString('zh-CN', { hour12: false, fractionalSecondDigits: 3 }) }
-  catch { return '' }
+  try {
+    const d = parseServerDate(ts)
+    return d ? d.toLocaleString('zh-CN', { hour12: false, fractionalSecondDigits: 3 }) : ''
+  } catch { return '' }
 }
 function formatRelative(ts, now) {
   if (!ts) return ''
   try {
-    const diff = now - new Date(ts).getTime()
+    // REST-seeded entries arrive without a UTC marker; parsing them as local
+    // time dated every fresh log 8 hours ago in UTC+8. See parseServerDate.
+    const d = parseServerDate(ts)
+    if (!d) return ''
+    const diff = now - d.getTime()
     if (diff < 1000) return 'just now'
     if (diff < 60_000) return `${Math.floor(diff/1000)}s ago`
     if (diff < 3_600_000) return `${Math.floor(diff/60_000)}m ago`
