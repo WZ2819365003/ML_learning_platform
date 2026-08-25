@@ -1,16 +1,29 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Card, Empty, Progress, Space, Spin, Tag, Tooltip,
-  Tree, Typography,
+  Button, Card, Empty, Modal, Popconfirm, Progress, Space, Spin, Tag, Tooltip,
+  Tree, Typography, message,
 } from 'antd'
 import {
   AppstoreOutlined, CheckCircleOutlined, ClockCircleOutlined,
-  CloseCircleOutlined, ExperimentOutlined, QuestionCircleOutlined,
+  CloseCircleOutlined, DeleteOutlined, ExperimentOutlined, FileTextOutlined,
+  PoweroffOutlined, QuestionCircleOutlined,
   ReloadOutlined, SyncOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
-import { modelingTaskApi } from '../../services/api'
+import {
+  modelingTaskApi, platformExperimentsApi, platformRunsApi, platformTasksApi,
+} from '../../services/api'
+import LogViewer from './LogViewer'
 
 const { Text } = Typography
+
+/**
+ * A node is "active" when the scheduler may still advance it. Drives three
+ * things that must agree: whether 停止 is offered, whether 删除 is blocked
+ * (the backend refuses to delete a RUNNING experiment), and whether the log
+ * modal tails live. Exported for tests.
+ */
+export const ACTIVE_STATUSES = new Set(['RUNNING', 'PENDING', 'QUEUED', 'RETRY'])
+export const isActive = (status) => ACTIVE_STATUSES.has((status || '').toUpperCase())
 
 /**
  * ProgressTree — three-level orchestration view for a ModelingTask.
@@ -27,10 +40,18 @@ const { Text } = Typography
  *   ML: <ExperimentOutlined/> + blue tag
  *   DL: <ThunderboltOutlined/> + purple tag
  *   unknown: <QuestionCircleOutlined/>
+ *
+ * Per-node actions:
+ *   Run   — 日志 (live tail modal), 停止 (cancel, only while active)
+ *   批次  — 删除 (refused server-side while RUNNING, so disabled here too)
  */
 export default function ProgressTree({ modelingTaskId, autoRefresh = true, pollMs = 3000 }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
+  // The run whose logs the modal is showing (null = closed). Holds the whole
+  // run node so the modal keeps its title/status even as the tree re-polls.
+  const [logRun, setLogRun] = useState(null)
+  const [busyId, setBusyId] = useState(null)
 
   const load = useCallback(async () => {
     if (!modelingTaskId) return
@@ -56,7 +77,47 @@ export default function ProgressTree({ modelingTaskId, autoRefresh = true, pollM
     return () => clearInterval(t)
   }, [autoRefresh, pollMs, data?.has_active_runs, load])
 
-  const treeData = useMemo(() => _buildTreeNodes(data), [data])
+  // ── Run actions ──────────────────────────────────────────────────────────
+  // Stop targets the PlatformTask, not the Run: `cancel_task` terminates the
+  // Task and its ExperimentRun in one locked transaction and triggers batch
+  // finalisation, so cancelling the last trial still closes the batch.
+  const stopRun = useCallback(async (run) => {
+    if (!run?.platform_task_id) {
+      message.warning('该 Run 没有关联的调度任务，无法停止')
+      return
+    }
+    setBusyId(run.id)
+    try {
+      await platformTasksApi.cancel(run.platform_task_id)
+      message.success('已请求停止，运行中的任务会在当前步骤结束后终止')
+      await load()
+    } catch (err) {
+      message.error(_errText(err) || '停止失败')
+    } finally {
+      setBusyId(null)
+    }
+  }, [load])
+
+  // Delete is offered per *batch*: there is no per-run delete, and removing a
+  // PlatformTask alone would orphan its ExperimentRun. The backend refuses to
+  // delete a RUNNING experiment, so stop first, then delete.
+  const deleteExperiment = useCallback(async (exp) => {
+    setBusyId(exp.id)
+    try {
+      await platformExperimentsApi.delete(exp.id)
+      message.success('批次已删除')
+      await load()
+    } catch (err) {
+      message.error(_errText(err) || '删除失败')
+    } finally {
+      setBusyId(null)
+    }
+  }, [load])
+
+  const treeData = useMemo(
+    () => _buildTreeNodes(data, { onViewLogs: setLogRun, onStopRun: stopRun, onDeleteExperiment: deleteExperiment, busyId }),
+    [data, stopRun, deleteExperiment, busyId],
+  )
   const expandedKeys = useMemo(() => _allNodeKeys(treeData), [treeData])
 
   return (
@@ -112,22 +173,105 @@ export default function ProgressTree({ modelingTaskId, autoRefresh = true, pollM
           />
         )}
       </Spin>
+
+      <RunLogModal run={logRun} onClose={() => setLogRun(null)} />
     </Card>
   )
+}
+
+// ---------------------------------------------------------------------------
+// Live log modal
+// ---------------------------------------------------------------------------
+
+/**
+ * RunLogModal — live log tail for a single Run.
+ *
+ * Seeds historical entries from the Run Inspector endpoint (which already owns
+ * the messy id-resolution: V3 native logs first, legacy `training_logs` and the
+ * on-disk file as fallbacks) and hands the live WebSocket tail to LogViewer.
+ * The WS channel is keyed by the *domain* task id, not the Run id.
+ */
+function RunLogModal({ run, onClose }) {
+  const [historical, setHistorical] = useState([])
+  const [loading, setLoading] = useState(false)
+  const runId = run?.id
+
+  useEffect(() => {
+    if (!runId) { setHistorical([]); return }
+    let cancelled = false
+    setLoading(true)
+    platformRunsApi.inspect(runId, { log_limit: 500, include_siblings: false })
+      .then((resp) => { if (!cancelled) setHistorical(resp?.logs || []) })
+      .catch(() => { if (!cancelled) setHistorical([]) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [runId])
+
+  return (
+    <Modal
+      open={!!run}
+      onCancel={onClose}
+      footer={null}
+      width={960}
+      destroyOnClose
+      title={
+        <Space>
+          <FileTextOutlined />
+          <span>训练日志</span>
+          {run && <Text strong>{run.model_type || '未命名'}</Text>}
+          {run?.trial_no != null && <Text type="secondary">#{run.trial_no}</Text>}
+          {run && <Tag color={_statusColor(run.status)}>{run.status}</Tag>}
+        </Space>
+      }
+    >
+      <Spin spinning={loading}>
+        {run && (
+          run.domain_id ? (
+            <LogViewer
+              historical={historical}
+              domainTaskId={run.domain_id}
+              isLive={isActive(run.status)}
+            />
+          ) : (
+            <Empty description="该 Run 还没有关联的训练任务，暂无日志" />
+          )
+        )}
+      </Spin>
+    </Modal>
+  )
+}
+
+function _errText(err) {
+  const body = err?.response?.data
+  return (typeof body === 'string' ? body : body?.detail) || err?.message || ''
 }
 
 // ---------------------------------------------------------------------------
 // Tree node construction
 // ---------------------------------------------------------------------------
 
-function _buildTreeNodes(data) {
+function _buildTreeNodes(data, actions = {}) {
   if (!data?.experiments) return []
+  const { onViewLogs, onStopRun, onDeleteExperiment, busyId } = actions
   return data.experiments.map((exp) => ({
     key: `exp:${exp.id}`,
-    title: <ExperimentNode exp={exp} />,
+    title: (
+      <ExperimentNode
+        exp={exp}
+        onDelete={onDeleteExperiment}
+        busy={busyId === exp.id}
+      />
+    ),
     children: (exp.runs || []).map((run) => ({
       key: `run:${run.id}`,
-      title: <RunNode run={run} />,
+      title: (
+        <RunNode
+          run={run}
+          onViewLogs={onViewLogs}
+          onStop={onStopRun}
+          busy={busyId === run.id}
+        />
+      ),
       isLeaf: true,
     })),
   }))
@@ -144,8 +288,9 @@ function _allNodeKeys(nodes) {
 
 // ── Experiment node ────────────────────────────────────────────────────────
 
-function ExperimentNode({ exp }) {
+function ExperimentNode({ exp, onDelete, busy }) {
   const pct = Math.round((exp.progress_aggregated ?? 0) * 100)
+  const running = isActive(exp.status)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
       <AppstoreOutlined style={{ color: '#64748b' }} />
@@ -160,15 +305,43 @@ function ExperimentNode({ exp }) {
       <div style={{ width: 160 }}>
         <Progress percent={pct} size="small" showInfo />
       </div>
+      {/* Deleting a running batch is refused server-side — disable it here so
+          the reason is visible before the click rather than as an error after.
+          A disabled button fires no mouse events, so the tooltip explaining
+          *why* would never show; the wrapper span is what receives the hover. */}
+      <Tooltip title={running ? '批次运行中，请先停止其中的 Run' : '删除该批次(含其 Run 记录)'}>
+        <span style={{ display: 'inline-flex' }}>
+          <Popconfirm
+            title="删除该实验批次？"
+            description="批次及其 Run 记录会一并删除，不可恢复。"
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            disabled={running}
+            onConfirm={() => onDelete?.(exp)}
+          >
+            <Button
+              size="small"
+              type="text"
+              danger
+              loading={busy}
+              disabled={running}
+              icon={<DeleteOutlined />}
+              style={running ? { pointerEvents: 'none' } : undefined}
+            />
+          </Popconfirm>
+        </span>
+      </Tooltip>
     </div>
   )
 }
 
 // ── Run node ───────────────────────────────────────────────────────────────
 
-function RunNode({ run }) {
+function RunNode({ run, onViewLogs, onStop, busy }) {
   const pct = Math.round((run.progress ?? 0) * 100)
   const familyChip = _familyChip(run.family)
+  const running = isActive(run.status)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
       {familyChip}
@@ -198,6 +371,36 @@ function RunNode({ run }) {
           showInfo
         />
       </div>
+      <Space size={2}>
+        <Tooltip title="查看实时日志">
+          <Button
+            size="small"
+            type="text"
+            icon={<FileTextOutlined />}
+            onClick={() => onViewLogs?.(run)}
+          />
+        </Tooltip>
+        {running && (
+          <Tooltip title="停止该 Run">
+            <Popconfirm
+              title="停止该 Run？"
+              description="已完成的部分会保留，训练不会继续。"
+              okText="停止"
+              okButtonProps={{ danger: true }}
+              cancelText="取消"
+              onConfirm={() => onStop?.(run)}
+            >
+              <Button
+                size="small"
+                type="text"
+                danger
+                loading={busy}
+                icon={<PoweroffOutlined />}
+              />
+            </Popconfirm>
+          </Tooltip>
+        )}
+      </Space>
     </div>
   )
 }

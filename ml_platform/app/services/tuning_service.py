@@ -49,7 +49,11 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dl_registry import build_default_dl_config, get_dl_model_spec
+from app.core.dl_registry import (
+    build_default_dl_config,
+    clamp_train_config,
+    get_dl_model_spec,
+)
 from app.core.evaluation_metrics import resolve_objective_metrics
 from app.core.model_registry import resolve_model_family
 from app.models.database import (
@@ -737,8 +741,9 @@ def _expand_baseline(
     per-model overrides from the caller (supporting both the ``arch`` short
     form and the ``arch_config`` suffixed form for backward-compat).
 
-    Baseline DL trials are capped at ``epochs <= 10`` so a mixed ML+DL batch
-    finishes in seconds rather than minutes during a baseline sweep.
+    Baseline DL trials honour the submitted ``epochs``, clamped only to the
+    registry's advertised bounds (see ``clamp_train_config``). Early stopping
+    keeps long runs from training past convergence.
     """
     overrides = overrides or {}
     trials: list[dict[str, Any]] = []
@@ -750,10 +755,15 @@ def _expand_baseline(
             arch_override = per_model.get("arch_config") or per_model.get("arch") or {}
             opt_override = per_model.get("opt_config") or per_model.get("opt") or {}
             train_override = per_model.get("train_config") or per_model.get("train") or {}
-            train_config = {**defaults["train"], **train_override}
-            # Cap baseline epochs — full sweeps go through grid/bayesian paths.
-            if int(train_config.get("epochs", 10) or 10) > 10:
-                train_config["epochs"] = 10
+            # Bound to the registry's advertised min/max (epochs <= 100) rather
+            # than overriding what the user asked for. Baseline used to force
+            # epochs down to 10, so a submitted 50 silently trained for 10 and
+            # the run looked like it had finished normally — nothing in the UI
+            # or the stored config said otherwise. Long baselines are bounded in
+            # practice by early stopping (`early_stopping_patience`, default 10)
+            # in dl_trainer, which is the mechanism actually meant to cut runs
+            # short.
+            train_config = clamp_train_config({**defaults["train"], **train_override})
             hyperparameters = {
                 "arch_config": {**defaults["arch"], **arch_override},
                 "opt_config": {**defaults["opt"], **opt_override},

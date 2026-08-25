@@ -162,7 +162,42 @@ def test_baseline_preserves_deep_learning_family_and_nested_configs():
     assert "arch_config" in params
     assert "opt_config" in params
     assert "train_config" in params
-    assert params["train_config"]["epochs"] <= 10
+    # Baseline used to force epochs down to 10, so a submitted 50 trained for 10
+    # and nothing in the UI or the stored config said so. It now keeps the
+    # registry default; only the registry bound applies (see the tests below).
+    assert params["train_config"]["epochs"] == 50
+
+
+def test_baseline_honours_submitted_epochs_instead_of_capping_them():
+    """A submitted epochs value survives into the persisted train_config.
+
+    Regression guard for the silent `epochs > 10 -> 10` baseline override: it
+    made a 50-epoch request finish in 10 epochs while reporting `10/10`, which
+    read as a normal completed run rather than a truncated one.
+    """
+    defaults = load_tuning_spaces("classification")
+    trials = svc._expand_baseline(
+        selected_models=["mlp_dl"],
+        tuning_defaults=defaults,
+        overrides={"mlp_dl": {"train_config": {"epochs": 50}}},
+    )
+    assert trials[0]["hyperparameters"]["train_config"]["epochs"] == 50
+
+
+def test_baseline_clamps_epochs_to_the_registry_maximum():
+    """Values above the registry bound are clamped, not accepted verbatim.
+
+    The config form bounds this input from the same registry, but a direct API
+    call or a stale frontend bypasses the form — so the bound is enforced
+    server-side too.
+    """
+    defaults = load_tuning_spaces("classification")
+    trials = svc._expand_baseline(
+        selected_models=["mlp_dl"],
+        tuning_defaults=defaults,
+        overrides={"mlp_dl": {"train_config": {"epochs": 5000}}},
+    )
+    assert trials[0]["hyperparameters"]["train_config"]["epochs"] == 100
 
 
 async def test_persist_trials_marks_ml_and_dl_runs_as_selection_mode(db):

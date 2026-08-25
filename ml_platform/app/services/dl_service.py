@@ -21,7 +21,7 @@ from sklearn.model_selection import train_test_split
 from sqlalchemy import func, select
 
 from app.config import get_settings
-from app.core.dl_registry import get_dl_trainer
+from app.core.dl_registry import clamp_train_config, get_dl_trainer
 from app.core.logger import TrainingLogger, event_bus
 from app.core.model_artifact import fit_dl_preprocessing_artifact
 from app.models.database import (
@@ -615,7 +615,10 @@ async def start_dl_training(
         task_type=request_data.get("task_type", "auto"),
         arch_config=request_data.get("arch_config", {}),
         opt_config=request_data.get("opt_config", {}),
-        train_config=request_data.get("train_config", {}),
+        # Clamp here rather than trusting the caller: the config form bounds
+        # these inputs from the same registry, but a direct API call or a stale
+        # frontend bypasses the form entirely.
+        train_config=clamp_train_config(request_data.get("train_config", {})),
         status="PENDING",
     )
     db.add(task)

@@ -73,7 +73,7 @@ DL_OPTIMIZER_PARAMS: list[dict] = [
 DL_TRAIN_PARAMS: list[dict] = [
     {
         "name": "epochs", "display_name": "最大训练轮数", "type": "int",
-        "default": 50, "min": 1, "max": 500, "step": 10,
+        "default": 50, "min": 1, "max": 100, "step": 10,
         "required": True, "advanced": False,
         "description": "完整遍历训练集的最大次数。Early Stopping 可提前终止。",
     },
@@ -338,3 +338,37 @@ def build_default_dl_config(model_id: str) -> dict:
     opt = {p["name"]: p["default"] for p in DL_OPTIMIZER_PARAMS}
     train = {p["name"]: p["default"] for p in DL_TRAIN_PARAMS}
     return {"arch": arch, "opt": opt, "train": train}
+
+
+def clamp_train_config(train_config: dict) -> dict:
+    """Clamp numeric train-control params into their registry min/max range.
+
+    ``DL_TRAIN_PARAMS`` carries ``min``/``max`` so the config form can bound its
+    inputs, but those bounds are only UI metadata — a request that skips the form
+    (direct API call, code-config, a stale frontend) would otherwise submit any
+    value at all. Baseline used to be protected by a blunt ``epochs > 10 → 10``
+    override in ``tuning_service``; that silently discarded what the user asked
+    for. Enforcing the *same* bounds the form advertises replaces that surprise
+    with a predictable ceiling.
+
+    Returns a new dict; unknown keys and non-numeric params pass through as-is.
+    """
+    spec_by_name = {p["name"]: p for p in DL_TRAIN_PARAMS}
+    clamped = dict(train_config or {})
+    for name, value in list(clamped.items()):
+        spec = spec_by_name.get(name)
+        if spec is None or spec.get("type") not in ("int", "float"):
+            continue
+        low, high = spec.get("min"), spec.get("max")
+        if low is None and high is None:
+            continue
+        try:
+            numeric = int(value) if spec["type"] == "int" else float(value)
+        except (TypeError, ValueError):
+            continue  # leave malformed input for the trainer/schema to reject
+        if low is not None:
+            numeric = max(numeric, low)
+        if high is not None:
+            numeric = min(numeric, high)
+        clamped[name] = numeric
+    return clamped
