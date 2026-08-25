@@ -8,6 +8,7 @@ import {
 import { ArrowLeftOutlined, DownloadOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons';
 import DLDiagnostics from '../components/viz/DLDiagnostics';
 import { dlApi } from '../services/api';
+import { formatDateTime } from '../utils/formatters'
 
 const { Title, Text } = Typography;
 
@@ -110,7 +111,7 @@ function DLResultListView({ navigate }) {
       dataIndex: 'finished_at',
       key: 'finished_at',
       width: 160,
-      render: v => v ? new Date(v).toLocaleString('zh-CN') : '-',
+      render: v => v ? formatDateTime(v) : '-',
     },
     {
       title: '操作',
@@ -222,7 +223,7 @@ function DLResultDetailView({ taskId, navigate }) {
             <span><Text type="secondary">架构：</Text><Tag color="purple">{taskInfo.model_type}</Tag></span>
             <span><Text type="secondary">任务类型：</Text><Text>{taskInfo.task_type}</Text></span>
             <span><Text type="secondary">完成时间：</Text>
-              <Text>{taskInfo.finished_at ? new Date(taskInfo.finished_at).toLocaleString('zh-CN') : '-'}</Text>
+              <Text>{taskInfo.finished_at ? formatDateTime(taskInfo.finished_at) : '-'}</Text>
             </span>
           </Space>
         </Card>

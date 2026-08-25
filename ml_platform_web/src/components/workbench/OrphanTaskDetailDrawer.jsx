@@ -9,6 +9,7 @@ import {
   ReloadOutlined, RedoOutlined,
 } from '@ant-design/icons'
 import { platformTasksApi } from '../../services/api'
+import { parseServerDate } from '../../utils/formatters'
 
 const { Paragraph, Text } = Typography
 
@@ -412,7 +413,7 @@ function ActionsTab({ task, onRetry, onCancel, onDelete }) {
 // ── Helpers ────────────────────────────────────────────────────────────────
 function _fmt(iso) {
   if (!iso) return '—'
-  const d = new Date(iso)
+  const d = parseServerDate(iso)
   return d.toLocaleString('zh-CN', { hour12: false })
 }
 

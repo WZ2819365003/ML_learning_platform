@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import EChart from '../components/EChart';
 import { dlApi, withWsToken } from '../services/api';
+import { formatDateTime, parseServerDate } from '../utils/formatters'
 
 const { Text, Title } = Typography;
 
@@ -289,7 +290,7 @@ function DLTaskListView({ navigate }) {
     },
     {
       title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 160,
-      render: v => new Date(v).toLocaleString('zh-CN'),
+      render: v => formatDateTime(v),
     },
     {
       title: '操作', key: 'actions', width: 160,
@@ -705,7 +706,7 @@ function DLTaskDetailView({ taskId, navigate }) {
                 : entry.level === 'WARN' ? '#fbbf24'
                 : '#86efac';
               const ts = entry.created_at
-                ? new Date(entry.created_at).toLocaleTimeString('zh-CN')
+                ? (parseServerDate(entry.created_at)?.toLocaleTimeString('zh-CN') ?? '')
                 : '';
               return (
                 <div key={i} data-testid="dl-log-entry" style={{ marginBottom: 2 }}>

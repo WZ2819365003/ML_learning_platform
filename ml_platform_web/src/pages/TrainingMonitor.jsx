@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import { dataApi, logsApi, trainingApi } from '../services/api';
 import { useLogStream } from '../hooks/useLogStream';
+import { formatDateTime } from '../utils/formatters'
 
 const { Text, Title } = Typography;
 
@@ -208,7 +209,7 @@ function TaskListView({ navigate }) {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 160,
-      render: v => new Date(v).toLocaleString('zh-CN'),
+      render: v => formatDateTime(v),
     },
     {
       title: '操作',
@@ -400,10 +401,10 @@ function TaskDetailView({ taskId, navigate }) {
                 />
               </Descriptions.Item>
               <Descriptions.Item label="开始时间">
-                {task.started_at ? new Date(task.started_at).toLocaleString('zh-CN') : '-'}
+                {task.started_at ? formatDateTime(task.started_at) : '-'}
               </Descriptions.Item>
               <Descriptions.Item label="结束时间">
-                {task.finished_at ? new Date(task.finished_at).toLocaleString('zh-CN') : '-'}
+                {task.finished_at ? formatDateTime(task.finished_at) : '-'}
               </Descriptions.Item>
             </Descriptions>
           </Card>

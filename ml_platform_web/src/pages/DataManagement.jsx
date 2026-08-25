@@ -32,6 +32,7 @@ import {
   TagOutlined,
 } from '@ant-design/icons'
 import { dataApi, dataVersionsApi } from '../services/api'
+import { formatDateTime } from '../utils/formatters'
 
 const { Title, Text } = Typography
 const { Dragger } = Upload
@@ -47,7 +48,7 @@ function formatBytes(bytes) {
 /** 格式化 ISO 时间为本地可读时间 */
 function formatDate(iso) {
   if (!iso) return '—'
-  return new Date(iso).toLocaleString('zh-CN', { hour12: false })
+  return formatDateTime(iso)
 }
 
 const DataManagement = () => {

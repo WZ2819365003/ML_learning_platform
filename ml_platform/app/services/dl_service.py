@@ -325,7 +325,10 @@ def _run_dl_sync(
     test_size = float(train_config.get("test_size", 0.2))
     best_logged_val_loss: float | None = None
 
-    task_logger = TrainingLogger(task_id, model_type=model_type)
+    # persist_to_db=False: training_logs.task_id is a FK onto training_tasks,
+    # and a DL task lives in dl_training_tasks — the insert could never succeed.
+    # Each line is persisted by _store_dl_log_record below instead.
+    task_logger = TrainingLogger(task_id, model_type=model_type, persist_to_db=False)
 
     def emit_log(level: str, message: str, **extra) -> None:
         task_logger.log(level, message, **extra)

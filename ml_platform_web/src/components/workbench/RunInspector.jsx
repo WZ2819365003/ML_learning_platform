@@ -14,6 +14,7 @@ import ShapView from './ShapView'
 import TrainingViz from './TrainingViz'
 import TrainingHistoryChart from '../viz/TrainingHistoryChart'
 import CrossValidationView from '../viz/CrossValidationView'
+import { formatDateTime, parseServerDate } from '../../utils/formatters'
 
 const { Text } = Typography
 
@@ -163,7 +164,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                       }[run.status] || run.status
                       let duration = null
                       if (ptask?.started_at && ptask?.finished_at) {
-                        const dur = (new Date(ptask.finished_at) - new Date(ptask.started_at)) / 1000
+                        const dur = (parseServerDate(ptask.finished_at) - parseServerDate(ptask.started_at)) / 1000
                         if (dur >= 0) duration = dur < 60 ? `${dur.toFixed(1)} 秒` : `${(dur / 60).toFixed(1)} 分`
                       }
                       return (
@@ -223,10 +224,10 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                         </Tooltip>
                       }>{exp?.objective_direction}</Descriptions.Item>
                       <Descriptions.Item label="开始时间">
-                        {ptask?.started_at ? new Date(ptask.started_at).toLocaleString('zh-CN', { hour12: false }) : '-'}
+                        {ptask?.started_at ? formatDateTime(ptask.started_at) : '-'}
                       </Descriptions.Item>
                       <Descriptions.Item label="结束时间">
-                        {ptask?.finished_at ? new Date(ptask.finished_at).toLocaleString('zh-CN', { hour12: false }) : '-'}
+                        {ptask?.finished_at ? formatDateTime(ptask.finished_at) : '-'}
                       </Descriptions.Item>
                     </Descriptions>
 

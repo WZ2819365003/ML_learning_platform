@@ -17,6 +17,7 @@ import { modelingTaskApi } from '../../services/api'
 import EChart from '../EChart'
 import MarkdownReport from './MarkdownReport'
 import { buildReportViewModel } from './aiReportViewModel'
+import { formatDateTime } from '../../utils/formatters'
 
 const { Paragraph, Text } = Typography
 
@@ -315,7 +316,7 @@ function ReportCover({ viewModel, report }) {
         <div className="ai-report-meta-row">
           <Tag color="blue">归档 {viewModel.archiveLabel || '—'}</Tag>
           {generatedAt && (
-            <span>{new Date(generatedAt).toLocaleString('zh-CN', { hour12: false })}</span>
+            <span>{formatDateTime(generatedAt)}</span>
           )}
           <span>{report?.model || 'doubao'}</span>
         </div>

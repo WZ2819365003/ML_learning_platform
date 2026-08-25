@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
 import { modelingTaskApi } from '../services/api'
+import { formatDateTime } from '../utils/formatters'
 
 const STATUS_META = {
   CREATED:   { color: 'default', icon: <ClockCircleFilled />, label: '待启动' },
@@ -160,7 +161,7 @@ export default function ModelingTasks() {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 150,
-      render: (v) => v ? new Date(v).toLocaleString('zh-CN', { hour12: false }) : '-',
+      render: (v) => v ? formatDateTime(v) : '-',
     },
     {
       title: '操作',

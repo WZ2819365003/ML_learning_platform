@@ -11,6 +11,7 @@ import {
 import { v3RunsApi } from '../services/api'
 import RunInspector from '../components/workbench/RunInspector'
 import OrphanTasksPanel from '../components/workbench/OrphanTasksPanel'
+import { formatDateTime, parseServerDate } from '../utils/formatters'
 
 const { Title, Text } = Typography
 
@@ -246,10 +247,10 @@ export default function V3Runs() {
       width: 150,
       render: (v) => v
         ? <Text style={{ fontSize: 11, fontFamily: 'monospace' }}>
-            {new Date(v).toLocaleString('zh-CN', { hour12: false })}
+            {formatDateTime(v)}
           </Text>
         : <Text type="secondary">-</Text>,
-      sorter: (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0),
+      sorter: (a, b) => (parseServerDate(a.created_at)?.getTime() ?? 0) - (parseServerDate(b.created_at)?.getTime() ?? 0),
       defaultSortOrder: 'descend',
     },
     {

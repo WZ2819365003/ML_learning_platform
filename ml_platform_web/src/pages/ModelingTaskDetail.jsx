@@ -19,6 +19,7 @@ import ProgressTree from '../components/workbench/ProgressTree'
 import ModelComparison from '../components/workbench/ModelComparison'
 import ReportView from '../components/workbench/ReportView'
 import AiReportModal from '../components/workbench/AiReportModal'
+import { formatDateTime } from '../utils/formatters'
 
 const { Text, Paragraph } = Typography
 
@@ -238,7 +239,7 @@ export default function ModelingTaskDetail() {
             </Descriptions.Item>
             <Descriptions.Item label="状态">{renderStatus(task.status)}</Descriptions.Item>
             <Descriptions.Item label="创建时间">
-              {task.created_at ? new Date(task.created_at).toLocaleString('zh-CN', { hour12: false }) : '-'}
+              {task.created_at ? formatDateTime(task.created_at) : '-'}
             </Descriptions.Item>
             {task.description && (
               <Descriptions.Item label="描述" span={2}>
@@ -362,7 +363,7 @@ export default function ModelingTaskDetail() {
     { title: '状态', dataIndex: 'status', key: 'status', width: 110, render: renderStatus },
     {
       title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 150,
-      render: (v) => v ? new Date(v).toLocaleString('zh-CN', { hour12: false }) : '-',
+      render: (v) => v ? formatDateTime(v) : '-',
     },
     {
       title: '操作', key: 'actions', width: 120,
@@ -561,7 +562,7 @@ export default function ModelingTaskDetail() {
                     }
                     description={
                       <Space size={8} wrap>
-                        <Text type="secondary">{time ? new Date(time).toLocaleString('zh-CN', { hour12: false }) : '时间未知'}</Text>
+                        <Text type="secondary">{time ? formatDateTime(time) : '时间未知'}</Text>
                         <Text type="secondary">{item.model || item.source || 'doubao'}</Text>
                         <Text code style={{ fontSize: 11 }}>{String(item.id).slice(0, 12)}</Text>
                       </Space>

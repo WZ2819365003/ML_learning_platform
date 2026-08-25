@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import threading
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,17 +110,39 @@ event_bus = _build_event_bus()
 
 class TrainingLogger:
     """Per-task logger that writes to files, publishes to event bus, and
-    buffers entries for eventual persistence to the `training_logs` table.
+    buffers entries for periodic persistence to the `training_logs` table.
 
-    Persistence is deliberately deferred: sklearn trials emit ~10-50 log
-    lines, so we accumulate in memory and flush once via `flush_to_db()`
-    at the end of the Run (called from `_run_training_sync`). That avoids
-    one DB round-trip per log line without sacrificing durability for
-    anything short of a worker crash mid-training — in which case the
-    .log file on disk still has the entries.
+    Persistence is batched rather than per-line: sklearn trials emit ~10-50
+    log lines, and one DB round-trip each would be wasteful. It used to be
+    deferred entirely to a single `flush_to_db()` at the end of the Run, which
+    meant `training_logs` stayed empty for the whole run — so opening the log
+    panel mid-training showed nothing at all, and a crash left the rows only in
+    the on-disk .log file. Now a flush also happens once the buffer reaches
+    ``_FLUSH_EVERY_N_ENTRIES`` or ``_FLUSH_INTERVAL_SECONDS`` have passed,
+    whichever comes first, and `_run_training_sync` still flushes at the end to
+    drain the tail.
+
+    ``log()`` runs on a ThreadPoolExecutor worker while `flush_to_db()` may also
+    be called from the owning coroutine's thread at the end of a run, so buffer
+    handoff is guarded by a lock.
+
+    Set ``persist_to_db=False`` for task families that are not rows in
+    ``training_tasks``. ``training_logs.task_id`` is a FK onto that table, so a
+    DL task id (which lives in ``dl_training_tasks``) cannot be inserted there —
+    every flush would fail the constraint, get pushed back, and be retried
+    forever. DL already persists each line through ``_store_dl_log_record`` on
+    its own path, so its buffer was pure waste even before batching existed.
     """
 
-    def __init__(self, task_id: str, model_type: str = ""):
+    # Small enough that a run's logs show up while it is still running, large
+    # enough that a chatty trial does not turn into one INSERT per line.
+    _FLUSH_EVERY_N_ENTRIES = 25
+    _FLUSH_INTERVAL_SECONDS = 2.0
+    # Bound the retry buffer: a persistently failing flush must not grow without
+    # limit and turn an observability feature into an OOM.
+    _MAX_BUFFERED_ENTRIES = 1000
+
+    def __init__(self, task_id: str, model_type: str = "", *, persist_to_db: bool = True):
         self.task_id = task_id
         self.model_type = model_type
         settings = get_settings()
@@ -129,8 +153,11 @@ class TrainingLogger:
         self.metrics_file = self.log_dir / f"{task_id}_metrics.json"
 
         # In-memory buffer of (level, message, extra, created_at) tuples
-        # awaiting a DB flush.
+        # awaiting a DB flush, plus the bookkeeping that decides when to flush.
         self._db_buffer: list[dict[str, Any]] = []
+        self._buffer_lock = threading.Lock()
+        self._last_flush_at = time.monotonic()
+        self._persist_to_db = persist_to_db
 
         # Initialize metrics JSON
         self._metrics_data: dict[str, Any] = {
@@ -157,15 +184,18 @@ class TrainingLogger:
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(line + "\n")
 
-        # Buffer for eventual DB flush
-        self._db_buffer.append(
-            {
-                "level": level,
-                "message": message,
-                "extra": dict(extra) if extra else None,
-                "created_at": timestamp_dt,
-            }
-        )
+        # Buffer for DB flush (skipped when this task family has no row in
+        # training_tasks — see the class docstring).
+        if self._persist_to_db:
+            with self._buffer_lock:
+                self._db_buffer.append(
+                    {
+                        "level": level,
+                        "message": message,
+                        "extra": dict(extra) if extra else None,
+                        "created_at": timestamp_dt,
+                    }
+                )
 
         # Publish to event bus
         event_bus.publish(
@@ -180,6 +210,25 @@ class TrainingLogger:
             },
         )
 
+        self._maybe_flush()
+
+    def _maybe_flush(self) -> None:
+        """Flush if the buffer is big enough or old enough. Never raises."""
+        if not self._persist_to_db:
+            return
+        with self._buffer_lock:
+            pending = len(self._db_buffer)
+            if pending == 0:
+                return
+            due = (
+                pending >= self._FLUSH_EVERY_N_ENTRIES
+                or (time.monotonic() - self._last_flush_at) >= self._FLUSH_INTERVAL_SECONDS
+            )
+        if due:
+            # Outside the lock: flush_to_db takes it itself for the handoff,
+            # and the INSERT must not block other threads appending log lines.
+            self.flush_to_db()
+
     def flush_to_db(self) -> int:
         """Persist all buffered log entries to `training_logs`.
 
@@ -189,9 +238,13 @@ class TrainingLogger:
         Any exception is logged but NOT re-raised: losing observability
         data must never break a successful Run.
         """
-        if not self._db_buffer:
+        if not self._persist_to_db:
             return 0
-        buffered, self._db_buffer = self._db_buffer, []
+        with self._buffer_lock:
+            if not self._db_buffer:
+                return 0
+            buffered, self._db_buffer = self._db_buffer, []
+            self._last_flush_at = time.monotonic()
         try:
             from app.models.database import TrainingLog, sync_session_factory
 
@@ -217,8 +270,11 @@ class TrainingLogger:
                 self.task_id,
                 exc,
             )
-            # Push entries back so a later flush can retry.
-            self._db_buffer = buffered + self._db_buffer
+            # Push entries back so a later flush can retry, keeping the most
+            # recent entries if the backlog has grown past the cap.
+            with self._buffer_lock:
+                merged = buffered + self._db_buffer
+                self._db_buffer = merged[-self._MAX_BUFFERED_ENTRIES:]
             return 0
 
     def log_metrics(self, step: int, total_steps: int, metrics: dict):

@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons'
 import { platformTasksApi } from '../../services/api'
 import OrphanTaskDetailDrawer from './OrphanTaskDetailDrawer'
+import { formatDateTime, parseServerDate } from '../../utils/formatters'
 
 const { Text } = Typography
 
@@ -44,8 +45,8 @@ function StatusBadge({ status }) {
 
 function formatDuration(startIso, endIso) {
   if (!startIso) return '—'
-  const start = new Date(startIso).getTime()
-  const end = endIso ? new Date(endIso).getTime() : Date.now()
+  const start = parseServerDate(startIso)?.getTime() ?? NaN
+  const end = endIso ? (parseServerDate(endIso)?.getTime() ?? NaN) : Date.now()
   const secs = Math.round((end - start) / 1000)
   if (secs < 60) return `${secs}s`
   if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`
@@ -136,7 +137,7 @@ export default function OrphanTasksPanel() {
     { title: '关联', dataIndex: 'payload_ref', ellipsis: true,
       render: v => v ? <Tooltip title={v}><Text style={{ fontSize: 11, color: '#94a3b8' }}>{v}</Text></Tooltip> : '—' },
     { title: '入队', dataIndex: 'queued_at', width: 140,
-      render: v => v ? <Text style={{ fontSize: 11, color: '#94a3b8' }}>{new Date(v).toLocaleString('zh-CN', { hour12: false })}</Text> : '—' },
+      render: v => v ? <Text style={{ fontSize: 11, color: '#94a3b8' }}>{formatDateTime(v)}</Text> : '—' },
     { title: '操作', width: 180, render: (_, r) => {
       const s = r.status?.toUpperCase()
       return (
