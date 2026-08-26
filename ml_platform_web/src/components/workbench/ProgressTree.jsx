@@ -45,7 +45,10 @@ export const isActive = (status) => ACTIVE_STATUSES.has((status || '').toUpperCa
  *   Run   — 日志 (live tail modal), 停止 (cancel, only while active)
  *   批次  — 删除 (refused server-side while RUNNING, so disabled here too)
  */
-export default function ProgressTree({ modelingTaskId, autoRefresh = true, pollMs = 3000 }) {
+export default function ProgressTree({
+  modelingTaskId, taskName, autoRefresh = true, pollMs = 3000,
+  statusCounts, headerExtra, maxBodyHeight = 420,
+}) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   // The run whose logs the modal is showing (null = closed). Holds the whole
@@ -115,8 +118,8 @@ export default function ProgressTree({ modelingTaskId, autoRefresh = true, pollM
   }, [load])
 
   const treeData = useMemo(
-    () => _buildTreeNodes(data, { onViewLogs: setLogRun, onStopRun: stopRun, onDeleteExperiment: deleteExperiment, busyId }),
-    [data, stopRun, deleteExperiment, busyId],
+    () => _buildTreeNodes(data, { onViewLogs: setLogRun, onStopRun: stopRun, onDeleteExperiment: deleteExperiment, busyId, taskName }),
+    [data, stopRun, deleteExperiment, busyId, taskName],
   )
   const expandedKeys = useMemo(() => _allNodeKeys(treeData), [treeData])
 
@@ -124,53 +127,66 @@ export default function ProgressTree({ modelingTaskId, autoRefresh = true, pollM
     <Card
       size="small"
       title={
-        <Space>
+        <Space size={8} wrap>
           <AppstoreOutlined />
           <span>编排进度</span>
           {data?.modeling_task && (
-            <Tag color="blue">
-              {data.modeling_task.experiment_count} 个批次 · {data.modeling_task.run_count} 个 Run
+            <Tag color="blue" style={{ margin: 0 }}>
+              {data.modeling_task.experiment_count} 批次 · {data.modeling_task.run_count} Run
             </Tag>
+          )}
+          {/* Absorbed from the separate 训练进度 card above: the same three
+              numbers were being shown twice, one card apart. */}
+          {statusCounts && (
+            <>
+              <Tag color="green" style={{ margin: 0 }}>成功 {statusCounts.SUCCESS || 0}</Tag>
+              {(statusCounts.RUNNING || statusCounts.PENDING) ? (
+                <Tag color="processing" style={{ margin: 0 }}>
+                  运行中 {(statusCounts.RUNNING || 0) + (statusCounts.PENDING || 0)}
+                </Tag>
+              ) : null}
+              {statusCounts.FAILED ? (
+                <Tag color="error" style={{ margin: 0 }}>失败 {statusCounts.FAILED}</Tag>
+              ) : null}
+            </>
+          )}
+          {data?.modeling_task && (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              整体 {Math.round((data.modeling_task.progress_aggregated ?? 0) * 100)}%
+            </Text>
           )}
         </Space>
       }
       extra={
-        <Space>
+        <Space size={4}>
           {data?.has_active_runs && (
-            <Tag icon={<SyncOutlined spin />} color="processing">自动刷新中</Tag>
+            <Tag icon={<SyncOutlined spin />} color="processing" style={{ margin: 0 }}>
+              自动刷新中
+            </Tag>
           )}
           <Button size="small" icon={<ReloadOutlined />} onClick={load} loading={loading}>
             刷新
           </Button>
+          {headerExtra}
         </Space>
       }
     >
-      {data?.modeling_task && (
-        <div style={{ marginBottom: 12 }}>
-          <Space align="center" style={{ width: '100%' }}>
-            <Text strong>整体进度</Text>
-            <div style={{ flex: 1, minWidth: 240 }}>
-              <Progress
-                percent={Math.round((data.modeling_task.progress_aggregated ?? 0) * 100)}
-                size="small"
-                status={data.has_active_runs ? 'active' : 'normal'}
-              />
-            </div>
-          </Space>
-        </div>
-      )}
-
       <Spin spinning={loading && !data}>
         {treeData.length === 0 ? (
           <Empty description="暂无实验批次 — 创建实验后会在这里看到进度" />
         ) : (
-          <Tree
-            treeData={treeData}
-            expandedKeys={expandedKeys}
-            selectable={false}
-            showLine
-            blockNode
-          />
+          // Scroll container: the panel keeps one height no matter how many
+          // batches 再加一组 adds, instead of pushing everything below it
+          // further down the page on every click.
+          <div style={{ maxHeight: maxBodyHeight, overflowY: 'auto', paddingRight: 4 }}>
+            <Tree
+              treeData={treeData}
+              expandedKeys={expandedKeys}
+              selectable={false}
+              showLine
+              blockNode
+            />
+          </div>
         )}
       </Spin>
 
@@ -252,29 +268,70 @@ function _errText(err) {
 
 function _buildTreeNodes(data, actions = {}) {
   if (!data?.experiments) return []
-  const { onViewLogs, onStopRun, onDeleteExperiment, busyId } = actions
-  return data.experiments.map((exp) => ({
-    key: `exp:${exp.id}`,
-    title: (
-      <ExperimentNode
-        exp={exp}
-        onDelete={onDeleteExperiment}
-        busy={busyId === exp.id}
-      />
-    ),
-    children: (exp.runs || []).map((run) => ({
-      key: `run:${run.id}`,
+  const { onViewLogs, onStopRun, onDeleteExperiment, busyId, taskName } = actions
+  return data.experiments.map((exp) => {
+    const runs = exp.runs || []
+
+    // A batch with exactly one run repeats itself: the batch name already
+    // contains the model, and both rows carry the same status and the same
+    // 100% bar. Render them as a single row — the parent/child split only
+    // earns its height when a batch actually holds several trials.
+    if (runs.length === 1) {
+      return {
+        key: `exp:${exp.id}`,
+        isLeaf: true,
+        title: (
+          <MergedNode
+            exp={exp}
+            run={runs[0]}
+            taskName={taskName}
+            onViewLogs={onViewLogs}
+            onStop={onStopRun}
+            onDelete={onDeleteExperiment}
+            busy={busyId === exp.id || busyId === runs[0].id}
+          />
+        ),
+      }
+    }
+
+    return {
+      key: `exp:${exp.id}`,
       title: (
-        <RunNode
-          run={run}
-          onViewLogs={onViewLogs}
-          onStop={onStopRun}
-          busy={busyId === run.id}
+        <ExperimentNode
+          exp={exp}
+          taskName={taskName}
+          onDelete={onDeleteExperiment}
+          busy={busyId === exp.id}
         />
       ),
-      isLeaf: true,
-    })),
-  }))
+      children: runs.map((run) => ({
+        key: `run:${run.id}`,
+        title: (
+          <RunNode
+            run={run}
+            onViewLogs={onViewLogs}
+            onStop={onStopRun}
+            busy={busyId === run.id}
+          />
+        ),
+        isLeaf: true,
+      })),
+    }
+  })
+}
+
+/**
+ * Batch names are built as `${taskName}-${model}-${timestamp}`. On this page
+ * the task name is already the page title, so repeating it on every row costs
+ * horizontal space and tells the reader nothing.
+ */
+function _shortBatchName(name, taskName) {
+  if (!name) return '未命名批次'
+  let short = taskName && name.startsWith(`${taskName}-`)
+    ? name.slice(taskName.length + 1)
+    : name
+  // Trailing run-id/timestamp suffix — keep it, but let it recede visually.
+  return short
 }
 
 function _allNodeKeys(nodes) {
@@ -286,120 +343,163 @@ function _allNodeKeys(nodes) {
   return keys
 }
 
-// ── Experiment node ────────────────────────────────────────────────────────
+// ── Shared row pieces ──────────────────────────────────────────────────────
 
-function ExperimentNode({ exp, onDelete, busy }) {
-  const pct = Math.round((exp.progress_aggregated ?? 0) * 100)
-  const running = isActive(exp.status)
+/**
+ * One status indicator per row, not four.
+ *
+ * A finished row used to carry the status tag, the literal text 已完成, a 100%
+ * progress bar and a tick — four elements for one fact. The bar and the live
+ * step text only say something while a run is still moving, so they render
+ * only then.
+ */
+function StatusCell({ status, currentStep, progressPct }) {
+  const running = isActive(status)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-      <AppstoreOutlined style={{ color: '#64748b' }} />
-      <Text strong ellipsis style={{ minWidth: 140 }}>{exp.name}</Text>
-      <Tag color={_strategyColor(exp.strategy_type)}>
+    <>
+      <Tag color={_statusColor(status)} icon={_statusIcon(status)} style={{ margin: 0 }}>
+        {status}
+      </Tag>
+      {running && currentStep && (
+        <Tooltip title="当前步骤">
+          <Text type="secondary" style={{ fontSize: 12, minWidth: 96 }}>{currentStep}</Text>
+        </Tooltip>
+      )}
+      {running && (
+        <div style={{ flex: 1, minWidth: 120 }}>
+          <Progress percent={progressPct} size="small" status="active" />
+        </div>
+      )}
+    </>
+  )
+}
+
+function LogButton({ run, onViewLogs }) {
+  return (
+    <Tooltip title="查看实时日志">
+      <Button size="small" type="text" icon={<FileTextOutlined />}
+        onClick={() => onViewLogs?.(run)} />
+    </Tooltip>
+  )
+}
+
+function StopButton({ run, onStop, busy }) {
+  return (
+    <Tooltip title="停止该 Run">
+      <Popconfirm
+        title="停止该 Run？"
+        description="已完成的部分会保留，训练不会继续。"
+        okText="停止" okButtonProps={{ danger: true }} cancelText="取消"
+        onConfirm={() => onStop?.(run)}
+      >
+        <Button size="small" type="text" danger loading={busy} icon={<PoweroffOutlined />} />
+      </Popconfirm>
+    </Tooltip>
+  )
+}
+
+function DeleteButton({ exp, onDelete, busy, running }) {
+  return (
+    // A disabled button fires no mouse events, so the tooltip explaining why
+    // would never show; the wrapper span is what receives the hover.
+    <Tooltip title={running ? '批次运行中，请先停止其中的 Run' : '删除该批次(含其 Run 记录)'}>
+      <span style={{ display: 'inline-flex' }}>
+        <Popconfirm
+          title="删除该实验批次？"
+          description="批次及其 Run 记录会一并删除，不可恢复。"
+          okText="删除" okButtonProps={{ danger: true }} cancelText="取消"
+          disabled={running}
+          onConfirm={() => onDelete?.(exp)}
+        >
+          <Button size="small" type="text" danger loading={busy} disabled={running}
+            icon={<DeleteOutlined />}
+            style={running ? { pointerEvents: 'none' } : undefined} />
+        </Popconfirm>
+      </span>
+    </Tooltip>
+  )
+}
+
+const ROW = { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }
+
+// ── Merged node (batch with exactly one run) ───────────────────────────────
+
+function MergedNode({ exp, run, taskName, onViewLogs, onStop, onDelete, busy }) {
+  const running = isActive(run.status) || isActive(exp.status)
+  return (
+    <div style={ROW}>
+      {_familyChip(run.family)}
+      <Text strong style={{ minWidth: 150 }} ellipsis>
+        {run.model_type || _shortBatchName(exp.name, taskName)}
+      </Text>
+      <Tag color={_strategyColor(exp.strategy_type)} style={{ margin: 0 }}>
         {_strategyLabel(exp.strategy_type)}
       </Tag>
-      <Tag color={_statusColor(exp.status)}>{exp.status}</Tag>
-      <Text type="secondary" style={{ fontSize: 11 }}>
-        {exp.run_count} Run
-      </Text>
-      <div style={{ width: 160 }}>
-        <Progress percent={pct} size="small" showInfo />
-      </div>
-      {/* Deleting a running batch is refused server-side — disable it here so
-          the reason is visible before the click rather than as an error after.
-          A disabled button fires no mouse events, so the tooltip explaining
-          *why* would never show; the wrapper span is what receives the hover. */}
-      <Tooltip title={running ? '批次运行中，请先停止其中的 Run' : '删除该批次(含其 Run 记录)'}>
-        <span style={{ display: 'inline-flex' }}>
-          <Popconfirm
-            title="删除该实验批次？"
-            description="批次及其 Run 记录会一并删除，不可恢复。"
-            okText="删除"
-            okButtonProps={{ danger: true }}
-            cancelText="取消"
-            disabled={running}
-            onConfirm={() => onDelete?.(exp)}
-          >
-            <Button
-              size="small"
-              type="text"
-              danger
-              loading={busy}
-              disabled={running}
-              icon={<DeleteOutlined />}
-              style={running ? { pointerEvents: 'none' } : undefined}
-            />
-          </Popconfirm>
-        </span>
+      <StatusCell
+        status={run.status}
+        currentStep={run.current_step}
+        progressPct={Math.round((run.progress ?? 0) * 100)}
+      />
+      {!running && <div style={{ flex: 1 }} />}
+      <Tooltip title={exp.name}>
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          {_shortBatchName(exp.name, taskName)}
+        </Text>
       </Tooltip>
+      <Space size={2}>
+        <LogButton run={run} onViewLogs={onViewLogs} />
+        {isActive(run.status) && <StopButton run={run} onStop={onStop} busy={busy} />}
+        <DeleteButton exp={exp} onDelete={onDelete} busy={busy} running={running} />
+      </Space>
     </div>
   )
 }
 
-// ── Run node ───────────────────────────────────────────────────────────────
+// ── Experiment node (multi-run batch) ──────────────────────────────────────
+
+function ExperimentNode({ exp, taskName, onDelete, busy }) {
+  const running = isActive(exp.status)
+  return (
+    <div style={{ ...ROW, padding: '4px 0' }}>
+      <AppstoreOutlined style={{ color: '#64748b' }} />
+      <Text strong ellipsis style={{ minWidth: 150 }}>
+        {_shortBatchName(exp.name, taskName)}
+      </Text>
+      <Tag color={_strategyColor(exp.strategy_type)} style={{ margin: 0 }}>
+        {_strategyLabel(exp.strategy_type)}
+      </Tag>
+      <StatusCell
+        status={exp.status}
+        progressPct={Math.round((exp.progress_aggregated ?? 0) * 100)}
+      />
+      <Text type="secondary" style={{ fontSize: 11 }}>{exp.run_count} Run</Text>
+      {!running && <div style={{ flex: 1 }} />}
+      <DeleteButton exp={exp} onDelete={onDelete} busy={busy} running={running} />
+    </div>
+  )
+}
+
+// ── Run node (inside a multi-run batch) ────────────────────────────────────
 
 function RunNode({ run, onViewLogs, onStop, busy }) {
-  const pct = Math.round((run.progress ?? 0) * 100)
-  const familyChip = _familyChip(run.family)
-  const running = isActive(run.status)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
-      {familyChip}
-      <Text style={{ minWidth: 120 }} ellipsis>
+    <div style={ROW}>
+      {_familyChip(run.family)}
+      <Text style={{ minWidth: 130 }} ellipsis>
         <Text strong>{run.model_type || '未命名'}</Text>
         {run.trial_no != null && (
-          <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
-            #{run.trial_no}
-          </Text>
+          <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>#{run.trial_no}</Text>
         )}
       </Text>
-      <Tag color={_statusColor(run.status)} icon={_statusIcon(run.status)} style={{ margin: 0 }}>
-        {run.status}
-      </Tag>
-      {run.current_step && (
-        <Tooltip title="当前步骤">
-          <Text type="secondary" style={{ fontSize: 12, minWidth: 110 }}>
-            {run.current_step}
-          </Text>
-        </Tooltip>
-      )}
-      <div style={{ flex: 1, minWidth: 120 }}>
-        <Progress
-          percent={pct}
-          size="small"
-          status={_progressStatus(run.status)}
-          showInfo
-        />
-      </div>
+      <StatusCell
+        status={run.status}
+        currentStep={run.current_step}
+        progressPct={Math.round((run.progress ?? 0) * 100)}
+      />
+      {!isActive(run.status) && <div style={{ flex: 1 }} />}
       <Space size={2}>
-        <Tooltip title="查看实时日志">
-          <Button
-            size="small"
-            type="text"
-            icon={<FileTextOutlined />}
-            onClick={() => onViewLogs?.(run)}
-          />
-        </Tooltip>
-        {running && (
-          <Tooltip title="停止该 Run">
-            <Popconfirm
-              title="停止该 Run？"
-              description="已完成的部分会保留，训练不会继续。"
-              okText="停止"
-              okButtonProps={{ danger: true }}
-              cancelText="取消"
-              onConfirm={() => onStop?.(run)}
-            >
-              <Button
-                size="small"
-                type="text"
-                danger
-                loading={busy}
-                icon={<PoweroffOutlined />}
-              />
-            </Popconfirm>
-          </Tooltip>
-        )}
+        <LogButton run={run} onViewLogs={onViewLogs} />
+        {isActive(run.status) && <StopButton run={run} onStop={onStop} busy={busy} />}
       </Space>
     </div>
   )

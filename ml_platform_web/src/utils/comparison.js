@@ -60,6 +60,12 @@ export function buildComparisonVM(rawRows = [], task = {}) {
       final_test_value: typeof r.final_test_value === 'number' ? r.final_test_value : null,
       domain_task_id: r.domain_task_id ?? null,
       family: r.family ?? null,
+      // Carried through for the expandable row. The leaderboard endpoint has
+      // always returned both, but the table only ever rendered the handful of
+      // configured metric columns — so the hyperparameters that actually
+      // distinguish two trials of the same model were nowhere on screen.
+      params: r.params || {},
+      all_metrics: r.metrics || {},
       is_success: isSuccess,
       has_artifact: hasArtifact,
       can_explain: hasArtifact,

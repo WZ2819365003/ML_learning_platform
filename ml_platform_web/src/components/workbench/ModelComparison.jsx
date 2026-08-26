@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import {
   Card, Table, Tag, Button, Space, Tooltip, Typography, Empty, Alert, Spin,
-  Select, Modal, Input, message,
+  Select, Modal, Input, message, Row, Col,
 } from 'antd'
 import {
   TrophyOutlined, BulbOutlined, DownloadOutlined, CloudUploadOutlined,
@@ -28,6 +28,111 @@ const { Text } = Typography
  *
  * props: task, rows (raw), loading, error, onRefresh
  */
+
+/**
+ * Per-metric best value, so a column can mark its winner.
+ *
+ * Direction is per *task*, not per metric: a task optimising rmse wants the
+ * minimum everywhere, and one optimising accuracy the maximum. That is a
+ * simplification — a task could in principle mix rmse and r2 — but it matches
+ * how the leaderboard already ranks, so the highlight can never disagree with
+ * the 排名 column beside it.
+ */
+function bestPerMetric(rows, metricKeys, direction) {
+  const best = {}
+  for (const key of metricKeys) {
+    const values = rows
+      .map((r) => r.metrics?.[key])
+      .filter((v) => typeof v === 'number')
+    if (values.length === 0) continue
+    best[key] = direction === 'min' ? Math.min(...values) : Math.max(...values)
+  }
+  return best
+}
+
+/** Gap to the champion on the objective metric, signed so worse is always positive. */
+function objectiveDelta(row, championValue, direction) {
+  const v = row.objective_value
+  if (typeof v !== 'number' || typeof championValue !== 'number') return null
+  return direction === 'min' ? v - championValue : championValue - v
+}
+
+/**
+ * The tuning surface of a run — the values that actually differed between
+ * trials, not the plumbing.
+ *
+ * `ExperimentRun.params` mixes both: the real hyperparameters live nested
+ * under `hyperparameters`, while the top level carries dataset_id, family,
+ * target_column and friends. Rendering the top level verbatim showed a UUID
+ * next to `n_estimators` and buried the interesting values.
+ *
+ * DL runs nest one level further (arch_config / opt_config / train_config), so
+ * a single object value is flattened into `block.key` entries rather than
+ * dumped as JSON.
+ */
+function tuningParams(params) {
+  const source = params?.hyperparameters && typeof params.hyperparameters === 'object'
+    ? params.hyperparameters
+    : Object.fromEntries(
+        Object.entries(params || {}).filter(([k]) => !PLUMBING_PARAM_KEYS.has(k)),
+      )
+
+  const flat = []
+  for (const [key, value] of Object.entries(source)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [inner, innerValue] of Object.entries(value)) {
+        flat.push([`${key.replace(/_config$/, '')}.${inner}`, innerValue])
+      }
+    } else {
+      flat.push([key, value])
+    }
+  }
+  return flat
+}
+
+const PLUMBING_PARAM_KEYS = new Set([
+  'model_type', 'family', 'task_type', 'dataset_id', 'target_column', 'eval_metrics',
+])
+
+/** Hyperparameters + every metric the run produced, for the expanded row. */
+function RowDetail({ row }) {
+  const params = tuningParams(row.params)
+  const metrics = Object.entries(row.all_metrics || {})
+    .filter(([, v]) => typeof v === 'number')
+  return (
+    <Row gutter={[16, 8]} style={{ padding: '4px 8px 8px' }}>
+      <Col xs={24} md={12}>
+        <Text strong style={{ fontSize: 12 }}>超参数</Text>
+        {params.length === 0 ? (
+          <div><Text type="secondary" style={{ fontSize: 12 }}>该 Run 使用注册表默认值，未覆盖任何超参</Text></div>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+            {params.map(([k, v]) => (
+              <Tag key={k} style={{ margin: 0, fontFamily: 'monospace', fontSize: 11 }}>
+                {k} = {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+              </Tag>
+            ))}
+          </div>
+        )}
+      </Col>
+      <Col xs={24} md={12}>
+        <Text strong style={{ fontSize: 12 }}>全部指标</Text>
+        {metrics.length === 0 ? (
+          <div><Text type="secondary" style={{ fontSize: 12 }}>无</Text></div>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+            {metrics.map(([k, v]) => (
+              <Tag key={k} style={{ margin: 0, fontFamily: 'monospace', fontSize: 11 }}>
+                {k} = {v.toFixed(4)}
+              </Tag>
+            ))}
+          </div>
+        )}
+      </Col>
+    </Row>
+  )
+}
+
 export default function ModelComparison({ task, rows = [], loading = false, error = null, onRefresh }) {
   const vm = useMemo(() => buildComparisonVM(rows, task), [rows, task])
   const [inspectorRunId, setInspectorRunId] = useState(null)
@@ -106,6 +211,9 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
     return <Card size="small"><Empty description="还没有 Run — 先在「训练过程」启动一批模型" /></Card>
   }
 
+  const metricBest = bestPerMetric(vm.rows, vm.metricKeys, vm.objective_direction)
+  const championValue = bestRun?.objective_value ?? null
+
   const columns = [
     { title: '排名', key: 'rank', width: 64,
       render: (_, r) => r.is_best
@@ -121,11 +229,31 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
       sorter: (a, b) => (a.metrics[k] ?? -Infinity) - (b.metrics[k] ?? -Infinity),
       render: (_, r) => {
         const v = r.metrics?.[k]
-        return typeof v === 'number'
-          ? <code style={{ color: k === vm.objective_metric ? '#2563eb' : '#334155', fontWeight: k === vm.objective_metric ? 600 : 400 }}>{v.toFixed(4)}</code>
-          : <span style={{ color: '#cbd5e1' }}>-</span>
+        if (typeof v !== 'number') return <span style={{ color: '#cbd5e1' }}>-</span>
+        // Winner of this column gets a tinted chip, so the eye can scan a
+        // column instead of comparing four-decimal numbers by hand.
+        const isColumnBest = metricBest[k] != null && v === metricBest[k]
+        const isObjective = k === vm.objective_metric
+        return (
+          <code style={{
+            color: isColumnBest ? '#047857' : (isObjective ? '#2563eb' : '#334155'),
+            fontWeight: isColumnBest || isObjective ? 600 : 400,
+            background: isColumnBest ? 'rgba(16,185,129,0.10)' : undefined,
+            padding: isColumnBest ? '1px 6px' : undefined,
+            borderRadius: isColumnBest ? 4 : undefined,
+          }}>{v.toFixed(4)}</code>
+        )
       },
     })),
+    // How far behind the champion — the number people actually want when
+    // deciding whether the winner is meaningfully better or a rounding win.
+    { title: '差距', key: 'delta', width: 96,
+      render: (_, r) => {
+        const d = objectiveDelta(r, championValue, vm.objective_direction)
+        if (d == null) return <span style={{ color: '#cbd5e1' }}>-</span>
+        if (Math.abs(d) < 1e-12) return <Tag color="gold" style={{ margin: 0 }}>冠军</Tag>
+        return <Text type="secondary" style={{ fontFamily: 'monospace', fontSize: 12 }}>+{d.toFixed(4)}</Text>
+      } },
     { title: '操作', key: 'actions', width: 220,
       render: (_, r) => (
         <Space size={2}>
@@ -180,7 +308,12 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
 
       <Card size="small" title={<span><LineChartOutlined /> 模型对比（{vm.rows.length}）</span>} bodyStyle={{ padding: 0 }}
         extra={onRefresh && <Button size="small" icon={<ReloadOutlined />} onClick={onRefresh}>刷新</Button>}>
-        <Table size="small" rowKey="run_id" columns={columns} dataSource={vm.rows} scroll={{ x: 820 }}
+        <Table size="small" rowKey="run_id" columns={columns} dataSource={vm.rows} scroll={{ x: 940 }}
+          expandable={{
+            expandedRowRender: (r) => <RowDetail row={r} />,
+            rowExpandable: (r) =>
+              Object.keys(r.params || {}).length > 0 || Object.keys(r.all_metrics || {}).length > 0,
+          }}
           pagination={vm.rows.length > 10 ? { pageSize: 10 } : false} />
       </Card>
 

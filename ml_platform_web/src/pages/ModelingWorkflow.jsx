@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Card, Steps, Button, Space, Select, Input, Upload, Form, Row, Col, Tag,
+  Card, Steps, Button, Space, Select, Input, Upload, Form, Row, Col, Tag, Tabs,
   Typography, message, Divider,
 } from 'antd'
 import {
   DatabaseOutlined, ExperimentOutlined, ThunderboltOutlined,
-  CloudUploadOutlined, InboxOutlined, PlusOutlined, ReloadOutlined,
+  CloudUploadOutlined, InboxOutlined, PlusOutlined,
   ArrowLeftOutlined, ArrowRightOutlined,
+  AppstoreOutlined, TrophyOutlined,
   CodeOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -47,6 +48,7 @@ export default function ModelingWorkflow() {
   const isNew = !taskId || taskId === 'new'
 
   const initialStep = isNew ? 0 : Math.min(3, Math.max(0, Number(searchParams.get('step')) || 0))
+  const [trainingTab, setTrainingTab] = useState('progress')
   const [current, setCurrent] = useState(initialStep)
   const [task, setTask] = useState(null)
   const [runs, setRuns] = useState([])
@@ -256,24 +258,51 @@ export default function ModelingWorkflow() {
     </Card>
   )
 
-  // 训练过程 = 实时进度 + 模型对比（含日志/可视化/SHAP 下钻、策略对比、部署）。
+  // 训练过程 = 编排进度 / 模型排名，两个 Tab。
+  //
+  // These used to stack: the tree, then the leaderboard, then a metric chart,
+  // then a strategy panel — about 2000px that grew by another row on every
+  // 再加一组. They answer different questions at different moments ("what is
+  // running?" vs "which one won?"), so they take turns instead of queueing.
   const trainingStep = (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
-        <Space size={16} wrap>
-          <Text strong>训练进度</Text>
-          <Tag color="green">成功 {runStatusCounts.SUCCESS || 0}</Tag>
-          <Tag color="processing">运行中 {(runStatusCounts.RUNNING || 0) + (runStatusCounts.PENDING || 0)}</Tag>
-          <Tag color="error">失败 {runStatusCounts.FAILED || 0}</Tag>
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => { loadTask(); loadRuns() }}>刷新</Button>
-          <Button size="small" type="primary" ghost icon={<PlusOutlined />}
-            disabled={finalizationLocked} onClick={() => setCurrent(1)}>再加一组</Button>
-        </Space>
-      </Card>
-      {task && <ProgressTree modelingTaskId={task.id} />}
-      {task && <ModelComparison task={task} rows={leaderboard} loading={false} error={null}
-        onRefresh={async () => { await Promise.all([loadTask(), loadRuns()]) }} />}
-    </Space>
+    <Card
+      size="small"
+      styles={{ body: { padding: '4px 12px 12px' } }}
+      variant="outlined"
+    >
+      <Tabs
+        activeKey={trainingTab}
+        onChange={setTrainingTab}
+        size="small"
+        items={[
+          {
+            key: 'progress',
+            label: <span><AppstoreOutlined /> 编排进度</span>,
+            children: task ? (
+              <ProgressTree
+                modelingTaskId={task.id}
+                taskName={task.name}
+                statusCounts={runStatusCounts}
+                headerExtra={
+                  <Button size="small" type="primary" ghost icon={<PlusOutlined />}
+                    disabled={finalizationLocked} onClick={() => setCurrent(1)}>
+                    再加一组
+                  </Button>
+                }
+              />
+            ) : null,
+          },
+          {
+            key: 'ranking',
+            label: <span><TrophyOutlined /> 模型排名</span>,
+            children: task ? (
+              <ModelComparison task={task} rows={leaderboard} loading={false} error={null}
+                onRefresh={async () => { await Promise.all([loadTask(), loadRuns()]) }} />
+            ) : null,
+          },
+        ]}
+      />
+    </Card>
   )
 
   const deployStep = <DeployStep task={task} runs={runs} bestRunId={bestRunId} />

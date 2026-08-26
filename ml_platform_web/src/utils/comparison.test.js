@@ -255,3 +255,53 @@ describe('buildFinalizationVM', () => {
     expect(events).toEqual(['finalize', 'refresh'])
   })
 })
+
+describe('buildComparisonVM — row detail passthrough', () => {
+  it('keeps hyperparameters and the full metric dict on each row', () => {
+    // The table renders only the configured metric columns; the expandable
+    // row needs the untrimmed originals to show what actually differed
+    // between two trials of the same model.
+    const vm = buildComparisonVM([{
+      run_id: 'r1',
+      status: 'SUCCESS',
+      objective_value: 0.91,
+      params: { model_type: 'xgboost', max_depth: 6, learning_rate: 0.1 },
+      metrics: { accuracy: 0.91, f1: 0.88, train_seconds: 12.5 },
+    }], { objective_metric: 'accuracy', objective_direction: 'max' })
+
+    expect(vm.rows[0].params.max_depth).toBe(6)
+    expect(vm.rows[0].params.learning_rate).toBe(0.1)
+    expect(vm.rows[0].all_metrics.train_seconds).toBe(12.5)
+  })
+
+  it('defaults them to empty objects rather than undefined', () => {
+    const vm = buildComparisonVM([{ run_id: 'r1', status: 'SUCCESS', objective_value: 1 }], {})
+    expect(vm.rows[0].params).toEqual({})
+    expect(vm.rows[0].all_metrics).toEqual({})
+  })
+})
+
+describe('leaderboard row params shape', () => {
+  it('nests real hyperparameters under `hyperparameters`', () => {
+    // Guards the assumption RowDetail relies on: ExperimentRun.params mixes
+    // plumbing (dataset_id, target_column, family…) at the top level with the
+    // actual tuning surface one level down. Reading the top level verbatim
+    // put a UUID next to n_estimators.
+    const vm = buildComparisonVM([{
+      run_id: 'r1',
+      status: 'SUCCESS',
+      objective_value: 0.97,
+      params: {
+        model_type: 'random_forest',
+        family: 'ml',
+        dataset_id: '8ec9ee3b-e804-499d-a53e-e4e5f420d778',
+        target_column: 'Target',
+        hyperparameters: { max_depth: 8, n_estimators: 100 },
+      },
+      metrics: { accuracy: 0.97 },
+    }], { objective_metric: 'accuracy', objective_direction: 'max' })
+
+    expect(vm.rows[0].params.hyperparameters).toEqual({ max_depth: 8, n_estimators: 100 })
+    expect(vm.rows[0].params.dataset_id).toBeDefined()
+  })
+})
