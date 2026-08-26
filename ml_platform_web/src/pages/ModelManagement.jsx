@@ -417,18 +417,19 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
 
             <Card size="small" title="快捷操作">
               <Space wrap>
-                <Button
-                  icon={<RocketOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/training/monitor?taskId=${detail.task_id}`); }}
-                >
-                  查看训练监控
-                </Button>
+                {/* One destination now: the standalone detail page carries the
+                    monitor + results content these two buttons used to split
+                    across the deprecated /training/* pages. `from` tells it to
+                    send 返回 back here rather than to the workflow. */}
                 <Button
                   type="primary"
                   icon={<TrophyOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/training/results?taskId=${detail.task_id}`); }}
+                  onClick={() => {
+                    setDetailOpen(false);
+                    navigate(`/models/${detail.task_id}`, { state: { from: 'models' } });
+                  }}
                 >
-                  查看结果可视化
+                  查看完整详情
                 </Button>
                 <Button
                   icon={<DownloadOutlined />}

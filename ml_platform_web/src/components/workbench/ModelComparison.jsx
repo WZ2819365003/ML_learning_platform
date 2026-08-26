@@ -16,6 +16,7 @@ import { useDeployRun } from '../../hooks/useDeployRun'
 import { modelingTaskApi, runModelDownloadUrl } from '../../services/api'
 import EChart from '../EChart'
 import RunInspector from './RunInspector'
+import { useNavigate } from 'react-router-dom'
 import StrategyCompareTab from './StrategyCompareTab'
 
 const { Text } = Typography
@@ -37,6 +38,13 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
   const [finalizing, setFinalizing] = useState(false)
   const { deploying, error: deployError, deploy, reset: resetDeploy } = useDeployRun(task)
 
+  const navigate = useNavigate()
+
+  // 详情 opens the standalone page and tells it where 返回 should go; the
+  // drawer stays for 解释, which is a peek rather than a destination.
+  const openDetailPage = (rid) => {
+    navigate(`/models/${rid}`, { state: { from: 'workflow', taskId: task?.id } })
+  }
   const openInspector = (rid, tab = 'overview') => { setInspectorRunId(rid); setInspectorTab(tab) }
   const bestRun = vm.rows.find(r => r.is_best)
   const finalization = useMemo(
@@ -129,7 +137,7 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
     { title: '操作', key: 'actions', width: 220,
       render: (_, r) => (
         <Space size={2}>
-          <Button size="small" type="link" onClick={() => openInspector(r.run_id, 'overview')}>详情</Button>
+          <Button size="small" type="link" onClick={() => openDetailPage(r.run_id)}>详情</Button>
           <Tooltip title={r.can_explain ? '解释此模型' : '仅成功且有产物的 Run 可解释'}>
             <Button size="small" type="link" icon={<BulbOutlined />} disabled={!r.can_explain}
               onClick={() => openInspector(r.run_id, 'shap')}>解释</Button>

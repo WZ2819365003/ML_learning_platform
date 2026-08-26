@@ -211,3 +211,59 @@ async def test_inspector_walks_id_chain_for_logs(db, app_with_db):
     assert "legacy-log-1" in messages
     assert "legacy-log-2" in messages
     assert data["log_task_id"] == legacy_id
+
+
+async def test_inspector_accepts_a_domain_task_id(inspector_fixtures, app_with_db):
+    """模型管理 lists domain tasks and links straight to the detail page.
+
+    It has no ExperimentRun id to offer, so the endpoint has to walk
+    training_task -> PlatformTask.payload_ref -> ExperimentRun itself. Before
+    this it 404'd on every link from that page.
+    """
+    tt = inspector_fixtures["training_task"]
+    async with AsyncClient(transport=ASGITransport(app=app_with_db), base_url="http://test") as client:
+        resp = await client.get(f"/api/platform/runs/{tt.id}/inspector")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    # Resolved to the run that task belongs to, not to some empty shell.
+    assert data["run"]["id"] == inspector_fixtures["run_main"].id
+    assert data["training_task"]["model_type"] == "random_forest"
+    assert len(data["logs"]) == 2
+
+
+async def test_inspector_serves_a_domain_task_that_has_no_run(db, app_with_db):
+    """A task with no ExperimentRun is a model, not an error.
+
+    V2-era rows and DL tasks started outside a V3 batch have no run (3 of 7 DL
+    tasks on the current deployment). 404-ing would make them unopenable from
+    模型管理, so the payload carries run=null and the task-level context.
+    """
+    ds = Dataset(name="orphan.csv", file_path="/tmp/orphan.csv", file_size=10, row_count=5)
+    db.add(ds)
+    await db.flush()
+    tt = TrainingTask(
+        dataset_id=ds.id, model_type="xgboost", name="no_run",
+        target_column="y", hyperparameters={}, eval_metrics=["accuracy"],
+        status="SUCCESS", progress=1.0, model_path="/tmp/x.joblib",
+    )
+    db.add(tt)
+    await db.flush()
+    db.add(TrainingLog(task_id=tt.id, level="INFO", message="trained without a run"))
+    await db.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app_with_db), base_url="http://test") as client:
+        resp = await client.get(f"/api/platform/runs/{tt.id}/inspector")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["run"] is None
+    assert data["training_task"]["model_type"] == "xgboost"
+    assert [entry["message"] for entry in data["logs"]] == ["trained without a run"]
+
+
+async def test_inspector_still_404s_on_an_unknown_id(app_with_db):
+    """Degrading to run=null must not turn genuine typos into blank pages."""
+    async with AsyncClient(transport=ASGITransport(app=app_with_db), base_url="http://test") as client:
+        resp = await client.get("/api/platform/runs/not-a-real-id/inspector")
+    assert resp.status_code == 404

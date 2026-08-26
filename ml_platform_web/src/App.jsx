@@ -12,6 +12,7 @@ const TrainingConfig = lazy(() => import('./pages/TrainingConfig'))
 const TrainingMonitor = lazy(() => import('./pages/TrainingMonitor'))
 const Results = lazy(() => import('./pages/Results'))
 const ModelManagement = lazy(() => import('./pages/ModelManagement'))
+const ModelDetail = lazy(() => import('./pages/ModelDetail'))
 const ModelDeploy = lazy(() => import('./pages/ModelDeploy'))
 const Settings = lazy(() => import('./pages/Settings'))
 const DLConfig = lazy(() => import('./pages/DLConfig'))
@@ -88,6 +89,10 @@ function AppShell() {
               <Route path="/results" element={<Navigate to="/training/results" replace />} />
               <Route path="/training/results" element={<Results />} />
               <Route path="/models" element={<ModelManagement />} />
+              {/* Standalone run/model detail. `:id` accepts an ExperimentRun id
+                  (from the workflow) or a domain training task id (from 模型管理);
+                  the back target travels in router state, see ModelDetail. */}
+              <Route path="/models/:id" element={<ModelDetail />} />
               <Route path="/deploy" element={<ModelDeploy />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/dl/config" element={<DLConfig />} />
