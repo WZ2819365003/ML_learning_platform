@@ -118,7 +118,26 @@ export default function ProgressTree({ modelingTaskId, autoRefresh = true, pollM
     () => _buildTreeNodes(data, { onViewLogs: setLogRun, onStopRun: stopRun, onDeleteExperiment: deleteExperiment, busyId }),
     [data, stopRun, deleteExperiment, busyId],
   )
-  const expandedKeys = useMemo(() => _allNodeKeys(treeData), [treeData])
+  // Expansion is user-controlled, but seeded so the interesting rows are open.
+  //
+  // It used to be pinned to *every* node with no way to collapse, so each
+  // "再加一组" added ~76px of permanently-expanded tree and the step grew
+  // without bound. Now finished batches start collapsed to a single line and
+  // only batches with something still running are opened, which keeps the
+  // panel a fixed height however many batches accumulate.
+  const autoExpandedKeys = useMemo(() => _activeNodeKeys(data), [data])
+  const [expandedKeys, setExpandedKeys] = useState(null)
+  const [touched, setTouched] = useState(false)
+
+  // Follow the data until the user expresses a preference, then stop fighting
+  // them — otherwise every 3s poll would re-collapse what they just opened.
+  useEffect(() => {
+    if (!touched) setExpandedKeys(autoExpandedKeys)
+  }, [autoExpandedKeys, touched])
+
+  const allKeys = useMemo(() => _allNodeKeys(treeData), [treeData])
+  const allExpanded = expandedKeys != null && allKeys.length > 0
+    && allKeys.every((k) => expandedKeys.includes(k))
 
   return (
     <Card
@@ -139,6 +158,15 @@ export default function ProgressTree({ modelingTaskId, autoRefresh = true, pollM
           {data?.has_active_runs && (
             <Tag icon={<SyncOutlined spin />} color="processing">自动刷新中</Tag>
           )}
+          <Button
+            size="small"
+            onClick={() => {
+              setTouched(true)
+              setExpandedKeys(allExpanded ? [] : allKeys)
+            }}
+          >
+            {allExpanded ? '全部折叠' : '全部展开'}
+          </Button>
           <Button size="small" icon={<ReloadOutlined />} onClick={load} loading={loading}>
             刷新
           </Button>
@@ -164,13 +192,16 @@ export default function ProgressTree({ modelingTaskId, autoRefresh = true, pollM
         {treeData.length === 0 ? (
           <Empty description="暂无实验批次 — 创建实验后会在这里看到进度" />
         ) : (
-          <Tree
-            treeData={treeData}
-            expandedKeys={expandedKeys}
-            selectable={false}
-            showLine
-            blockNode
-          />
+          <div style={{ maxHeight: 340, overflowY: 'auto', overflowX: 'hidden' }}>
+            <Tree
+              treeData={treeData}
+              expandedKeys={expandedKeys || []}
+              onExpand={(keys) => { setTouched(true); setExpandedKeys(keys) }}
+              selectable={false}
+              showLine
+              blockNode
+            />
+          </div>
         )}
       </Spin>
 
@@ -275,6 +306,20 @@ function _buildTreeNodes(data, actions = {}) {
       isLeaf: true,
     })),
   }))
+}
+
+/**
+ * Keys to auto-expand: batches that still have a run the scheduler can advance.
+ * A finished batch stays collapsed to one line — its runs are still reachable,
+ * just not occupying space by default.
+ */
+export function _activeNodeKeys(data) {
+  const keys = []
+  for (const exp of data?.experiments || []) {
+    const liveRun = (exp.runs || []).some((r) => isActive(r.status))
+    if (isActive(exp.status) || liveRun) keys.push(`exp:${exp.id}`)
+  }
+  return keys
 }
 
 function _allNodeKeys(nodes) {

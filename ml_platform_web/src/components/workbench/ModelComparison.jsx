@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import {
   Card, Table, Tag, Button, Space, Tooltip, Typography, Empty, Alert, Spin,
-  Select, Modal, Input, message,
+  Select, Modal, Input, Tabs, message,
 } from 'antd'
 import {
   TrophyOutlined, BulbOutlined, DownloadOutlined, CloudUploadOutlined,
@@ -186,23 +186,53 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
         </Card>
       )}
 
-      <Card size="small" title={<span><LineChartOutlined /> 模型对比（{vm.rows.length}）</span>} bodyStyle={{ padding: 0 }}
-        extra={onRefresh && <Button size="small" icon={<ReloadOutlined />} onClick={onRefresh}>刷新</Button>}>
-        <Table size="small" rowKey="run_id" columns={columns} dataSource={vm.rows} scroll={{ x: 820 }}
-          pagination={vm.rows.length > 10 ? { pageSize: 10 } : false} />
+      {/* One card, three tabs — these are three views of the same leaderboard,
+          and stacking them made the 训练过程 step scroll for two screens.
+          destroyInactiveTabPane also stops the charts rendering unseen. */}
+      <Card
+        size="small"
+        styles={{ body: { padding: '0 12px 12px' } }}
+        title={<span><LineChartOutlined /> 模型对比（{vm.rows.length}）</span>}
+        extra={onRefresh && <Button size="small" icon={<ReloadOutlined />} onClick={onRefresh}>刷新</Button>}
+      >
+        <Tabs
+          size="small"
+          destroyInactiveTabPane
+          items={[
+            {
+              key: 'table',
+              label: '排行榜',
+              children: (
+                <Table size="small" rowKey="run_id" columns={columns} dataSource={vm.rows}
+                  scroll={{ x: 820, y: 320 }}
+                  pagination={vm.rows.length > 10 ? { pageSize: 10 } : false} />
+              ),
+            },
+            {
+              key: 'chart',
+              label: '指标对比',
+              children: (
+                <div>
+                  <Space style={{ marginBottom: 8 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>按模型取最优 trial</Text>
+                    <Select size="small" style={{ minWidth: 140 }} value={activeMetric}
+                      onChange={setChartMetric}
+                      options={vm.metricKeys.map(k => ({ value: k, label: k }))} />
+                  </Space>
+                  {chartData.models.length
+                    ? <EChart option={barOption} style={{ height: 300 }} />
+                    : <Empty description="该指标暂无数据" />}
+                </div>
+              ),
+            },
+            ...(task?.id ? [{
+              key: 'strategy',
+              label: '策略对比',
+              children: <StrategyCompareTab taskId={task.id} onInspect={(rid) => openInspector(rid, 'shap')} />,
+            }] : []),
+          ]}
+        />
       </Card>
-
-      <Card size="small" title="指标柱状对比（按模型取最优 trial）"
-        extra={<Select size="small" style={{ minWidth: 140 }} value={activeMetric} onChange={setChartMetric}
-          options={vm.metricKeys.map(k => ({ value: k, label: k }))} />}>
-        {chartData.models.length ? <EChart option={barOption} style={{ height: 280 }} /> : <Empty description="该指标暂无数据" />}
-      </Card>
-
-      {task?.id && (
-        <Card size="small" title="按策略对比（基线 / 网格 / 贝叶斯）" bodyStyle={{ padding: 12 }}>
-          <StrategyCompareTab taskId={task.id} onInspect={(rid) => openInspector(rid, 'shap')} />
-        </Card>
-      )}
 
       <Modal open={!!deployModal} title="部署此模型" okText="部署" cancelText="取消" confirmLoading={deploying}
         onCancel={() => { setDeployModal(null); resetDeploy() }}
