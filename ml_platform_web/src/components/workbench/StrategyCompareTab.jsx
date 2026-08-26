@@ -29,6 +29,10 @@ const { Text } = Typography
 
 const CANONICAL = ['baseline', 'grid_search', 'bayesian_search']
 
+// Tall enough for the populated card (Statistic + model + run count + link)
+// so the empty ones stretch up to meet it rather than the reverse.
+const STRATEGY_CARD_BODY_HEIGHT = 150
+
 const STRATEGY_META = {
   baseline:        { label: 'Baseline',        color: '#10b981', desc: '默认超参，一轮快速建模' },
   grid_search:     { label: 'Grid Search',     color: '#2563eb', desc: '笛卡尔积穷举超参' },
@@ -167,17 +171,30 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
           const card = s ? buildStrategyCardVM(s) : null
           const best = card?.bestRun
           return (
-            <Col xs={24} md={8} key={key}>
+            <Col xs={24} md={8} key={key} style={{ display: 'flex' }}>
               <Card
                 variant="outlined"
                 size="small"
+                // A strategy that never ran renders a small Empty while a
+                // populated one renders a Statistic block, so the three cards
+                // came out at three different heights. Fixing the body height
+                // keeps the row flush whatever each card has to say.
+                style={{ width: '100%' }}
                 title={
                   <Space>
                     <Tag color={meta.color} style={{ fontWeight: 500 }}>{meta.label}</Tag>
                     <Text type="secondary" style={{ fontSize: 11 }}>{meta.desc}</Text>
                   </Space>
                 }
-                styles={{ body: { padding: '12px 16px' } }}
+                styles={{
+                  body: {
+                    padding: '12px 16px',
+                    height: STRATEGY_CARD_BODY_HEIGHT,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'center',
+                  },
+                }}
               >
                 {s && card.hasBestRun ? (
                   <Space direction="vertical" size={6} style={{ width: '100%' }}>
@@ -194,10 +211,12 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
                       <br />
                       <Text type="secondary">Run 数: </Text>
                       <Text>{card.runCount}/{card.fullRunCount}（成功/总）</Text>
-                      {best?.run_id && (
+                      {/* Only offered when the host actually wired a handler —
+                          otherwise this rendered a link that swallowed the click. */}
+                      {best?.run_id && onInspect && (
                         <>
                           <br />
-                          <a onClick={() => onInspect?.(best.run_id)}>查看最佳 Run →</a>
+                          <a onClick={() => onInspect(best.run_id)}>查看最佳 Run →</a>
                         </>
                       )}
                     </div>

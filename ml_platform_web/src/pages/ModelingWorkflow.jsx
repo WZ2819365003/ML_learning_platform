@@ -14,6 +14,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { modelingTaskApi, dataApi } from '../services/api'
 import ModelConfigTabs from '../components/workbench/ModelConfigTabs'
 import ProgressTree from '../components/workbench/ProgressTree'
+import StrategyCompareTab from '../components/workbench/StrategyCompareTab'
 import ModelComparison from '../components/workbench/ModelComparison'
 import DeployStep from '../components/workbench/DeployStep'
 import DataPipelineModal from '../components/workbench/DataPipelineModal'
@@ -33,6 +34,10 @@ const OBJECTIVE_PRESETS = {
   ],
 }
 const _dir = (m) => (['rmse', 'mae', 'mse', 'mape'].includes(m) ? 'min' : 'max')
+
+// One height for all three 训练过程 panes, so switching tabs never makes the
+// page jump. Tall enough that a handful of batches need no scrolling at all.
+const TRAINING_TAB_BODY_HEIGHT = 620
 
 const STEP_ITEMS = [
   { title: '导入数据', icon: <DatabaseOutlined /> },
@@ -258,12 +263,16 @@ export default function ModelingWorkflow() {
     </Card>
   )
 
-  // 训练过程 = 编排进度 / 模型排名，两个 Tab。
+  // 训练过程 = 编排进度 / 模型排名 / 策略对比，三个 Tab。
   //
-  // These used to stack: the tree, then the leaderboard, then a metric chart,
-  // then a strategy panel — about 2000px that grew by another row on every
-  // 再加一组. They answer different questions at different moments ("what is
-  // running?" vs "which one won?"), so they take turns instead of queueing.
+  // These used to stack in one column — tree, leaderboard, metric chart,
+  // strategy panel — roughly 2000px that grew another row on every 再加一组.
+  // They answer three different questions ("what is running?", "which run
+  // won?", "which strategy pays off?"), so they take turns instead of
+  // queueing.
+  //
+  // All three panes share TRAINING_TAB_BODY_HEIGHT so switching tabs does not
+  // make the page jump around; each pane scrolls inside that box.
   const trainingStep = (
     <Card
       size="small"
@@ -279,25 +288,42 @@ export default function ModelingWorkflow() {
             key: 'progress',
             label: <span><AppstoreOutlined /> 编排进度</span>,
             children: task ? (
-              <ProgressTree
-                modelingTaskId={task.id}
-                taskName={task.name}
-                statusCounts={runStatusCounts}
-                headerExtra={
-                  <Button size="small" type="primary" ghost icon={<PlusOutlined />}
-                    disabled={finalizationLocked} onClick={() => setCurrent(1)}>
-                    再加一组
-                  </Button>
-                }
-              />
+              // Same fixed box as the other two panes. Without it this pane's
+              // height tracked the batch count, so switching tabs on a task
+              // with two batches made the page jump by ~350px.
+              <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflowY: 'auto' }}>
+                <ProgressTree
+                  modelingTaskId={task.id}
+                  taskName={task.name}
+                  statusCounts={runStatusCounts}
+                  maxBodyHeight={TRAINING_TAB_BODY_HEIGHT - 120}
+                  headerExtra={
+                    <Button size="small" type="primary" ghost icon={<PlusOutlined />}
+                      disabled={finalizationLocked} onClick={() => setCurrent(1)}>
+                      再加一组
+                    </Button>
+                  }
+                />
+              </div>
             ) : null,
           },
           {
             key: 'ranking',
             label: <span><TrophyOutlined /> 模型排名</span>,
             children: task ? (
-              <ModelComparison task={task} rows={leaderboard} loading={false} error={null}
-                onRefresh={async () => { await Promise.all([loadTask(), loadRuns()]) }} />
+              <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflowY: 'auto' }}>
+                <ModelComparison task={task} rows={leaderboard} loading={false} error={null}
+                  onRefresh={async () => { await Promise.all([loadTask(), loadRuns()]) }} />
+              </div>
+            ) : null,
+          },
+          {
+            key: 'strategy',
+            label: <span><ExperimentOutlined /> 策略对比</span>,
+            children: task ? (
+              <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflowY: 'auto' }}>
+                <StrategyCompareTab taskId={task.id} />
+              </div>
             ) : null,
           },
         ]}

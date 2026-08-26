@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import {
   Card, Table, Tag, Button, Space, Tooltip, Typography, Empty, Alert, Spin,
-  Select, Modal, Input, message, Row, Col,
+  Modal, Input, message, Row, Col,
 } from 'antd'
 import {
   TrophyOutlined, BulbOutlined, DownloadOutlined, CloudUploadOutlined,
@@ -14,9 +14,7 @@ import {
 } from '../../utils/comparison'
 import { useDeployRun } from '../../hooks/useDeployRun'
 import { modelingTaskApi, runModelDownloadUrl } from '../../services/api'
-import EChart from '../EChart'
 import RunInspector from './RunInspector'
-import StrategyCompareTab from './StrategyCompareTab'
 
 const { Text } = Typography
 
@@ -137,7 +135,6 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
   const vm = useMemo(() => buildComparisonVM(rows, task), [rows, task])
   const [inspectorRunId, setInspectorRunId] = useState(null)
   const [inspectorTab, setInspectorTab] = useState('overview')
-  const [chartMetric, setChartMetric] = useState(null)
   const [deployModal, setDeployModal] = useState(null) // { runId, name }
   const [finalizing, setFinalizing] = useState(false)
   const { deploying, error: deployError, deploy, reset: resetDeploy } = useDeployRun(task)
@@ -148,7 +145,6 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
     () => buildFinalizationVM(task, bestRun),
     [task, bestRun],
   )
-  const activeMetric = chartMetric && vm.metricKeys.includes(chartMetric) ? chartMetric : vm.objective_metric
 
   const finalizeWinner = () => {
     Modal.confirm({
@@ -176,30 +172,6 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
   }
 
   // Per-model aggregate: best trial value per model_type for the active metric.
-  const chartData = useMemo(() => {
-    const byModel = {}
-    vm.rows.filter(r => r.is_success).forEach(r => {
-      const v = r.metrics?.[activeMetric]
-      if (typeof v !== 'number') return
-      byModel[r.model_type] = r.model_type in byModel
-        ? (vm.objective_direction === 'min' ? Math.min(byModel[r.model_type], v) : Math.max(byModel[r.model_type], v))
-        : v
-    })
-    const entries = Object.entries(byModel)
-      .sort((a, b) => vm.objective_direction === 'min' ? a[1] - b[1] : b[1] - a[1])
-    return { models: entries.map(e => e[0]), values: entries.map(e => e[1]) }
-  }, [vm, activeMetric])
-
-  const barOption = {
-    grid: { left: 56, right: 16, top: 16, bottom: 64 },
-    xAxis: { type: 'category', data: chartData.models, axisLabel: { rotate: 20, fontSize: 11 } },
-    yAxis: { type: 'value' },
-    tooltip: { trigger: 'axis' },
-    series: [{
-      type: 'bar', data: chartData.values, itemStyle: { color: '#2563eb', borderRadius: [4, 4, 0, 0] },
-      label: { show: true, position: 'top', fontSize: 10, formatter: p => (typeof p.value === 'number' ? p.value.toFixed(4) : '') },
-    }],
-  }
 
   if (loading) {
     return <Card size="small"><Spin tip="加载对比数据…"><div style={{ height: 120 }} /></Spin></Card>
@@ -317,17 +289,10 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
           pagination={vm.rows.length > 10 ? { pageSize: 10 } : false} />
       </Card>
 
-      <Card size="small" title="指标柱状对比（按模型取最优 trial）"
-        extra={<Select size="small" style={{ minWidth: 140 }} value={activeMetric} onChange={setChartMetric}
-          options={vm.metricKeys.map(k => ({ value: k, label: k }))} />}>
-        {chartData.models.length ? <EChart option={barOption} style={{ height: 280 }} /> : <Empty description="该指标暂无数据" />}
-      </Card>
-
-      {task?.id && (
-        <Card size="small" title="按策略对比（基线 / 网格 / 贝叶斯）" bodyStyle={{ padding: 12 }}>
-          <StrategyCompareTab taskId={task.id} onInspect={(rid) => openInspector(rid, 'shap')} />
-        </Card>
-      )}
+      {/* The metric bar chart is gone: it plotted one bar per model from the
+          same numbers the table above already shows, sorted the same way.
+          按策略对比 moved out to its own tab — it is a different question
+          (which *strategy* pays off) from "which run won". */}
 
       <Modal open={!!deployModal} title="部署此模型" okText="部署" cancelText="取消" confirmLoading={deploying}
         onCancel={() => { setDeployModal(null); resetDeploy() }}

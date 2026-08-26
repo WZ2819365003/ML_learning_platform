@@ -47,7 +47,7 @@ export const isActive = (status) => ACTIVE_STATUSES.has((status || '').toUpperCa
  */
 export default function ProgressTree({
   modelingTaskId, taskName, autoRefresh = true, pollMs = 3000,
-  statusCounts, headerExtra, maxBodyHeight = 420,
+  statusCounts, headerExtra, maxBodyHeight = 520,
 }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -150,11 +150,7 @@ export default function ProgressTree({
               ) : null}
             </>
           )}
-          {data?.modeling_task && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              整体 {Math.round((data.modeling_task.progress_aggregated ?? 0) * 100)}%
-            </Text>
-          )}
+
         </Space>
       }
       extra={
@@ -171,6 +167,21 @@ export default function ProgressTree({
         </Space>
       }
     >
+      {data?.modeling_task && (
+        <div style={{ marginBottom: 10 }}>
+          <Space align="center" style={{ width: '100%' }}>
+            <Text strong style={{ fontSize: 12 }}>整体进度</Text>
+            <div style={{ flex: 1, minWidth: 240 }}>
+              <Progress
+                percent={Math.round((data.modeling_task.progress_aggregated ?? 0) * 100)}
+                size="small"
+                status={data.has_active_runs ? 'active' : 'normal'}
+              />
+            </div>
+          </Space>
+        </div>
+      )}
+
       <Spin spinning={loading && !data}>
         {treeData.length === 0 ? (
           <Empty description="暂无实验批次 — 创建实验后会在这里看到进度" />
