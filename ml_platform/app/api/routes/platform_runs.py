@@ -170,37 +170,6 @@ def _serialize_log(
 # Inspector endpoint
 # ---------------------------------------------------------------------------
 
-
-async def _run_for_domain_task(db: AsyncSession, domain_id: str) -> ExperimentRun | None:
-    """Find the ExperimentRun a domain training task belongs to, if any.
-
-    PlatformTask.payload_ref is "<kind>:<domain_id>", and ExperimentRun.task_id
-    points at the PlatformTask — so the hop is payload_ref -> task -> run.
-    """
-    refs = [f"{kind}:{domain_id}" for kind in ("train", "dl_train")]
-    platform_task = (
-        await db.execute(select(PlatformTask).where(PlatformTask.payload_ref.in_(refs)))
-    ).scalars().first()
-    if platform_task is None:
-        return None
-    return (
-        await db.execute(
-            select(ExperimentRun).where(ExperimentRun.task_id == platform_task.id)
-        )
-    ).scalars().first()
-
-
-async def _domain_task_exists(db: AsyncSession, domain_id: str) -> bool:
-    """True when the id names a training task, even one with no run."""
-    for model in (TrainingTask, DLTrainingTask):
-        found = (
-            await db.execute(select(model.id).where(model.id == domain_id))
-        ).scalar_one_or_none()
-        if found is not None:
-            return True
-    return False
-
-
 @router.get("/{run_id}/inspector", summary="Aggregated run detail for the Run Inspector drawer")
 async def inspect_run(
     run_id: str = Depends(owned_run_id),
@@ -209,38 +178,23 @@ async def inspect_run(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     # --- 1. Load run
-    #
-    # `run_id` is not always an ExperimentRun id. 模型管理 lists *domain* tasks
-    # (training_tasks / dl_training_tasks) and links straight here, so accept a
-    # domain id too and walk domain -> PlatformTask -> ExperimentRun.
-    #
-    # Some domain tasks have no run at all — V2-era rows, and DL tasks started
-    # outside a V3 batch (3 of 7 on the current deployment). Those are not an
-    # error: the model exists and its logs, config and charts are all worth
-    # showing, so the response carries `run: null` and the caller degrades to
-    # the task-level view rather than getting a 404.
     run = (
         await db.execute(select(ExperimentRun).where(ExperimentRun.id == run_id))
     ).scalar_one_or_none()
     if run is None:
-        run = await _run_for_domain_task(db, run_id)
-    if run is None and not await _domain_task_exists(db, run_id):
         raise HTTPException(status_code=404, detail=f"Run {run_id!r} not found")
-    domain_fallback_id = None if run is not None else run_id
 
     # --- 2. Experiment context (for direction / metric / strategy)
-    exp = None
-    if run is not None:
-        exp = (
-            await db.execute(
-                select(PlatformExperiment).where(PlatformExperiment.id == run.experiment_id)
-            )
-        ).scalar_one_or_none()
+    exp = (
+        await db.execute(
+            select(PlatformExperiment).where(PlatformExperiment.id == run.experiment_id)
+        )
+    ).scalar_one_or_none()
 
     # --- 3. Platform task (unified scheduler view)
     platform_task: PlatformTask | None = None
-    domain_task_id: str | None = domain_fallback_id
-    if run is not None and run.task_id:
+    domain_task_id: str | None = None
+    if run.task_id:
         platform_task = (
             await db.execute(select(PlatformTask).where(PlatformTask.id == run.task_id))
         ).scalar_one_or_none()
@@ -277,22 +231,8 @@ async def inspect_run(
         logs_payload = [_serialize_log(lg) for lg in v3_log_rows]
         resolved_log_task_id = run_id
 
-    tt: TrainingTask | None = None
     if domain_task_id:
-        # PlatformTask.kind normally says which family this is. A task that
-        # never ran through a V3 batch has no PlatformTask at all, so probe the
-        # DL table before defaulting to ML — otherwise a DL model opened from
-        # 模型管理 silently resolves to "no training task".
-        if platform_task is not None:
-            is_dl_domain = platform_task.kind == "dl_train"
-        else:
-            is_dl_domain = (
-                await db.execute(
-                    select(DLTrainingTask.id).where(DLTrainingTask.id == domain_task_id)
-                )
-            ).scalar_one_or_none() is not None
-
-        if is_dl_domain:
+        if platform_task and platform_task.kind == "dl_train":
             dl_task = (
                 await db.execute(
                     select(DLTrainingTask).where(DLTrainingTask.id == domain_task_id)
@@ -320,7 +260,7 @@ async def inspect_run(
             tt = (
                 await db.execute(select(TrainingTask).where(TrainingTask.id == domain_task_id))
             ).scalar_one_or_none()
-        if tt is not None and not is_dl_domain:
+        if platform_task and platform_task.kind != "dl_train" and tt:
             ds = (
                 await db.execute(select(Dataset).where(Dataset.id == tt.dataset_id))
             ).scalar_one_or_none()
@@ -456,7 +396,7 @@ async def inspect_run(
         ]
 
     # --- 6. SHAP importances if already computed (inline)
-    metrics_dict = (run.metrics if run is not None else None) or {}
+    metrics_dict = run.metrics or {}
     shap_importances = metrics_dict.get("shap_importances")
     shap_summary: dict[str, Any] | None = None
     if shap_importances:
@@ -500,7 +440,7 @@ async def inspect_run(
         diagnosis = None
 
     return {
-        "run": _serialize_run(run) if run is not None else None,
+        "run": _serialize_run(run),
         "experiment": experiment_payload,
         "platform_task": _serialize_platform_task(platform_task) if platform_task else None,
         "training_task": training_task_payload,

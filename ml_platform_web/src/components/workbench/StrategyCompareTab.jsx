@@ -18,7 +18,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import {
-  Alert, Card, Col, Empty, Row, Space, Spin, Statistic, Tag, Typography,
+  Alert, Card, Col, Empty, Row, Space, Spin, Statistic, Table, Tag, Typography,
 } from 'antd'
 import { TrophyOutlined, ReloadOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { modelingTaskApi } from '../../services/api'
@@ -137,6 +137,50 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
     }
   }, [data, boxSeriesData, stripPoints])
 
+  const tableData = useMemo(() => {
+    const pts = data?.raw_points || []
+    const reverse = data?.objective_direction === 'max'
+    return [...pts].sort((a, b) => (reverse ? b.value - a.value : a.value - b.value))
+  }, [data])
+
+  const tableColumns = [
+    {
+      title: '排名',
+      key: 'rank',
+      width: 60,
+      render: (_, __, idx) => idx === 0
+        ? <Tag color="gold" icon={<TrophyOutlined />}>1</Tag>
+        : idx + 1,
+    },
+    {
+      title: '策略',
+      dataIndex: 'strategy_type',
+      key: 'strategy_type',
+      width: 130,
+      render: v => <Tag color={STRATEGY_META[v]?.color || 'default'}>
+        {STRATEGY_META[v]?.label || v}
+      </Tag>,
+    },
+    { title: '模型', dataIndex: 'model_type', key: 'model_type', width: 140,
+      render: v => v ? <Text code>{v}</Text> : '-' },
+    { title: 'Trial #', dataIndex: 'trial_no', key: 'trial_no', width: 80 },
+    {
+      title: data?.metric_name || '目标值',
+      dataIndex: 'value',
+      key: 'value',
+      width: 120,
+      align: 'right',
+      render: v => <Text strong style={{ color: '#2563eb' }}>{fmt(v)}</Text>,
+    },
+    {
+      title: 'Run',
+      dataIndex: 'run_id',
+      key: 'run_id',
+      render: v => v
+        ? <a onClick={() => onInspect?.(v)}><Text code style={{ fontSize: 11 }}>{v.slice(0, 8)}</Text></a>
+        : '-',
+    },
+  ]
 
   if (loading && !data) {
     return <div style={{ textAlign: 'center', padding: 60 }}><Spin tip="加载策略对比…" /></div>
@@ -230,9 +274,17 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
         )}
       </Card>
 
-      {/* The Run leaderboard that used to sit here was the same rows as the
-          「排行榜」tab one card up — two identical tables on one screen. This
-          tab now carries only what is strategy-specific. */}
+      {/* Ranking table */}
+      <Card variant="outlined" size="small" title={<Space>🏁 Run 总排行榜</Space>}>
+        <Table
+          size="small"
+          rowKey="run_id"
+          columns={tableColumns}
+          dataSource={tableData}
+          pagination={{ pageSize: 12, size: 'small' }}
+          locale={{ emptyText: <Empty description="暂无成功 Run" /> }}
+        />
+      </Card>
     </Space>
   )
 }

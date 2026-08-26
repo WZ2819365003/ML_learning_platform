@@ -257,19 +257,9 @@ export default function ModelingWorkflow() {
   )
 
   // 训练过程 = 实时进度 + 模型对比（含日志/可视化/SHAP 下钻、策略对比、部署）。
-  // Orchestration on the left, results on the right.
-  //
-  // These are read at different moments — the tree while a batch runs, the
-  // leaderboard once it has — so stacking them made the step ~2.5 screens tall
-  // and growing: every "再加一组" added another permanently-expanded batch.
-  // Side by side, with the tree scrolling inside a fixed height and the
-  // results behind tabs, the step stays about one screen however many batches
-  // accumulate. Below antd's xl breakpoint (1200px — laptops in a split
-  // window, tablets) it falls back to one column, where the tabs and the
-  // collapsing tree still do most of the work.
   const trainingStep = (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
+      <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
         <Space size={16} wrap>
           <Text strong>训练进度</Text>
           <Tag color="green">成功 {runStatusCounts.SUCCESS || 0}</Tag>
@@ -280,15 +270,9 @@ export default function ModelingWorkflow() {
             disabled={finalizationLocked} onClick={() => setCurrent(1)}>再加一组</Button>
         </Space>
       </Card>
-      <Row gutter={[12, 12]} align="top">
-        <Col xs={24} xl={9}>
-          {task && <ProgressTree modelingTaskId={task.id} />}
-        </Col>
-        <Col xs={24} xl={15}>
-          {task && <ModelComparison task={task} rows={leaderboard} loading={false} error={null}
-            onRefresh={async () => { await Promise.all([loadTask(), loadRuns()]) }} />}
-        </Col>
-      </Row>
+      {task && <ProgressTree modelingTaskId={task.id} />}
+      {task && <ModelComparison task={task} rows={leaderboard} loading={false} error={null}
+        onRefresh={async () => { await Promise.all([loadTask(), loadRuns()]) }} />}
     </Space>
   )
 
