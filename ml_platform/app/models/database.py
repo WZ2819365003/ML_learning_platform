@@ -437,6 +437,84 @@ class DLTrainingLog(Base):
 # DLModelDeployment
 # ---------------------------------------------------------------------------
 
+class EnsembleDeployment(Base):
+    """A weighted multi-model deployment.
+
+    Separate from ModelDeployment because that table's task_id is a NOT NULL FK
+    into training_tasks, and DL models live in their own table behind their own
+    deployment table — no single row there can reference both an xgboost and an
+    lstm, which is exactly what an ensemble needs.
+    """
+
+    __tablename__ = "ensemble_deployments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
+    modeling_task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("modeling_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    # Only "weighted_average" today. The column is what lets a per-sample
+    # strategy arrive later without a migration.
+    strategy: Mapped[str] = mapped_column(String(32), default="weighted_average", nullable=False)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    request_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    members: Mapped[list[EnsembleMember]] = relationship(
+        back_populates="ensemble", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    def __repr__(self) -> str:
+        return f"<EnsembleDeployment id={self.id!r} name={self.name!r}>"
+
+
+class EnsembleMember(Base):
+    """One weighted member of an ensemble deployment.
+
+    Two nullable FKs rather than a (family, id) pair so that deleting a trained
+    model cascades its membership away, instead of leaving a row that only
+    fails once someone calls the endpoint.
+    """
+
+    __tablename__ = "ensemble_members"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    ensemble_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("ensemble_deployments.id", ondelete="CASCADE"), nullable=False
+    )
+    # The V3 run this member came from — kept for traceability back to the
+    # leaderboard row the user actually picked.
+    run_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    ml_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("training_tasks.id", ondelete="CASCADE"), default=None
+    )
+    dl_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("dl_training_tasks.id", ondelete="CASCADE"), default=None
+    )
+    model_type: Mapped[str | None] = mapped_column(String(64), default=None)
+    weight: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    ensemble: Mapped[EnsembleDeployment] = relationship(back_populates="members")
+
+    @property
+    def domain_task_id(self) -> str | None:
+        return self.ml_task_id or self.dl_task_id
+
+    @property
+    def family(self) -> str:
+        return "dl" if self.dl_task_id else "ml"
+
+    def __repr__(self) -> str:
+        return f"<EnsembleMember {self.family}:{self.domain_task_id} w={self.weight}>"
+
+
 class DLModelDeployment(Base):
     __tablename__ = "dl_model_deployments"
 

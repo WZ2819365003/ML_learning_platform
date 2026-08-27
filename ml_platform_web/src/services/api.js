@@ -316,6 +316,16 @@ export const tsApi = {
 
 // ── V3 Platform APIs ────────────────────────────────────────────────────────
 
+// Weighted multi-model deployments. Separate from deployApi because an
+// ensemble has members and weights instead of a task_id, and its predict
+// response reports which members actually contributed.
+export const ensembleApi = {
+  create: (payload) => api.post('/deploy/ensembles', payload),
+  list: (params = {}) => api.get('/deploy/ensembles', { params }),
+  delete: (id) => api.delete(`/deploy/ensembles/${id}`),
+  predict: (id, payload) => inferenceApi.post(`/inference/ensembles/${id}/predict`, payload),
+};
+
 export const platformTasksApi = {
   list:   (params = {}) => api.get('/platform/tasks/', { params }),
   tree:   (params = {}) => api.get('/platform/tasks/tree', { params }),

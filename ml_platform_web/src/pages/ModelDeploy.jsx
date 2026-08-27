@@ -11,7 +11,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Badge, Button, Card, Col, Descriptions, Drawer, Empty,
   Form, Input, Modal, Popconfirm, Row, Select, Space, Spin,
-  Statistic, Table, Tabs, Tag, Typography, message,
+  Statistic, Table, Tabs, Tag, Tooltip, Typography, message,
 } from 'antd'
 import {
   CloudDownloadOutlined, CloudServerOutlined, CopyOutlined,
@@ -481,8 +481,16 @@ export default function ModelDeploy() {
       title: '部署名称',
       dataIndex: 'name',
       render: (v, r) => (
-        <Space direction="vertical" size={2}>
+        <Space direction="vertical" size={2} style={{ maxWidth: 420 }}>
           <Button type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => openDrawer(kind, r, 'overview')}>{v}</Button>
+          {/* The note whoever deployed this wrote — what it is for, who put it
+              up. Without it a list of deployment names says nothing about which
+              one you are looking at. */}
+          {r.description && (
+            <Tooltip title={r.description}>
+              <Text type="secondary" style={{ fontSize: 11 }} ellipsis>{r.description}</Text>
+            </Tooltip>
+          )}
           {kind === 'ts' && r.backend_label && (
             <Tag color="blue" style={{ fontSize: 10 }}>{r.backend_label.split('/').pop()}</Tag>
           )}

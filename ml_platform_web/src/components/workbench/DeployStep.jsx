@@ -8,7 +8,7 @@ import {
   CloudUploadOutlined, DownloadOutlined, ThunderboltOutlined, TrophyOutlined,
   CopyOutlined, ApiOutlined, BlockOutlined, ReloadOutlined,
 } from '@ant-design/icons'
-import { dataApi, deployApi, runModelDownloadUrl } from '../../services/api'
+import { dataApi, deployApi, ensembleApi, runModelDownloadUrl } from '../../services/api'
 import { useDeployRun } from '../../hooks/useDeployRun'
 import {
   buildCurl, buildRequestExample, buildResponseExample, deploymentNotes,
@@ -331,6 +331,11 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
   const [weights, setWeights] = useState({})
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [ensemble, setEnsemble] = useState(null)
+  const [predictInput, setPredictInput] = useState('[\n  {}\n]')
+  const [predicting, setPredicting] = useState(false)
+  const [predictResult, setPredictResult] = useState(null)
 
   useEffect(() => { if (task?.name) setName(`${task.name}-融合部署`) }, [task?.name])
 
@@ -362,6 +367,52 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
     })),
   }), [name, description, selected, normalised])
 
+  const handleCreate = async () => {
+    if (!name.trim()) { message.warning('请填写部署名称'); return }
+    setCreating(true)
+    setPredictResult(null)
+    try {
+      const resp = await ensembleApi.create({
+        modeling_task_id: task.id,
+        name: name.trim(),
+        description: description.trim() || undefined,
+        members: selected.map(r => ({
+          domain_task_id: r.domain_task_id,
+          family: r.family || 'ml',
+          weight: normalised[r.run_id] ?? 0,
+          run_id: r.run_id,
+          model_type: r.params?.model_type || r.family,
+        })),
+      })
+      setEnsemble(resp)
+      message.success('融合部署已创建')
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '创建融合部署失败')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handlePredict = async () => {
+    if (!ensemble?.id) return
+    let parsed
+    try {
+      parsed = JSON.parse(predictInput)
+      if (!Array.isArray(parsed)) throw new Error('need array')
+    } catch {
+      message.error('预测输入需为 JSON 数组')
+      return
+    }
+    setPredicting(true)
+    try {
+      setPredictResult(await ensembleApi.predict(ensemble.id, { rows: parsed }))
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '融合预测失败')
+    } finally {
+      setPredicting(false)
+    }
+  }
+
   const columns = [
     {
       title: '模型', key: 'model',
@@ -391,17 +442,6 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Alert
-        type="info" showIcon
-        message="这个页面还没接后端"
-        description={
-          <span>
-            界面可以试用，但「创建融合部署」尚未接通 —— 后端还没有存放成员和权重的表，
-            也还没有把推理扇出到多个模型。先看排版和交互是否合用。
-          </span>
-        }
-      />
-
       {/* Mirrors 单模型部署: the picker panel always holds the picker, the
           name and the note, so the form is complete before anything is chosen
           rather than appearing once a second model is picked. */}
@@ -446,10 +486,11 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
               </Row>
 
               <Space>
-                <Tooltip title="后端尚未实现：需要 ensemble_deployments / ensemble_members 两张表，以及扇出推理">
+                <Tooltip title={enoughMembers ? '' : '至少选择 2 个模型'}>
                   <span style={{ display: 'inline-flex' }}>
-                    <Button type="primary" icon={<CloudUploadOutlined />} disabled
-                      style={{ pointerEvents: 'none' }}>
+                    <Button type="primary" icon={<CloudUploadOutlined />}
+                      loading={creating} disabled={!enoughMembers}
+                      onClick={handleCreate}>
                       创建融合部署
                     </Button>
                   </span>
@@ -517,6 +558,60 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
           ),
         }]}
       />
+
+      {ensemble && (
+        <Card size="small" styles={{ body: { padding: 16 } }}
+          title={<span><ThunderboltOutlined style={{ color: '#10b981' }} /> 已上线 · 融合推理</span>}>
+          <Descriptions column={1} size="small" bordered labelStyle={{ width: 110, background: '#f8fafc' }}>
+            <Descriptions.Item label="部署 ID"><code>{ensemble.id}</code></Descriptions.Item>
+            <Descriptions.Item label="端点">
+              <code style={{ fontSize: 12 }}>
+                {predictUrl(null).replace('/inference/{deployment_id}/predict',
+                  `/inference/ensembles/${ensemble.id}/predict`)}
+              </code>
+            </Descriptions.Item>
+            <Descriptions.Item label="成员">
+              <Space size={4} wrap>
+                {(ensemble.members || []).map(m => (
+                  <Tag key={m.id} style={{ margin: 0 }}>
+                    {m.model_type} · {(m.weight * 100).toFixed(0)}%
+                  </Tag>
+                ))}
+              </Space>
+            </Descriptions.Item>
+          </Descriptions>
+
+          <Divider style={{ margin: '14px 0 10px' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>快速预测（JSON 行数组）</Text>
+          </Divider>
+          <Input.TextArea rows={4} value={predictInput} onChange={e => setPredictInput(e.target.value)}
+            style={{ fontFamily: 'monospace', fontSize: 12 }} />
+          <Button style={{ marginTop: 8 }} loading={predicting} onClick={handlePredict}>调用融合预测</Button>
+
+          {predictResult && (
+            <>
+              {/* A member can fail at call time; the blend then runs on the
+                  survivors with renormalised weights. That is a different model
+                  from the one configured, so it is reported rather than hidden. */}
+              {predictResult.members_failed?.length > 0 && (
+                <Alert style={{ marginTop: 10 }} type="warning" showIcon
+                  message={`${predictResult.members_failed.length} 个成员本次未参与，权重已在剩余成员间重新归一化`}
+                  description={
+                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                      {predictResult.members_failed.map((f, i) => (
+                        <li key={i}>{f.model_type || f.domain_task_id}：{f.error}</li>
+                      ))}
+                    </ul>
+                  } />
+              )}
+              <Alert style={{ marginTop: 10 }} type="success" showIcon message="融合预测结果"
+                description={<pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  {JSON.stringify(predictResult, null, 2)}
+                </pre>} />
+            </>
+          )}
+        </Card>
+      )}
     </Space>
   )
 }
