@@ -36,9 +36,10 @@ const OBJECTIVE_PRESETS = {
 const _dir = (m) => (['rmse', 'mae', 'mse', 'mape'].includes(m) ? 'min' : 'max')
 
 // One height for all three 训练过程 panes, so switching tabs never makes the
-// page jump. Sized so a full batch set and a full leaderboard both fit without
-// scrolling — the panes are the page's main content, not a preview strip.
-const TRAINING_TAB_BODY_HEIGHT = 760
+// page jump. The pane is a frame: whatever it holds stretches to fill it, so
+// there is never a band of dead space between a card's bottom edge and the
+// frame's.
+const TRAINING_TAB_BODY_HEIGHT = 620
 
 const STEP_ITEMS = [
   { title: '导入数据', icon: <DatabaseOutlined /> },
@@ -293,12 +294,12 @@ export default function ModelingWorkflow() {
               // here: maxBodyHeight={null} turns off ProgressTree's own inner
               // scroll container, which would otherwise put a second scrollbar
               // inside this one for the same list.
-              <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflowY: 'auto' }}>
+              <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflow: 'hidden' }}>
                 <ProgressTree
                   modelingTaskId={task.id}
                   taskName={task.name}
                   statusCounts={runStatusCounts}
-                  maxBodyHeight={null}
+                  fillHeight
                   headerExtra={
                     <Button size="small" type="primary" ghost icon={<PlusOutlined />}
                       disabled={finalizationLocked} onClick={() => setCurrent(1)}>
@@ -313,8 +314,9 @@ export default function ModelingWorkflow() {
             key: 'ranking',
             label: <span><TrophyOutlined /> 模型排名</span>,
             children: task ? (
-              <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflowY: 'auto' }}>
+              <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflow: 'hidden' }}>
                 <ModelComparison task={task} rows={leaderboard} loading={false} error={null}
+                  fillHeight
                   onRefresh={async () => { await Promise.all([loadTask(), loadRuns()]) }} />
               </div>
             ) : null,

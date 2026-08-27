@@ -131,7 +131,10 @@ function RowDetail({ row }) {
   )
 }
 
-export default function ModelComparison({ task, rows = [], loading = false, error = null, onRefresh }) {
+export default function ModelComparison({
+  task, rows = [], loading = false, error = null, onRefresh,
+  fillHeight = false,   // stretch to the host's fixed box instead of to the rows
+}) {
   const vm = useMemo(() => buildComparisonVM(rows, task), [rows, task])
   const [inspectorRunId, setInspectorRunId] = useState(null)
   const [inspectorTab, setInspectorTab] = useState('overview')
@@ -247,7 +250,9 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
   ]
 
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+    <Space direction="vertical" size={12} style={fillHeight
+      ? { width: '100%', height: '100%', display: 'flex' }
+      : { width: '100%' }}>
       {bestRun && (
         <Card size="small" bodyStyle={{ padding: '10px 16px' }}>
           <Space wrap size={12}>
@@ -278,7 +283,15 @@ export default function ModelComparison({ task, rows = [], loading = false, erro
         </Card>
       )}
 
-      <Card size="small" title={<span><LineChartOutlined /> 模型对比（{vm.rows.length}）</span>} bodyStyle={{ padding: 0 }}
+      {/* In fillHeight mode this card absorbs whatever height the 最优模型
+          bar above it leaves, so the frame has no dead band at the bottom. */}
+      <Card size="small" title={<span><LineChartOutlined /> 模型对比（{vm.rows.length}）</span>}
+        style={fillHeight ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } : undefined}
+        styles={{
+          body: fillHeight
+            ? { padding: 0, flex: 1, minHeight: 0, overflowY: 'auto' }
+            : { padding: 0 },
+        }}
         extra={onRefresh && <Button size="small" icon={<ReloadOutlined />} onClick={onRefresh}>刷新</Button>}>
         <Table size="small" rowKey="run_id" columns={columns} dataSource={vm.rows} scroll={{ x: 940 }}
           expandable={{

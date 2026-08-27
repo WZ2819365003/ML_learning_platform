@@ -48,6 +48,7 @@ export const isActive = (status) => ACTIVE_STATUSES.has((status || '').toUpperCa
 export default function ProgressTree({
   modelingTaskId, taskName, autoRefresh = true, pollMs = 3000,
   statusCounts, headerExtra, maxBodyHeight = 520,   // null → let the host scroll
+  fillHeight = false,                               // stretch to the host's box
 }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -126,6 +127,13 @@ export default function ProgressTree({
   return (
     <Card
       size="small"
+      // fillHeight: the host gives us a fixed frame and expects us to fill it.
+      // Without this the card sized itself to its rows and left a band of dead
+      // space between its bottom edge and the frame's.
+      style={fillHeight ? { height: '100%', display: 'flex', flexDirection: 'column' } : undefined}
+      styles={fillHeight ? {
+        body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+      } : undefined}
       title={
         <Space size={8} wrap>
           <AppstoreOutlined />
@@ -182,7 +190,9 @@ export default function ProgressTree({
         </div>
       )}
 
-      <Spin spinning={loading && !data}>
+      <Spin spinning={loading && !data}
+        wrapperClassName={fillHeight ? 'pt-fill' : undefined}
+        style={fillHeight ? { flex: 1, minHeight: 0 } : undefined}>
         {treeData.length === 0 ? (
           <Empty description="暂无实验批次 — 创建实验后会在这里看到进度" />
         ) : (
@@ -194,7 +204,17 @@ export default function ProgressTree({
           // this inside its own fixed, scrolling box wants that box to be the
           // only scroller — nesting a second one just produces two scrollbars
           // for one list.
-          maxBodyHeight == null ? (
+          fillHeight ? (
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+              <Tree
+                treeData={treeData}
+                expandedKeys={expandedKeys}
+                selectable={false}
+                showLine
+                blockNode
+              />
+            </div>
+          ) : maxBodyHeight == null ? (
             <Tree
               treeData={treeData}
               expandedKeys={expandedKeys}
@@ -215,6 +235,18 @@ export default function ProgressTree({
           )
         )}
       </Spin>
+
+      {fillHeight && (
+        <style>{`
+          .pt-fill,
+          .pt-fill > .ant-spin-container {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+          }
+        `}</style>
+      )}
 
       <RunLogModal run={logRun} onClose={() => setLogRun(null)} />
     </Card>
