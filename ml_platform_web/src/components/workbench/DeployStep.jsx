@@ -169,23 +169,20 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Collapse
-        size="small"
-        defaultActiveKey={['pick']}
-        items={[{
-          key: 'pick',
-          label: (
-            <Space size={8}>
-              <CloudUploadOutlined />
-              <Text strong style={{ fontSize: 13 }}>选择要上线的模型</Text>
-              {selectedRun && (
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {selectedRun.params?.model_type || selectedRun.family} · {name}
-                </Text>
-              )}
-            </Space>
-          ),
-          children: (
+      {/* Plain card, matching 多模型部署: the picker is the first thing you do
+          here, so folding it behind a header buys nothing. */}
+      <Card size="small" styles={{ body: { padding: 16 } }}
+        title={
+          <Space size={8}>
+            <CloudUploadOutlined />
+            <Text strong style={{ fontSize: 13 }}>选择要上线的模型</Text>
+            {selectedRun && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {selectedRun.params?.model_type || selectedRun.family}
+              </Text>
+            )}
+          </Space>
+        }>
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Row gutter={[12, 8]}>
             <Col xs={24} lg={14}>
@@ -228,9 +225,7 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
             )}
           </Space>
         </Space>
-          ),
-        }]}
-      />
+      </Card>
 
       {/* Collapsed by default. The contract matters when you sit down to write
           a client, not while you are picking a model — folded away it costs
@@ -451,39 +446,65 @@ function MultiDeployTab({ task, successRuns, bestRunId, schema }) {
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      {/* Mirrors 单模型部署: the picker panel always holds the picker, the
-          name and the note, so the form is complete before anything is chosen
-          rather than appearing once a second model is picked. */}
-      <Collapse
-        size="small"
-        defaultActiveKey={['members']}
-        items={[{
-          key: 'members',
-          label: (
-            <Space size={8}>
-              <BlockOutlined />
-              <Text strong style={{ fontSize: 13 }}>选择参与融合的模型（至少 2 个）</Text>
-              {selected.length > 0 && (
-                <Text type="secondary" style={{ fontSize: 11 }}>已选 {selected.length} 个 · {name}</Text>
-              )}
-            </Space>
-          ),
-          children: (
-            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-              <Select
-                mode="multiple" style={{ width: '100%' }} value={selectedIds} onChange={setSelectedIds}
-                placeholder="从训练成功的 Run 里挑选"
-                options={successRuns.map(r => ({
-                  value: r.run_id,
-                  label: <RunLabel run={r} bestRunId={bestRunId} objectiveMetric={task?.objective_metric} />,
-                }))}
-              />
+      {/* Plain card, not a folding panel: the picker is the first thing you
+          do here, so hiding it behind a header buys nothing. Only 权重配置
+          folds, since it has a sensible default and most runs never touch it. */}
+      <Card size="small" styles={{ body: { padding: 16 } }}
+        title={
+          <Space size={8}>
+            <BlockOutlined />
+            <Text strong style={{ fontSize: 13 }}>选择参与融合的模型（至少 2 个）</Text>
+            {selected.length > 0 && (
+              <Text type="secondary" style={{ fontSize: 11 }}>已选 {selected.length} 个</Text>
+            )}
+          </Space>
+        }>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Select
+            mode="multiple" style={{ width: '100%' }} value={selectedIds} onChange={setSelectedIds}
+            placeholder="从训练成功的 Run 里挑选"
+            options={successRuns.map(r => ({
+              value: r.run_id,
+              label: <RunLabel run={r} bestRunId={bestRunId} objectiveMetric={task?.objective_metric} />,
+            }))}
+          />
 
-              {/* Weights belong with the thing they configure, directly above
-                  the button that submits them — a separate panel made the user
-                  set them somewhere else and then come back here to deploy. */}
-              {enoughMembers && (
-                <>
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>部署名称</Text>
+            <Input style={{ marginTop: 4 }} value={name} onChange={e => setName(e.target.value)} />
+          </div>
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              模型说明（可选，会写入部署记录）
+            </Text>
+            <Input.TextArea style={{ marginTop: 4 }} rows={2} value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="例：xgboost 与 lstm 加权融合，权重按 rmse 反比；上线人 张三" />
+          </div>
+
+          {/* Folded by default and sitting right above the button that submits
+              it: the suggested weights are usable as they are, so this only
+              needs opening when you actually want to change them. */}
+          <Collapse
+            size="small"
+            items={[{
+              key: 'weights',
+              label: (
+                <Space size={8}>
+                  <ApiOutlined />
+                  <Text strong style={{ fontSize: 13 }}>权重配置</Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {enoughMembers
+                      ? `${selected.length} 个成员 · 已按成绩分配`
+                      : '至少选择 2 个模型'}
+                  </Text>
+                </Space>
+              ),
+              children: !enoughMembers ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={<Text type="secondary">选择 2 个及以上模型后，这里会显示权重</Text>} />
+              ) : (
+                <Space direction="vertical" size={10} style={{ width: '100%' }}>
                   <Table size="small" rowKey="run_id" columns={columns} dataSource={selected}
                     pagination={false} />
                   <Space wrap>
@@ -498,41 +519,28 @@ function MultiDeployTab({ task, successRuns, bestRunId, schema }) {
                       当前合计 {weightSum.toFixed(3)}，提交时按比例归一化
                     </Text>
                   </Space>
-                </>
-              )}
+                </Space>
+              ),
+            }]}
+          />
 
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>部署名称</Text>
-                <Input style={{ marginTop: 4 }} value={name} onChange={e => setName(e.target.value)} />
-              </div>
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  模型说明（可选，会写入部署记录）
-                </Text>
-                <Input.TextArea style={{ marginTop: 4 }} rows={2} value={description}
-                  onChange={e => setDescription(e.target.value)}
-                  placeholder="例：xgboost 与 lstm 加权融合，权重按 rmse 反比；上线人 张三" />
-              </div>
-
-              <Space>
-                <Tooltip title={enoughMembers ? '' : '至少选择 2 个模型'}>
-                  <span style={{ display: 'inline-flex' }}>
-                    <Button type="primary" icon={<CloudUploadOutlined />}
-                      loading={creating} disabled={!enoughMembers}
-                      onClick={handleCreate}>
-                      创建融合部署
-                    </Button>
-                  </span>
-                </Tooltip>
-                <Button icon={<CopyOutlined />} disabled={!enoughMembers}
-                  onClick={() => copyText(JSON.stringify(ensemblePreview, null, 2), '融合配置')}>
-                  复制配置
+          <Space>
+            <Tooltip title={enoughMembers ? '' : '至少选择 2 个模型'}>
+              <span style={{ display: 'inline-flex' }}>
+                <Button type="primary" icon={<CloudUploadOutlined />}
+                  loading={creating} disabled={!enoughMembers}
+                  onClick={handleCreate}>
+                  创建融合部署
                 </Button>
-              </Space>
-            </Space>
-          ),
-        }]}
-      />
+              </span>
+            </Tooltip>
+            <Button icon={<CopyOutlined />} disabled={!enoughMembers}
+              onClick={() => copyText(JSON.stringify(ensemblePreview, null, 2), '融合配置')}>
+              复制配置
+            </Button>
+          </Space>
+        </Space>
+      </Card>
 
       {ensemble && (
         <Card size="small" styles={{ body: { padding: 16 } }}
@@ -598,10 +606,11 @@ function MultiDeployTab({ task, successRuns, bestRunId, schema }) {
  *
  * props: task, runs (array), bestRunId
  */
-// One height for both 部署 tabs, so switching between them does not resize the
-// step. Taller than the folded content needs: 多模型部署 with members picked
-// carries a weights table the single tab has no equivalent of.
-const DEPLOY_TAB_BODY_HEIGHT = 700
+// A floor, not a ceiling. Both 部署 tabs reserve the same minimum so switching
+// between them does not resize the step, but neither holds a band of empty
+// space open: with everything folded each tab is about this tall anyway, and
+// expanding a panel simply grows the page.
+const DEPLOY_TAB_MIN_HEIGHT = 430
 
 export default function DeployStep({ task, runs = [], bestRunId }) {
   const successRuns = useMemo(
@@ -672,7 +681,7 @@ export default function DeployStep({ task, runs = [], bestRunId }) {
           key: 'single',
           label: <span><CloudUploadOutlined /> 单模型部署</span>,
           children: (
-            <div style={{ height: DEPLOY_TAB_BODY_HEIGHT, overflowY: 'auto', paddingRight: 4 }}>
+            <div style={{ minHeight: DEPLOY_TAB_MIN_HEIGHT }}>
               <SingleDeployTab task={task} successRuns={successRuns}
                 bestRunId={bestRunId} schema={schema} />
             </div>
@@ -682,7 +691,7 @@ export default function DeployStep({ task, runs = [], bestRunId }) {
           key: 'multi',
           label: <span><BlockOutlined /> 多模型部署</span>,
           children: (
-            <div style={{ height: DEPLOY_TAB_BODY_HEIGHT, overflowY: 'auto', paddingRight: 4 }}>
+            <div style={{ minHeight: DEPLOY_TAB_MIN_HEIGHT }}>
               <MultiDeployTab task={task} successRuns={successRuns}
                 bestRunId={bestRunId} schema={schema} />
             </div>
