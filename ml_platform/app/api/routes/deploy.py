@@ -53,6 +53,91 @@ async def list_unified_deployments_route(
     )
 
 
+# ---------------------------------------------------------------------------
+# Ensemble (multi-model) deployments
+# ---------------------------------------------------------------------------
+# Separate endpoints rather than a mode flag on the single-model ones: an
+# ensemble has members and weights instead of a task_id, and the response
+# carries which members actually contributed to a prediction.
+#
+# These MUST stay above `POST /deploy/{task_id}`. FastAPI matches routes in
+# registration order, so a literal path declared after a single-segment path
+# parameter is unreachable: the request lands on the parameterised handler
+# with task_id="ensembles" and 404s looking for a model by that name.
+
+class EnsembleMemberSpec(BaseModel):
+    """One member of a proposed ensemble."""
+
+    domain_task_id: str
+    family: str = "ml"
+    weight: float = 0.0
+    run_id: str | None = None
+    model_type: str | None = None
+
+
+class EnsembleCreateRequest(BaseModel):
+    modeling_task_id: str
+    name: str
+    description: str | None = None
+    members: list[EnsembleMemberSpec]
+
+
+@deploy_router.post("/ensembles", status_code=201, summary="Create a weighted ensemble deployment")
+async def create_ensemble_route(
+    body: EnsembleCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
+) -> dict:
+    return await ensemble_service.create_ensemble(
+        db,
+        body.modeling_task_id,
+        name=body.name,
+        description=body.description,
+        members=[m.model_dump() for m in body.members],
+        owner_username=owner_scope_username(username),
+    )
+
+
+@deploy_router.get("/ensembles", summary="List ensemble deployments")
+async def list_ensembles_route(
+    modeling_task_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
+) -> dict:
+    items = await ensemble_service.list_ensembles(
+        db,
+        modeling_task_id=modeling_task_id,
+        owner_username=owner_scope_username(username),
+    )
+    return {"items": items, "total": len(items)}
+
+
+@deploy_router.delete("/ensembles/{ensemble_id}", summary="Delete an ensemble deployment")
+async def delete_ensemble_route(
+    ensemble_id: str,
+    db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
+) -> dict:
+    return await ensemble_service.delete_ensemble(
+        db, ensemble_id, owner_username=owner_scope_username(username)
+    )
+
+
+@inference_router.post("/ensembles/{ensemble_id}/predict", summary="Predict with an ensemble")
+async def ensemble_predict_route(
+    ensemble_id: str,
+    request: InferenceRequest,
+    db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
+) -> dict:
+    return await ensemble_service.run_ensemble_inference(
+        db,
+        ensemble_id,
+        request.rows,
+        owner_username=owner_scope_username(username),
+    )
+
+
 @deploy_router.post("/{task_id}", response_model=DeploymentResponse)
 async def deploy_model(
     task_id: str,
@@ -236,83 +321,3 @@ async def get_result_route(
         owner_username=owner_scope_username(username),
     )
     return InferenceJobResponse(**result)
-
-
-# ---------------------------------------------------------------------------
-# Ensemble (multi-model) deployments
-# ---------------------------------------------------------------------------
-# Separate endpoints rather than a mode flag on the single-model ones: an
-# ensemble has members and weights instead of a task_id, and the response
-# carries which members actually contributed to a prediction.
-
-class EnsembleMemberSpec(BaseModel):
-    """One member of a proposed ensemble."""
-
-    domain_task_id: str
-    family: str = "ml"
-    weight: float = 0.0
-    run_id: str | None = None
-    model_type: str | None = None
-
-
-class EnsembleCreateRequest(BaseModel):
-    modeling_task_id: str
-    name: str
-    description: str | None = None
-    members: list[EnsembleMemberSpec]
-
-
-@deploy_router.post("/ensembles", status_code=201, summary="Create a weighted ensemble deployment")
-async def create_ensemble_route(
-    body: EnsembleCreateRequest,
-    db: AsyncSession = Depends(get_db),
-    username: str = Depends(current_username_from_authorization),
-) -> dict:
-    return await ensemble_service.create_ensemble(
-        db,
-        body.modeling_task_id,
-        name=body.name,
-        description=body.description,
-        members=[m.model_dump() for m in body.members],
-        owner_username=owner_scope_username(username),
-    )
-
-
-@deploy_router.get("/ensembles", summary="List ensemble deployments")
-async def list_ensembles_route(
-    modeling_task_id: str | None = Query(default=None),
-    db: AsyncSession = Depends(get_db),
-    username: str = Depends(current_username_from_authorization),
-) -> dict:
-    items = await ensemble_service.list_ensembles(
-        db,
-        modeling_task_id=modeling_task_id,
-        owner_username=owner_scope_username(username),
-    )
-    return {"items": items, "total": len(items)}
-
-
-@deploy_router.delete("/ensembles/{ensemble_id}", summary="Delete an ensemble deployment")
-async def delete_ensemble_route(
-    ensemble_id: str,
-    db: AsyncSession = Depends(get_db),
-    username: str = Depends(current_username_from_authorization),
-) -> dict:
-    return await ensemble_service.delete_ensemble(
-        db, ensemble_id, owner_username=owner_scope_username(username)
-    )
-
-
-@inference_router.post("/ensembles/{ensemble_id}/predict", summary="Predict with an ensemble")
-async def ensemble_predict_route(
-    ensemble_id: str,
-    request: InferenceRequest,
-    db: AsyncSession = Depends(get_db),
-    username: str = Depends(current_username_from_authorization),
-) -> dict:
-    return await ensemble_service.run_ensemble_inference(
-        db,
-        ensemble_id,
-        request.rows,
-        owner_username=owner_scope_username(username),
-    )

@@ -542,18 +542,6 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
               </Space>
 
               <JsonBlock title="融合配置（预览）" value={ensemblePreview} height={150} />
-
-              <Alert
-                type="warning" showIcon
-                message="权重是起点，不是结论"
-                description={
-                  <span>
-                    这里的权重按各模型的<b>选择分</b>推出来，而选择分是在选择集上得到的 ——
-                    用它定权重等于又看了一次同一份数据。等权平均是个很难打败的基线，
-                    融合是否真的更好，要拿封存测试集单独评一次才算数。
-                  </span>
-                }
-              />
             </Space>
           ),
         }]}
