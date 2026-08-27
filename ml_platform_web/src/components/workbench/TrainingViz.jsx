@@ -37,6 +37,7 @@ import {
 import EChart from '../EChart'
 import { vizApi } from '../../services/api'
 import DLDiagnostics from '../viz/DLDiagnostics'
+import PredictedActualCurve from '../viz/PredictedActualCurve'
 
 const { Text } = Typography
 
@@ -481,6 +482,26 @@ export default function TrainingViz({
                 option={options.pva}
                 empty="暂无预测数据"
               />
+            </Col>
+          )}
+
+          {/* The scatter above answers "how tight is the fit"; this answers
+              "where does it go wrong" — which peaks are missed, whether the
+              prediction lags. Same payload, so it costs no extra request. */}
+          {resolvedTaskType !== 'classification' && (
+            <Col span={24}>
+              <Card size="small" variant="outlined"
+                title={
+                  <Space size={6}>
+                    <LineChartOutlined style={{ color: '#2563eb' }} />
+                    <span>预测值 vs 实际值（曲线）</span>
+                    <Tooltip title="两条线贴合越紧越好。看峰值是否被削平、预测是否整体滞后。">
+                      <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+                    </Tooltip>
+                  </Space>
+                }>
+                <PredictedActualCurve payload={data.pva} height={300} />
+              </Card>
             </Col>
           )}
 
