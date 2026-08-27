@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react'
 import {
   Card, Select, Input, Button, Space, Tag, Typography, Alert, Descriptions,
-  message, Empty, Divider, Tooltip, Tabs, Table, InputNumber, Progress,
+  message, Empty, Divider, Tooltip, Tabs, Table, InputNumber, Progress, Row, Col,
 } from 'antd'
 import {
   CloudUploadOutlined, DownloadOutlined, ThunderboltOutlined, TrophyOutlined,
@@ -27,7 +27,7 @@ async function copyText(value, label = '内容') {
 }
 
 /** A labelled, copyable JSON block. */
-function JsonBlock({ title, value, extra }) {
+function JsonBlock({ title, value, extra, height = 170 }) {
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
   return (
     <div>
@@ -40,7 +40,7 @@ function JsonBlock({ title, value, extra }) {
       </div>
       <pre style={{
         margin: 0, padding: 10, borderRadius: 6, background: '#0f172a', color: '#e2e8f0',
-        fontSize: 11.5, lineHeight: 1.55, maxHeight: 220, overflow: 'auto',
+        fontSize: 11.5, lineHeight: 1.55, height, overflow: 'auto',
         fontFamily: 'ui-monospace, Menlo, Monaco, monospace',
       }}>{text}</pre>
     </div>
@@ -133,23 +133,25 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
       <Card size="small" title={<span><CloudUploadOutlined /> 选择要上线的模型</span>}
         styles={{ body: { padding: 16 } }}>
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <div>
-            <Text type="secondary" style={{ fontSize: 12 }}>成功的 Run（默认选中最佳）</Text>
-            <Select
-              style={{ width: '100%', marginTop: 4 }}
-              value={runId}
-              onChange={(v) => { setRunId(v); reset(); setPredictResult(null) }}
-              options={successRuns.map(r => ({
-                value: r.run_id,
-                label: <RunLabel run={r} bestRunId={bestRunId} objectiveMetric={task?.objective_metric} />,
-              }))}
-            />
-          </div>
-          <div>
-            <Text type="secondary" style={{ fontSize: 12 }}>部署名称</Text>
-            <Input style={{ marginTop: 4 }} value={name} onChange={e => setName(e.target.value)}
-              placeholder="例：iris-分类-prod" />
-          </div>
+          <Row gutter={[12, 8]}>
+            <Col xs={24} lg={14}>
+              <Text type="secondary" style={{ fontSize: 12 }}>成功的 Run（默认选中最佳）</Text>
+              <Select
+                style={{ width: '100%', marginTop: 4 }}
+                value={runId}
+                onChange={(v) => { setRunId(v); reset(); setPredictResult(null) }}
+                options={successRuns.map(r => ({
+                  value: r.run_id,
+                  label: <RunLabel run={r} bestRunId={bestRunId} objectiveMetric={task?.objective_metric} />,
+                }))}
+              />
+            </Col>
+            <Col xs={24} lg={10}>
+              <Text type="secondary" style={{ fontSize: 12 }}>部署名称</Text>
+              <Input style={{ marginTop: 4 }} value={name} onChange={e => setName(e.target.value)}
+                placeholder="例：iris-分类-prod" />
+            </Col>
+          </Row>
           <Space>
             <Button type="primary" icon={<CloudUploadOutlined />} loading={deploying}
               onClick={handleDeploy}>部署上线</Button>
@@ -186,16 +188,28 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
               </Descriptions.Item>
             </Descriptions>
 
-            <JsonBlock title="入参 JSON" value={schema.requestExample} />
-            <JsonBlock title="出参 JSON" value={schema.responseExample} />
-            <JsonBlock title="curl 示例" value={curl} />
-
-            <div>
-              <Text strong style={{ fontSize: 12 }}>部署说明</Text>
-              <ul style={{ margin: '6px 0 0', paddingLeft: 20, fontSize: 12, color: '#475569', lineHeight: 1.9 }}>
-                {schema.notes.map((n, i) => <li key={i}>{n}</li>)}
-              </ul>
-            </div>
+            {/* Request and response side by side — they are read together,
+                and stacking them was most of this page's height. */}
+            <Row gutter={[12, 12]}>
+              <Col xs={24} lg={12}>
+                <JsonBlock title="入参 JSON" value={schema.requestExample} />
+              </Col>
+              <Col xs={24} lg={12}>
+                <JsonBlock title="出参 JSON" value={schema.responseExample} />
+              </Col>
+              <Col xs={24} lg={12}>
+                <JsonBlock title="curl 示例" value={curl} height={150} />
+              </Col>
+              <Col xs={24} lg={12}>
+                <Text strong style={{ fontSize: 12 }}>部署说明</Text>
+                <ul style={{
+                  margin: '6px 0 0', paddingLeft: 18, fontSize: 11.5, color: '#475569',
+                  lineHeight: 1.75, height: 150, overflowY: 'auto',
+                }}>
+                  {schema.notes.map((n, i) => <li key={i}>{n}</li>)}
+                </ul>
+              </Col>
+            </Row>
           </Space>
         )}
       </Card>
@@ -381,7 +395,7 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
  *
  * props: task, runs (array), bestRunId
  */
-export default function DeployStep({ task, runs = [], bestRunId }) {
+export default function DeployStep({ task, runs = [], bestRunId, fillHeight = false }) {
   const successRuns = useMemo(
     () => runs.filter(r => String(r.status).toUpperCase() === 'SUCCESS' && r.domain_task_id),
     [runs]
@@ -441,27 +455,53 @@ export default function DeployStep({ task, runs = [], bestRunId }) {
     )
   }
 
+  const paneStyle = fillHeight
+    ? { height: '100%', overflowY: 'auto', paddingRight: 4 }
+    : undefined
+
   return (
+    <>
+      {fillHeight && (
+        <style>{`
+          .deploy-fill { display: flex; flex-direction: column; }
+          .deploy-fill > .ant-tabs-content-holder,
+          .deploy-fill .ant-tabs-content,
+          .deploy-fill .ant-tabs-tabpane {
+            flex: 1;
+            min-height: 0;
+            height: 100%;
+          }
+        `}</style>
+      )}
     <Tabs
       activeKey={tab}
       onChange={setTab}
+      // In a fixed frame the tab body is the scroller, so the pane fills the
+      // frame and nothing below it gets pushed off the page.
+      style={fillHeight ? { height: '100%' } : undefined}
+      className={fillHeight ? 'deploy-fill' : undefined}
       items={[
         {
           key: 'single',
           label: <span><CloudUploadOutlined /> 单模型部署</span>,
           children: (
-            <SingleDeployTab task={task} successRuns={successRuns}
-              bestRunId={bestRunId} schema={schema} />
+            <div style={paneStyle}>
+              <SingleDeployTab task={task} successRuns={successRuns}
+                bestRunId={bestRunId} schema={schema} />
+            </div>
           ),
         },
         {
           key: 'multi',
           label: <span><BlockOutlined /> 多模型部署</span>,
           children: (
-            <MultiDeployTab task={task} successRuns={successRuns} bestRunId={bestRunId} />
+            <div style={paneStyle}>
+              <MultiDeployTab task={task} successRuns={successRuns} bestRunId={bestRunId} />
+            </div>
           ),
         },
       ]}
     />
+    </>
   )
 }

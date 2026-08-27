@@ -335,7 +335,15 @@ export default function ModelingWorkflow() {
     </Card>
   )
 
-  const deployStep = <DeployStep task={task} runs={runs} bestRunId={bestRunId} />
+  // Same frame as the 训练过程 tabs, so stepping forward does not change the
+  // page's height. DeployStep fills it and scrolls inside.
+  const deployStep = (
+    <Card size="small" styles={{ body: { padding: '4px 12px 12px' } }} variant="outlined">
+      <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflow: 'hidden' }}>
+        <DeployStep task={task} runs={runs} bestRunId={bestRunId} fillHeight />
+      </div>
+    </Card>
+  )
 
   const stepContent = [dataStep, configStep, trainingStep, deployStep][current]
 
