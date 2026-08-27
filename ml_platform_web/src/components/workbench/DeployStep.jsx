@@ -325,7 +325,7 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
 // Tab 2 — weighted ensemble
 // ---------------------------------------------------------------------------
 
-function MultiDeployTab({ task, successRuns, bestRunId }) {
+function MultiDeployTab({ task, successRuns, bestRunId, schema }) {
   const direction = task?.objective_direction === 'min' ? 'min' : 'max'
   const [selectedIds, setSelectedIds] = useState([])
   const [weights, setWeights] = useState({})
@@ -334,10 +334,19 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
   const [creating, setCreating] = useState(false)
   const [ensemble, setEnsemble] = useState(null)
   const [predictInput, setPredictInput] = useState('[\n  {}\n]')
+  // Same body as a single-model call: the ensemble sends this row to every
+  // member and combines their answers, so the request contract is unchanged.
+
   const [predicting, setPredicting] = useState(false)
   const [predictResult, setPredictResult] = useState(null)
 
   useEffect(() => { if (task?.name) setName(`${task.name}-融合部署`) }, [task?.name])
+
+  useEffect(() => {
+    if (schema?.requestExample) {
+      setPredictInput(JSON.stringify(schema.requestExample.rows, null, 2))
+    }
+  }, [schema?.requestExample])
 
   const selected = useMemo(
     () => successRuns.filter(r => selectedIds.includes(r.run_id)),
@@ -470,20 +479,40 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
                 }))}
               />
 
-              <Row gutter={[12, 8]}>
-                <Col xs={24} lg={10}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>部署名称</Text>
-                  <Input style={{ marginTop: 4 }} value={name} onChange={e => setName(e.target.value)} />
-                </Col>
-                <Col xs={24} lg={14}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    模型说明（可选，会写入部署记录）
-                  </Text>
-                  <Input.TextArea style={{ marginTop: 4 }} rows={2} value={description}
-                    onChange={e => setDescription(e.target.value)}
-                    placeholder="例：xgboost 与 lstm 加权融合，权重按 rmse 反比；上线人 张三" />
-                </Col>
-              </Row>
+              {/* Weights belong with the thing they configure, directly above
+                  the button that submits them — a separate panel made the user
+                  set them somewhere else and then come back here to deploy. */}
+              {enoughMembers && (
+                <>
+                  <Table size="small" rowKey="run_id" columns={columns} dataSource={selected}
+                    pagination={false} />
+                  <Space wrap>
+                    <Button size="small" icon={<ReloadOutlined />} onClick={() => applySuggested(selected)}>
+                      按成绩重算权重
+                    </Button>
+                    <Button size="small" onClick={() => setWeights(
+                      Object.fromEntries(selected.map(r => [r.run_id, 1 / selected.length])))}>
+                      等权
+                    </Button>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      当前合计 {weightSum.toFixed(3)}，提交时按比例归一化
+                    </Text>
+                  </Space>
+                </>
+              )}
+
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>部署名称</Text>
+                <Input style={{ marginTop: 4 }} value={name} onChange={e => setName(e.target.value)} />
+              </div>
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  模型说明（可选，会写入部署记录）
+                </Text>
+                <Input.TextArea style={{ marginTop: 4 }} rows={2} value={description}
+                  onChange={e => setDescription(e.target.value)}
+                  placeholder="例：xgboost 与 lstm 加权融合，权重按 rmse 反比；上线人 张三" />
+              </div>
 
               <Space>
                 <Tooltip title={enoughMembers ? '' : '至少选择 2 个模型'}>
@@ -500,48 +529,6 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
                   复制配置
                 </Button>
               </Space>
-            </Space>
-          ),
-        }]}
-      />
-
-      {/* Always present, folded. Empty inside until there are two members —
-          the panel itself does not appear and disappear as models are picked. */}
-      <Collapse
-        size="small"
-        items={[{
-          key: 'weights',
-          label: (
-            <Space size={8}>
-              <ApiOutlined />
-              <Text strong style={{ fontSize: 13 }}>权重配置与融合预览</Text>
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                {enoughMembers ? `${selected.length} 个成员` : '至少选择 2 个模型'}
-              </Text>
-            </Space>
-          ),
-          children: !enoughMembers ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={<Text type="secondary">选择 2 个及以上模型后，这里会显示权重与融合配置</Text>} />
-          ) : (
-            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-              <Table size="small" rowKey="run_id" columns={columns} dataSource={selected}
-                pagination={false} />
-
-              <Space>
-                <Button size="small" icon={<ReloadOutlined />} onClick={() => applySuggested(selected)}>
-                  按成绩重算权重
-                </Button>
-                <Button size="small" onClick={() => setWeights(
-                  Object.fromEntries(selected.map(r => [r.run_id, 1 / selected.length])))}>
-                  等权
-                </Button>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  当前合计 {weightSum.toFixed(3)}，提交时按比例归一化
-                </Text>
-              </Space>
-
-              <JsonBlock title="融合配置（预览）" value={ensemblePreview} height={150} />
             </Space>
           ),
         }]}
@@ -611,6 +598,11 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
  *
  * props: task, runs (array), bestRunId
  */
+// One height for both 部署 tabs, so switching between them does not resize the
+// step. Taller than the folded content needs: 多模型部署 with members picked
+// carries a weights table the single tab has no equivalent of.
+const DEPLOY_TAB_BODY_HEIGHT = 700
+
 export default function DeployStep({ task, runs = [], bestRunId }) {
   const successRuns = useMemo(
     () => runs.filter(r => String(r.status).toUpperCase() === 'SUCCESS' && r.domain_task_id),
@@ -680,15 +672,20 @@ export default function DeployStep({ task, runs = [], bestRunId }) {
           key: 'single',
           label: <span><CloudUploadOutlined /> 单模型部署</span>,
           children: (
-            <SingleDeployTab task={task} successRuns={successRuns}
-              bestRunId={bestRunId} schema={schema} />
+            <div style={{ height: DEPLOY_TAB_BODY_HEIGHT, overflowY: 'auto', paddingRight: 4 }}>
+              <SingleDeployTab task={task} successRuns={successRuns}
+                bestRunId={bestRunId} schema={schema} />
+            </div>
           ),
         },
         {
           key: 'multi',
           label: <span><BlockOutlined /> 多模型部署</span>,
           children: (
-            <MultiDeployTab task={task} successRuns={successRuns} bestRunId={bestRunId} />
+            <div style={{ height: DEPLOY_TAB_BODY_HEIGHT, overflowY: 'auto', paddingRight: 4 }}>
+              <MultiDeployTab task={task} successRuns={successRuns}
+                bestRunId={bestRunId} schema={schema} />
+            </div>
           ),
         },
       ]}
