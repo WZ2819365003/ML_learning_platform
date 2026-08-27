@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect, useCallback } from 'react'
 import {
   Card, Select, Input, Button, Space, Tag, Typography, Alert, Descriptions,
   message, Empty, Divider, Tooltip, Tabs, Table, InputNumber, Progress, Row, Col,
+  Collapse,
 } from 'antd'
 import {
   CloudUploadOutlined, DownloadOutlined, ThunderboltOutlined, TrophyOutlined,
@@ -16,14 +17,51 @@ import {
 
 const { Text } = Typography
 
-/** Copy helper that degrades to a message rather than throwing. */
+/**
+ * Copy to clipboard, with a fallback for pages served over plain HTTP.
+ *
+ * `navigator.clipboard` only exists in a secure context — HTTPS or localhost.
+ * This app is reached over http:// on a bare IP, so on the deployed site the
+ * API is simply `undefined` and every copy button silently did nothing but
+ * show "请手动复制". The execCommand path is deprecated but still works
+ * everywhere, and it is the only option left on an insecure origin.
+ */
 async function copyText(value, label = '内容') {
-  try {
-    await navigator.clipboard.writeText(value)
-    message.success(`${label}已复制`)
-  } catch {
-    message.warning('复制失败，请手动选中复制')
+  const text = String(value ?? '')
+
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      message.success(`${label}已复制`)
+      return true
+    } catch {
+      // Permission denied or a non-focused document — fall through.
+    }
   }
+
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    // Keep it off-screen but still selectable; display:none would not copy.
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.top = '-1000px'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    ta.setSelectionRange(0, text.length)
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    if (ok) {
+      message.success(`${label}已复制`)
+      return true
+    }
+  } catch {
+    // fall through to the failure message
+  }
+
+  message.warning('复制失败，请手动选中复制')
+  return false
 }
 
 /** A labelled, copyable JSON block. */
@@ -167,52 +205,68 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
         </Space>
       </Card>
 
-      {/* The contract is shown before deploying too — the shape does not depend
-          on the deployment, only the URL does, and seeing it up front is what
-          lets someone plan the integration. */}
-      <Card size="small" title={<span><ApiOutlined /> 接口契约</span>}
-        styles={{ body: { padding: 16 } }}
-        extra={!deployment && <Text type="secondary" style={{ fontSize: 11 }}>部署后 URL 才会确定</Text>}>
-        {schema.loading ? (
-          <Text type="secondary">正在读取数据集字段…</Text>
-        ) : (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Descriptions column={1} size="small" bordered
-              labelStyle={{ width: 110, background: '#f8fafc' }}>
-              <Descriptions.Item label="请求方法"><code>POST</code></Descriptions.Item>
-              <Descriptions.Item label="端点">
-                <code style={{ fontSize: 12 }}>{predictUrl(deployment?.deployment_id)}</code>
-              </Descriptions.Item>
-              <Descriptions.Item label="特征列数">
-                {schema.featureCount} 列（目标列 <code>{task?.target_column}</code> 不要传）
-              </Descriptions.Item>
-            </Descriptions>
+      {/* Collapsed by default. The contract matters when you sit down to write
+          a client, not while you are picking a model — folded away it costs
+          one line instead of half the page. It stays available before
+          deploying because only the URL depends on the deployment. */}
+      <Collapse
+        size="small"
+        items={[{
+          key: 'contract',
+          label: (
+            <Space size={8}>
+              <ApiOutlined />
+              <Text strong style={{ fontSize: 13 }}>接口契约与调用说明</Text>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                入参 / 出参 / curl / 部署说明
+              </Text>
+              {!deployment && (
+                <Text type="secondary" style={{ fontSize: 11 }}>· 部署后 URL 才会确定</Text>
+              )}
+            </Space>
+          ),
+          children: schema.loading ? (
+            <Text type="secondary">正在读取数据集字段…</Text>
+          ) : (
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Descriptions column={{ xs: 1, lg: 3 }} size="small" bordered
+                labelStyle={{ background: '#f8fafc' }}>
+                <Descriptions.Item label="请求方法"><code>POST</code></Descriptions.Item>
+                <Descriptions.Item label="端点" span={2}>
+                  <code style={{ fontSize: 12 }}>{predictUrl(deployment?.deployment_id)}</code>
+                </Descriptions.Item>
+                <Descriptions.Item label="特征列数" span={3}>
+                  {schema.featureCount} 列（目标列 <code>{task?.target_column}</code> 不要传）
+                </Descriptions.Item>
+              </Descriptions>
 
-            {/* Request and response side by side — they are read together,
-                and stacking them was most of this page's height. */}
-            <Row gutter={[12, 12]}>
-              <Col xs={24} lg={12}>
-                <JsonBlock title="入参 JSON" value={schema.requestExample} />
-              </Col>
-              <Col xs={24} lg={12}>
-                <JsonBlock title="出参 JSON" value={schema.responseExample} />
-              </Col>
-              <Col xs={24} lg={12}>
-                <JsonBlock title="curl 示例" value={curl} height={150} />
-              </Col>
-              <Col xs={24} lg={12}>
+              {/* Request and response are read together, so they share a row. */}
+              <Row gutter={[12, 12]}>
+                <Col xs={24} lg={12}>
+                  <JsonBlock title="入参 JSON" value={schema.requestExample} />
+                </Col>
+                <Col xs={24} lg={12}>
+                  <JsonBlock title="出参 JSON" value={schema.responseExample} />
+                </Col>
+              </Row>
+
+              {/* curl gets the full width — it is one long line per flag and
+                  wrapping it into half a column made it unreadable. */}
+              <JsonBlock title="curl 示例" value={curl} height={130} />
+
+              <div>
                 <Text strong style={{ fontSize: 12 }}>部署说明</Text>
                 <ul style={{
-                  margin: '6px 0 0', paddingLeft: 18, fontSize: 11.5, color: '#475569',
-                  lineHeight: 1.75, height: 150, overflowY: 'auto',
+                  margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: '#475569',
+                  lineHeight: 1.85,
                 }}>
                   {schema.notes.map((n, i) => <li key={i}>{n}</li>)}
                 </ul>
-              </Col>
-            </Row>
-          </Space>
-        )}
-      </Card>
+              </div>
+            </Space>
+          ),
+        }]}
+      />
 
       {deployment && (
         <Card size="small" title={<span><ThunderboltOutlined style={{ color: '#10b981' }} /> 已上线 · 试调用</span>}
