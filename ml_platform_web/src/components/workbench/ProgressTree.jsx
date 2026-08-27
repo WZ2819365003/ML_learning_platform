@@ -386,16 +386,20 @@ function StatusCell({ status, currentStep, progressPct }) {
       <Tag color={_statusColor(status)} icon={_statusIcon(status)} style={{ margin: 0 }}>
         {status}
       </Tag>
+      {/* The live step text is only meaningful while something is moving —
+          finished rows used to render a literal 已完成 next to a 成功 tag. */}
       {running && currentStep && (
         <Tooltip title="当前步骤">
           <Text type="secondary" style={{ fontSize: 12, minWidth: 96 }}>{currentStep}</Text>
         </Tooltip>
       )}
-      {running && (
-        <div style={{ flex: 1, minWidth: 120 }}>
-          <Progress percent={progressPct} size="small" status="active" />
-        </div>
-      )}
+      {/* Every row keeps its bar, finished or not. I had hidden the completed
+          ones as "redundant with the status tag", but the row of full bars is
+          what makes the batch readable at a glance — you see how far the whole
+          set got without reading a single label. */}
+      <div style={{ flex: 1, minWidth: 140 }}>
+        <Progress percent={progressPct} size="small" status={_progressStatus(status)} />
+      </div>
     </>
   )
 }
@@ -466,7 +470,6 @@ function MergedNode({ exp, run, taskName, onViewLogs, onStop, onDelete, busy }) 
         currentStep={run.current_step}
         progressPct={Math.round((run.progress ?? 0) * 100)}
       />
-      {!running && <div style={{ flex: 1 }} />}
       <Tooltip title={exp.name}>
         <Text type="secondary" style={{ fontSize: 11 }}>
           {_shortBatchName(exp.name, taskName)}
@@ -499,7 +502,6 @@ function ExperimentNode({ exp, taskName, onDelete, busy }) {
         progressPct={Math.round((exp.progress_aggregated ?? 0) * 100)}
       />
       <Text type="secondary" style={{ fontSize: 11 }}>{exp.run_count} Run</Text>
-      {!running && <div style={{ flex: 1 }} />}
       <DeleteButton exp={exp} onDelete={onDelete} busy={busy} running={running} />
     </div>
   )
@@ -522,7 +524,6 @@ function RunNode({ run, onViewLogs, onStop, busy }) {
         currentStep={run.current_step}
         progressPct={Math.round((run.progress ?? 0) * 100)}
       />
-      {!isActive(run.status) && <div style={{ flex: 1 }} />}
       <Space size={2}>
         <LogButton run={run} onViewLogs={onViewLogs} />
         {isActive(run.status) && <StopButton run={run} onStop={onStop} busy={busy} />}

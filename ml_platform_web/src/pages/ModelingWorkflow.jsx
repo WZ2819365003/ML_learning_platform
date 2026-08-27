@@ -36,8 +36,9 @@ const OBJECTIVE_PRESETS = {
 const _dir = (m) => (['rmse', 'mae', 'mse', 'mape'].includes(m) ? 'min' : 'max')
 
 // One height for all three 训练过程 panes, so switching tabs never makes the
-// page jump. Tall enough that a handful of batches need no scrolling at all.
-const TRAINING_TAB_BODY_HEIGHT = 620
+// page jump. Sized so a full batch set and a full leaderboard both fit without
+// scrolling — the panes are the page's main content, not a preview strip.
+const TRAINING_TAB_BODY_HEIGHT = 760
 
 const STEP_ITEMS = [
   { title: '导入数据', icon: <DatabaseOutlined /> },
