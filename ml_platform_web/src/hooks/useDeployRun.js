@@ -13,14 +13,14 @@ export const deploymentNameError = (name) => name?.trim() ? null : '请填写部
  * should still gate the trigger UI on `status === 'SUCCESS' && domain_task_id`.
  *
  * @param {{id: string, name: string}} task
- * @returns {{deploying: boolean, deployment: object|null, error: string|null, deploy: (runId: string, opts?: {name?: string}) => Promise<object|null>}}
+ * @returns {{deploying: boolean, deployment: object|null, error: string|null, deploy: (runId: string, opts?: {name?: string, description?: string}) => Promise<object|null>}}
  */
 export function useDeployRun(task) {
   const [deploying, setDeploying] = useState(false)
   const [deployment, setDeployment] = useState(null)
   const [error, setError] = useState(null)
 
-  const deploy = async (runId, { name } = {}) => {
+  const deploy = async (runId, { name, description } = {}) => {
     if (!runId) { message.warning('请先选择一个成功的 Run'); return null }
     const nameError = deploymentNameError(name)
     if (nameError) { message.warning(nameError); return null }
@@ -29,7 +29,9 @@ export function useDeployRun(task) {
     try {
       const resp = await modelingTaskApi.deployRun(task.id, runId, {
         name: name.trim(),
-        description: `来自建模任务 ${task.name} 的模型`,
+        // A caller-written note when there is one; the generic sentence is
+        // only a fallback so the field is never empty in the deployment list.
+        description: description?.trim() || `来自建模任务 ${task.name} 的模型`,
       })
       setDeployment(resp)
       message.success('部署成功，模型已上线')

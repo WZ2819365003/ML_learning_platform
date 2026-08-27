@@ -335,12 +335,13 @@ export default function ModelingWorkflow() {
     </Card>
   )
 
-  // Same frame as the 训练过程 tabs, so stepping forward does not change the
-  // page's height. DeployStep fills it and scrolls inside.
+  // Capped, not fixed. With both panels folded this step is a few lines, and
+  // holding it open to the training tabs' height would be a screen of nothing.
+  // It grows as panels are expanded and scrolls once it reaches that height.
   const deployStep = (
     <Card size="small" styles={{ body: { padding: '4px 12px 12px' } }} variant="outlined">
-      <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflow: 'hidden' }}>
-        <DeployStep task={task} runs={runs} bestRunId={bestRunId} fillHeight />
+      <div style={{ maxHeight: TRAINING_TAB_BODY_HEIGHT, overflowY: 'auto' }}>
+        <DeployStep task={task} runs={runs} bestRunId={bestRunId} />
       </div>
     </Card>
   )

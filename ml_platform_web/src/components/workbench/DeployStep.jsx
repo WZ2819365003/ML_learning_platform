@@ -107,6 +107,7 @@ function RunLabel({ run, bestRunId, objectiveMetric }) {
 function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
   const [runId, setRunId] = useState(null)
   const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
   const { deploying, deployment, deploy, reset } = useDeployRun(task)
   const [predictInput, setPredictInput] = useState('')
   const [predicting, setPredicting] = useState(false)
@@ -135,7 +136,7 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
     if (!runId) { message.warning('请先选择一个成功的 Run'); return }
     if (!name.trim()) { message.warning('请填写部署名称'); return }
     setPredictResult(null)
-    await deploy(runId, { name })
+    await deploy(runId, { name, description })
   }
 
   const handlePredict = async () => {
@@ -168,8 +169,23 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Card size="small" title={<span><CloudUploadOutlined /> 选择要上线的模型</span>}
-        styles={{ body: { padding: 16 } }}>
+      <Collapse
+        size="small"
+        defaultActiveKey={['pick']}
+        items={[{
+          key: 'pick',
+          label: (
+            <Space size={8}>
+              <CloudUploadOutlined />
+              <Text strong style={{ fontSize: 13 }}>选择要上线的模型</Text>
+              {selectedRun && (
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {selectedRun.params?.model_type || selectedRun.family} · {name}
+                </Text>
+              )}
+            </Space>
+          ),
+          children: (
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Row gutter={[12, 8]}>
             <Col xs={24} lg={14}>
@@ -190,6 +206,15 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
                 placeholder="例：iris-分类-prod" />
             </Col>
           </Row>
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              模型说明（可选，会写入部署记录）
+            </Text>
+            <Input.TextArea
+              style={{ marginTop: 4 }} rows={2} value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="例：用于日前负荷预测，输入为前一日 48 点负荷与气象特征；上线人 张三" />
+          </div>
           <Space>
             <Button type="primary" icon={<CloudUploadOutlined />} loading={deploying}
               onClick={handleDeploy}>部署上线</Button>
@@ -203,7 +228,9 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
             )}
           </Space>
         </Space>
-      </Card>
+          ),
+        }]}
+      />
 
       {/* Collapsed by default. The contract matters when you sit down to write
           a client, not while you are picking a model — folded away it costs
@@ -303,6 +330,7 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
   const [selectedIds, setSelectedIds] = useState([])
   const [weights, setWeights] = useState({})
   const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
 
   useEffect(() => { if (task?.name) setName(`${task.name}-融合部署`) }, [task?.name])
 
@@ -323,6 +351,7 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
 
   const ensemblePreview = useMemo(() => ({
     name,
+    description,
     strategy: 'weighted_average',
     members: selected.map(r => ({
       run_id: r.run_id,
@@ -330,7 +359,7 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
       family: r.family || 'ml',
       weight: Number((normalised[r.run_id] ?? 0).toFixed(4)),
     })),
-  }), [name, selected, normalised])
+  }), [name, description, selected, normalised])
 
   const columns = [
     {
@@ -372,8 +401,21 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
         }
       />
 
-      <Card size="small" title={<span><BlockOutlined /> 选择参与融合的模型（至少 2 个）</span>}
-        styles={{ body: { padding: 16 } }}>
+      <Collapse
+        size="small"
+        defaultActiveKey={['members']}
+        items={[{
+          key: 'members',
+          label: (
+            <Space size={8}>
+              <BlockOutlined />
+              <Text strong style={{ fontSize: 13 }}>选择参与融合的模型（至少 2 个）</Text>
+              {selected.length > 0 && (
+                <Text type="secondary" style={{ fontSize: 11 }}>已选 {selected.length} 个</Text>
+              )}
+            </Space>
+          ),
+          children: (
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Select
             mode="multiple" style={{ width: '100%' }} value={selectedIds} onChange={setSelectedIds}
@@ -404,10 +446,20 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
                 </Text>
               </Space>
 
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>部署名称</Text>
-                <Input style={{ marginTop: 4 }} value={name} onChange={e => setName(e.target.value)} />
-              </div>
+              <Row gutter={[12, 8]}>
+                <Col xs={24} lg={10}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>部署名称</Text>
+                  <Input style={{ marginTop: 4 }} value={name} onChange={e => setName(e.target.value)} />
+                </Col>
+                <Col xs={24} lg={14}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    模型说明（可选，会写入部署记录）
+                  </Text>
+                  <Input.TextArea style={{ marginTop: 4 }} rows={2} value={description}
+                    onChange={e => setDescription(e.target.value)}
+                    placeholder="例：xgboost 与 lstm 加权融合，权重按 rmse 反比；上线人 张三" />
+                </Col>
+              </Row>
 
               <JsonBlock title="融合配置（预览）" value={ensemblePreview} />
 
@@ -437,7 +489,9 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
             </>
           )}
         </Space>
-      </Card>
+          ),
+        }]}
+      />
     </Space>
   )
 }
@@ -449,7 +503,7 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
  *
  * props: task, runs (array), bestRunId
  */
-export default function DeployStep({ task, runs = [], bestRunId, fillHeight = false }) {
+export default function DeployStep({ task, runs = [], bestRunId }) {
   const successRuns = useMemo(
     () => runs.filter(r => String(r.status).toUpperCase() === 'SUCCESS' && r.domain_task_id),
     [runs]
@@ -509,53 +563,27 @@ export default function DeployStep({ task, runs = [], bestRunId, fillHeight = fa
     )
   }
 
-  const paneStyle = fillHeight
-    ? { height: '100%', overflowY: 'auto', paddingRight: 4 }
-    : undefined
-
   return (
-    <>
-      {fillHeight && (
-        <style>{`
-          .deploy-fill { display: flex; flex-direction: column; }
-          .deploy-fill > .ant-tabs-content-holder,
-          .deploy-fill .ant-tabs-content,
-          .deploy-fill .ant-tabs-tabpane {
-            flex: 1;
-            min-height: 0;
-            height: 100%;
-          }
-        `}</style>
-      )}
     <Tabs
       activeKey={tab}
       onChange={setTab}
-      // In a fixed frame the tab body is the scroller, so the pane fills the
-      // frame and nothing below it gets pushed off the page.
-      style={fillHeight ? { height: '100%' } : undefined}
-      className={fillHeight ? 'deploy-fill' : undefined}
       items={[
         {
           key: 'single',
           label: <span><CloudUploadOutlined /> 单模型部署</span>,
           children: (
-            <div style={paneStyle}>
-              <SingleDeployTab task={task} successRuns={successRuns}
-                bestRunId={bestRunId} schema={schema} />
-            </div>
+            <SingleDeployTab task={task} successRuns={successRuns}
+              bestRunId={bestRunId} schema={schema} />
           ),
         },
         {
           key: 'multi',
           label: <span><BlockOutlined /> 多模型部署</span>,
           children: (
-            <div style={paneStyle}>
-              <MultiDeployTab task={task} successRuns={successRuns} bestRunId={bestRunId} />
-            </div>
+            <MultiDeployTab task={task} successRuns={successRuns} bestRunId={bestRunId} />
           ),
         },
       ]}
     />
-    </>
   )
 }
