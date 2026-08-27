@@ -212,6 +212,69 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
               onChange={e => setDescription(e.target.value)}
               placeholder="例：用于日前负荷预测，输入为前一日 48 点负荷与气象特征；上线人 张三" />
           </div>
+          {/* Collapsed by default. The contract matters when you sit down to write
+              a client, not while you are picking a model — folded away it costs
+              one line instead of half the page. It stays available before
+              deploying because only the URL depends on the deployment. */}
+          <Collapse
+            size="small"
+            items={[{
+              key: 'contract',
+              label: (
+                <Space size={8}>
+                  <ApiOutlined />
+                  <Text strong style={{ fontSize: 13 }}>接口契约与调用说明</Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    入参 / 出参 / curl / 部署说明
+                  </Text>
+                  {!deployment && (
+                    <Text type="secondary" style={{ fontSize: 11 }}>· 部署后 URL 才会确定</Text>
+                  )}
+                </Space>
+              ),
+              children: schema.loading ? (
+                <Text type="secondary">正在读取数据集字段…</Text>
+              ) : (
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Descriptions column={{ xs: 1, lg: 3 }} size="small" bordered
+                    labelStyle={{ background: '#f8fafc' }}>
+                    <Descriptions.Item label="请求方法"><code>POST</code></Descriptions.Item>
+                    <Descriptions.Item label="端点" span={2}>
+                      <code style={{ fontSize: 12 }}>{predictUrl(deployment?.deployment_id)}</code>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="特征列数" span={3}>
+                      {schema.featureCount} 列（目标列 <code>{task?.target_column}</code> 不要传）
+                    </Descriptions.Item>
+                  </Descriptions>
+
+                  {/* Request and response are read together, so they share a row. */}
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} lg={12}>
+                      <JsonBlock title="入参 JSON" value={schema.requestExample} />
+                    </Col>
+                    <Col xs={24} lg={12}>
+                      <JsonBlock title="出参 JSON" value={schema.responseExample} />
+                    </Col>
+                  </Row>
+
+                  {/* curl gets the full width — it is one long line per flag and
+                      wrapping it into half a column made it unreadable. */}
+                  <JsonBlock title="curl 示例" value={curl} height={130} />
+
+                  <div>
+                    <Text strong style={{ fontSize: 12 }}>部署说明</Text>
+                    <ul style={{
+                      margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: '#475569',
+                      lineHeight: 1.85,
+                    }}>
+                      {schema.notes.map((n, i) => <li key={i}>{n}</li>)}
+                    </ul>
+                  </div>
+                </Space>
+              ),
+            }]}
+          />
+
           <Space>
             <Button type="primary" icon={<CloudUploadOutlined />} loading={deploying}
               onClick={handleDeploy}>部署上线</Button>
@@ -226,69 +289,6 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
           </Space>
         </Space>
       </Card>
-
-      {/* Collapsed by default. The contract matters when you sit down to write
-          a client, not while you are picking a model — folded away it costs
-          one line instead of half the page. It stays available before
-          deploying because only the URL depends on the deployment. */}
-      <Collapse
-        size="small"
-        items={[{
-          key: 'contract',
-          label: (
-            <Space size={8}>
-              <ApiOutlined />
-              <Text strong style={{ fontSize: 13 }}>接口契约与调用说明</Text>
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                入参 / 出参 / curl / 部署说明
-              </Text>
-              {!deployment && (
-                <Text type="secondary" style={{ fontSize: 11 }}>· 部署后 URL 才会确定</Text>
-              )}
-            </Space>
-          ),
-          children: schema.loading ? (
-            <Text type="secondary">正在读取数据集字段…</Text>
-          ) : (
-            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-              <Descriptions column={{ xs: 1, lg: 3 }} size="small" bordered
-                labelStyle={{ background: '#f8fafc' }}>
-                <Descriptions.Item label="请求方法"><code>POST</code></Descriptions.Item>
-                <Descriptions.Item label="端点" span={2}>
-                  <code style={{ fontSize: 12 }}>{predictUrl(deployment?.deployment_id)}</code>
-                </Descriptions.Item>
-                <Descriptions.Item label="特征列数" span={3}>
-                  {schema.featureCount} 列（目标列 <code>{task?.target_column}</code> 不要传）
-                </Descriptions.Item>
-              </Descriptions>
-
-              {/* Request and response are read together, so they share a row. */}
-              <Row gutter={[12, 12]}>
-                <Col xs={24} lg={12}>
-                  <JsonBlock title="入参 JSON" value={schema.requestExample} />
-                </Col>
-                <Col xs={24} lg={12}>
-                  <JsonBlock title="出参 JSON" value={schema.responseExample} />
-                </Col>
-              </Row>
-
-              {/* curl gets the full width — it is one long line per flag and
-                  wrapping it into half a column made it unreadable. */}
-              <JsonBlock title="curl 示例" value={curl} height={130} />
-
-              <div>
-                <Text strong style={{ fontSize: 12 }}>部署说明</Text>
-                <ul style={{
-                  margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: '#475569',
-                  lineHeight: 1.85,
-                }}>
-                  {schema.notes.map((n, i) => <li key={i}>{n}</li>)}
-                </ul>
-              </div>
-            </Space>
-          ),
-        }]}
-      />
 
       {deployment && (
         <Card size="small" title={<span><ThunderboltOutlined style={{ color: '#10b981' }} /> 已上线 · 试调用</span>}
