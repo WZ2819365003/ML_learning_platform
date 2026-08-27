@@ -338,6 +338,7 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
     () => successRuns.filter(r => selectedIds.includes(r.run_id)),
     [successRuns, selectedIds],
   )
+  const enoughMembers = selected.length >= 2
 
   const applySuggested = useCallback((members) => {
     setWeights(suggestWeights(members, direction))
@@ -401,6 +402,9 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
         }
       />
 
+      {/* Mirrors 单模型部署: the picker panel always holds the picker, the
+          name and the note, so the form is complete before anything is chosen
+          rather than appearing once a second model is picked. */}
       <Collapse
         size="small"
         defaultActiveKey={['members']}
@@ -411,40 +415,20 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
               <BlockOutlined />
               <Text strong style={{ fontSize: 13 }}>选择参与融合的模型（至少 2 个）</Text>
               {selected.length > 0 && (
-                <Text type="secondary" style={{ fontSize: 11 }}>已选 {selected.length} 个</Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>已选 {selected.length} 个 · {name}</Text>
               )}
             </Space>
           ),
           children: (
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Select
-            mode="multiple" style={{ width: '100%' }} value={selectedIds} onChange={setSelectedIds}
-            placeholder="从训练成功的 Run 里挑选"
-            options={successRuns.map(r => ({
-              value: r.run_id,
-              label: <RunLabel run={r} bestRunId={bestRunId} objectiveMetric={task?.objective_metric} />,
-            }))}
-          />
-
-          {selected.length < 2 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={<Text type="secondary">再选一个模型即可配置权重</Text>} />
-          ) : (
-            <>
-              <Table size="small" rowKey="run_id" columns={columns} dataSource={selected}
-                pagination={false} />
-              <Space>
-                <Button size="small" icon={<ReloadOutlined />} onClick={() => applySuggested(selected)}>
-                  按成绩重算权重
-                </Button>
-                <Button size="small" onClick={() => setWeights(
-                  Object.fromEntries(selected.map(r => [r.run_id, 1 / selected.length])))}>
-                  等权
-                </Button>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  当前合计 {weightSum.toFixed(3)}，提交时按比例归一化
-                </Text>
-              </Space>
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Select
+                mode="multiple" style={{ width: '100%' }} value={selectedIds} onChange={setSelectedIds}
+                placeholder="从训练成功的 Run 里挑选"
+                options={successRuns.map(r => ({
+                  value: r.run_id,
+                  label: <RunLabel run={r} bestRunId={bestRunId} objectiveMetric={task?.objective_metric} />,
+                }))}
+              />
 
               <Row gutter={[12, 8]}>
                 <Col xs={24} lg={10}>
@@ -461,7 +445,62 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
                 </Col>
               </Row>
 
-              <JsonBlock title="融合配置（预览）" value={ensemblePreview} />
+              <Space>
+                <Tooltip title="后端尚未实现：需要 ensemble_deployments / ensemble_members 两张表，以及扇出推理">
+                  <span style={{ display: 'inline-flex' }}>
+                    <Button type="primary" icon={<CloudUploadOutlined />} disabled
+                      style={{ pointerEvents: 'none' }}>
+                      创建融合部署
+                    </Button>
+                  </span>
+                </Tooltip>
+                <Button icon={<CopyOutlined />} disabled={!enoughMembers}
+                  onClick={() => copyText(JSON.stringify(ensemblePreview, null, 2), '融合配置')}>
+                  复制配置
+                </Button>
+              </Space>
+            </Space>
+          ),
+        }]}
+      />
+
+      {/* Always present, folded. Empty inside until there are two members —
+          the panel itself does not appear and disappear as models are picked. */}
+      <Collapse
+        size="small"
+        items={[{
+          key: 'weights',
+          label: (
+            <Space size={8}>
+              <ApiOutlined />
+              <Text strong style={{ fontSize: 13 }}>权重配置与融合预览</Text>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {enoughMembers ? `${selected.length} 个成员` : '至少选择 2 个模型'}
+              </Text>
+            </Space>
+          ),
+          children: !enoughMembers ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={<Text type="secondary">选择 2 个及以上模型后，这里会显示权重与融合配置</Text>} />
+          ) : (
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Table size="small" rowKey="run_id" columns={columns} dataSource={selected}
+                pagination={false} />
+
+              <Space>
+                <Button size="small" icon={<ReloadOutlined />} onClick={() => applySuggested(selected)}>
+                  按成绩重算权重
+                </Button>
+                <Button size="small" onClick={() => setWeights(
+                  Object.fromEntries(selected.map(r => [r.run_id, 1 / selected.length])))}>
+                  等权
+                </Button>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  当前合计 {weightSum.toFixed(3)}，提交时按比例归一化
+                </Text>
+              </Space>
+
+              <JsonBlock title="融合配置（预览）" value={ensemblePreview} height={150} />
 
               <Alert
                 type="warning" showIcon
@@ -474,21 +513,7 @@ function MultiDeployTab({ task, successRuns, bestRunId }) {
                   </span>
                 }
               />
-
-              <Space>
-                <Tooltip title="后端尚未实现：需要 ensemble_deployments / ensemble_members 两张表，以及扇出推理">
-                  <Button type="primary" icon={<CloudUploadOutlined />} disabled>
-                    创建融合部署
-                  </Button>
-                </Tooltip>
-                <Button icon={<CopyOutlined />}
-                  onClick={() => copyText(JSON.stringify(ensemblePreview, null, 2), '融合配置')}>
-                  复制配置
-                </Button>
-              </Space>
-            </>
-          )}
-        </Space>
+            </Space>
           ),
         }]}
       />
