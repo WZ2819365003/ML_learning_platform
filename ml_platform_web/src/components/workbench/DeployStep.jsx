@@ -606,11 +606,11 @@ function MultiDeployTab({ task, successRuns, bestRunId, schema }) {
  *
  * props: task, runs (array), bestRunId
  */
-// A floor, not a ceiling. Both 部署 tabs reserve the same minimum so switching
-// between them does not resize the step, but neither holds a band of empty
-// space open: with everything folded each tab is about this tall anyway, and
-// expanding a panel simply grows the page.
-const DEPLOY_TAB_MIN_HEIGHT = 430
+// A floor, not a ceiling, measured against 多模型部署 — the taller of the two
+// with everything folded, since it carries an extra field. The single tab
+// reserves the same so switching does not resize the step; expanding a folded
+// panel simply grows the page rather than eating into reserved space.
+const DEPLOY_TAB_MIN_HEIGHT = 400
 
 export default function DeployStep({ task, runs = [], bestRunId }) {
   const successRuns = useMemo(

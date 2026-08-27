@@ -339,9 +339,9 @@ export default function ModelingWorkflow() {
   // holding it open to the training tabs' height would be a screen of nothing.
   // It grows as panels are expanded and scrolls once it reaches that height.
   const deployStep = (
-    <Card size="small" styles={{ body: { padding: '4px 12px 12px' } }} variant="outlined">
-      {/* DeployStep sizes its own tab panes to one shared height, so the outer
-          frame just wraps them rather than imposing a second cap. */}
+    <Card size="small" styles={{ body: { padding: '4px 12px 4px' } }} variant="outlined">
+      {/* DeployStep reserves one shared minimum for its tab panes, so the outer
+          frame just wraps them rather than imposing a second bound. */}
       <DeployStep task={task} runs={runs} bestRunId={bestRunId} />
     </Card>
   )
