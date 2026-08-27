@@ -288,15 +288,16 @@ export default function ModelingWorkflow() {
             key: 'progress',
             label: <span><AppstoreOutlined /> 编排进度</span>,
             children: task ? (
-              // Same fixed box as the other two panes. Without it this pane's
-              // height tracked the batch count, so switching tabs on a task
-              // with two batches made the page jump by ~350px.
+              // Same fixed box as the other two panes, and the only scroller
+              // here: maxBodyHeight={null} turns off ProgressTree's own inner
+              // scroll container, which would otherwise put a second scrollbar
+              // inside this one for the same list.
               <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflowY: 'auto' }}>
                 <ProgressTree
                   modelingTaskId={task.id}
                   taskName={task.name}
                   statusCounts={runStatusCounts}
-                  maxBodyHeight={TRAINING_TAB_BODY_HEIGHT - 120}
+                  maxBodyHeight={null}
                   headerExtra={
                     <Button size="small" type="primary" ghost icon={<PlusOutlined />}
                       disabled={finalizationLocked} onClick={() => setCurrent(1)}>

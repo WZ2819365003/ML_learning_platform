@@ -47,7 +47,7 @@ export const isActive = (status) => ACTIVE_STATUSES.has((status || '').toUpperCa
  */
 export default function ProgressTree({
   modelingTaskId, taskName, autoRefresh = true, pollMs = 3000,
-  statusCounts, headerExtra, maxBodyHeight = 520,
+  statusCounts, headerExtra, maxBodyHeight = 520,   // null → let the host scroll
 }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -189,7 +189,12 @@ export default function ProgressTree({
           // Scroll container: the panel keeps one height no matter how many
           // batches 再加一组 adds, instead of pushing everything below it
           // further down the page on every click.
-          <div style={{ maxHeight: maxBodyHeight, overflowY: 'auto', paddingRight: 4 }}>
+          //
+          // Skipped when maxBodyHeight is null. A caller that already renders
+          // this inside its own fixed, scrolling box wants that box to be the
+          // only scroller — nesting a second one just produces two scrollbars
+          // for one list.
+          maxBodyHeight == null ? (
             <Tree
               treeData={treeData}
               expandedKeys={expandedKeys}
@@ -197,7 +202,17 @@ export default function ProgressTree({
               showLine
               blockNode
             />
-          </div>
+          ) : (
+            <div style={{ maxHeight: maxBodyHeight, overflowY: 'auto', paddingRight: 4 }}>
+              <Tree
+                treeData={treeData}
+                expandedKeys={expandedKeys}
+                selectable={false}
+                showLine
+                blockNode
+              />
+            </div>
+          )
         )}
       </Spin>
 
