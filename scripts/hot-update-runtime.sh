@@ -163,11 +163,16 @@ wait_for_http() {
 
 wait_for_worker() {
   local attempts="${1:-30}"
+  local ping_output
   for _ in $(seq 1 "$attempts"); do
-    if docker exec ml_platform_worker \
-      celery -A app.scheduler.celery_app inspect ping --timeout=2 2>/dev/null \
-      | grep -q pong; then
-      return 0
+    # Do not pipe this through `grep -q` under pipefail. grep exits as soon as
+    # it sees pong, which can SIGPIPE docker exec and turn a successful worker
+    # response into a failed pipeline status.
+    if ping_output="$(docker exec ml_platform_worker \
+      celery -A app.scheduler.celery_app inspect ping --timeout=2 2>/dev/null)"; then
+      if [[ "$ping_output" == *pong* ]]; then
+        return 0
+      fi
     fi
     sleep 1
   done
