@@ -95,7 +95,7 @@ COMPOSE=(docker compose -f "$COMPOSE_FILE")
 # The previous release image already contains Alembic, but not this release's
 # migration files. Mount the freshly unpacked backend source into the one-shot
 # container so schema migration still happens before the new image is built.
-MIGRATION_RUN=("${COMPOSE[@]}" run --rm -T -v "$APP_DIR/ml_platform:/app")
+MIGRATION_RUN=("${COMPOSE[@]}" run --rm -T --no-deps -v "$APP_DIR/ml_platform:/app")
 
 # Step 3: adopt an existing legacy schema once, then apply every revision. The
 # bootstrap script is conservative: it only stamps when business tables exist
@@ -103,15 +103,28 @@ MIGRATION_RUN=("${COMPOSE[@]}" run --rm -T -v "$APP_DIR/ml_platform:/app")
 "${MIGRATION_RUN[@]}" backend python scripts/ensure_alembic_baseline.py </dev/null
 "${MIGRATION_RUN[@]}" backend alembic upgrade head </dev/null
 
-# Step 4: build every application image only after the schema is ready.
-"${COMPOSE[@]}" build backend worker frontend
+# Step 4: build every application image only after the schema is ready. The
+# migrate image must be refreshed as well; otherwise a stale one-shot container
+# may not recognise the database revision applied from the mounted new source.
+"${COMPOSE[@]}" build migrate backend worker frontend
 
-# Step 5: reconcile the stack to the newly built images.
-"${COMPOSE[@]}" up -d
+# Step 5: prove the freshly built migration image can run against the upgraded
+# database, then reconcile the long-running services. Restart Nginx after any
+# backend recreation so its static upstream lookup cannot retain the old
+# container IP and expose a healthy backend as a public 502.
+"${COMPOSE[@]}" up -d --force-recreate migrate
+MIGRATE_EXIT="$(docker wait ml_platform_migrate)"
+if [[ "$MIGRATE_EXIT" != "0" ]]; then
+  "${COMPOSE[@]}" logs --no-color --tail=120 migrate >&2
+  exit "$MIGRATE_EXIT"
+fi
+"${COMPOSE[@]}" up -d backend worker frontend
+"${COMPOSE[@]}" restart nginx
 
 # Step 6a: wait for the public backend health endpoint.
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health}"
-API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:8000}"
+PUBLIC_API_BASE_URL="${PUBLIC_API_BASE_URL:-http://127.0.0.1:${PUBLIC_HTTP_PORT:-18081}}"
+API_BASE_URL="${API_BASE_URL:-$PUBLIC_API_BASE_URL}"
 for attempt in $(seq 1 60); do
   if curl -fsS --max-time 3 "$HEALTH_URL" >/dev/null; then
     break
@@ -122,6 +135,7 @@ for attempt in $(seq 1 60); do
   fi
   sleep 2
 done
+curl -fsS --max-time 5 "$PUBLIC_API_BASE_URL/health" >/dev/null
 
 # Step 6b: authenticate with server-only credentials, then prove protected
 # endpoints accept the issued bearer token. Multi-account deployments can set
@@ -149,5 +163,6 @@ curl -fsS \
   -H "Authorization: Bearer $TOKEN" \
   "$API_BASE_URL/api/v3/tasks/" >/dev/null
 
+printf '%s\n' "$(git rev-parse HEAD)" > "$(git rev-parse --git-path ml-platform-runtime-head)"
 echo "Deployment and authenticated smoke test succeeded at $ACTUAL_HEAD."
 REMOTE_SCRIPT
