@@ -10,6 +10,7 @@ set -euo pipefail
 FROM_HEAD=""
 TO_HEAD=""
 FORCE_BACKEND=false
+FORCE_FRONTEND=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,6 +24,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --force-backend)
       FORCE_BACKEND=true
+      shift
+      ;;
+    --force-frontend)
+      FORCE_FRONTEND=true
       shift
       ;;
     *)
@@ -89,6 +94,9 @@ done
 
 if [[ "$FORCE_BACKEND" == true ]]; then
   BACKEND_CHANGED=true
+fi
+if [[ "$FORCE_FRONTEND" == true ]]; then
+  FRONTEND_CHANGED=true
 fi
 
 if (( ${#FULL_DEPLOY_FILES[@]} > 0 )); then

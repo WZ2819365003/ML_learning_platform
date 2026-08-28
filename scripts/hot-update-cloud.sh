@@ -9,13 +9,23 @@ REMOTE_USER="${DEPLOY_USER:-opsadmin}"
 REMOTE_DIR="${DEPLOY_DIR:-/home/opsadmin/ml_platform}"
 BRANCH="${DEPLOY_BRANCH:-$(git branch --show-current)}"
 FORCE_BACKEND=false
+FORCE_FRONTEND=false
 
-if [[ "${1:-}" == "--force-backend" ]]; then
-  FORCE_BACKEND=true
-elif [[ $# -gt 0 ]]; then
-  echo "Usage: $0 [--force-backend]" >&2
-  exit 2
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force-backend)
+      FORCE_BACKEND=true
+      ;;
+    --force-frontend)
+      FORCE_FRONTEND=true
+      ;;
+    *)
+      echo "Usage: $0 [--force-backend] [--force-frontend]" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 
 if [[ "$HOST" == "your-server.example.com" ]]; then
   echo "Set DEPLOY_HOST before running this script." >&2
@@ -75,7 +85,8 @@ else
 fi
 
 ssh -p "$PORT" "${REMOTE_USER}@${HOST}" bash -s -- \
-  "$BRANCH" "$FROM_HEAD" "$LOCAL_HEAD" "$REMOTE_DIR" "$FORCE_BACKEND" "$REMOTE_BUNDLE" <<'REMOTE_SCRIPT'
+  "$BRANCH" "$FROM_HEAD" "$LOCAL_HEAD" "$REMOTE_DIR" \
+  "$FORCE_BACKEND" "$FORCE_FRONTEND" "$REMOTE_BUNDLE" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
 BRANCH="$1"
@@ -83,7 +94,8 @@ FROM_HEAD="$2"
 EXPECTED_HEAD="$3"
 APP_DIR="$4"
 FORCE_BACKEND="$5"
-BUNDLE_PATH="$6"
+FORCE_FRONTEND="$6"
+BUNDLE_PATH="$7"
 
 if [[ -n "$BUNDLE_PATH" ]]; then
   trap 'rm -f "$BUNDLE_PATH"' EXIT
@@ -104,6 +116,9 @@ git checkout -B "$BRANCH" "$ACTUAL_HEAD"
 ARGS=(--from "$FROM_HEAD" --to "$ACTUAL_HEAD")
 if [[ "$FORCE_BACKEND" == true ]]; then
   ARGS+=(--force-backend)
+fi
+if [[ "$FORCE_FRONTEND" == true ]]; then
+  ARGS+=(--force-frontend)
 fi
 bash scripts/hot-update-runtime.sh "${ARGS[@]}"
 REMOTE_SCRIPT
