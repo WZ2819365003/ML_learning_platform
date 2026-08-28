@@ -9,6 +9,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from fastapi import HTTPException
+from sklearn.base import is_classifier
 from sklearn.preprocessing import LabelEncoder
 from sqlalchemy import select
 
@@ -139,6 +140,19 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _is_classification_model(model: Any) -> bool:
+    """Return whether a saved model uses classification response semantics.
+
+    New tabular artifacts persist the task kind explicitly. Legacy model files
+    only contain the estimator, so use sklearn's estimator tags there. Keeping
+    this decision next to prediction adaptation prevents continuous regression
+    targets from being exposed as thousands of meaningless ``class_labels``.
+    """
+    if is_tabular_artifact(model):
+        return model.task_kind == "classification"
+    return bool(is_classifier(model))
+
+
 def predict_with_model(
     model,
     training_df: pd.DataFrame,
@@ -151,12 +165,14 @@ def predict_with_model(
     if not rows:
         raise ValueError("Prediction payload must include at least one row")
 
+    is_classification = _is_classification_model(model)
+
     if is_tabular_artifact(model):
         prediction_input = pd.DataFrame(rows)
         raw_predictions = model.predict(prediction_input)
         predictions = [_jsonable(value) for value in raw_predictions.tolist()]
-        artifact_labels = model.class_labels
-        if not artifact_labels:
+        artifact_labels = model.class_labels if is_classification else []
+        if is_classification and not artifact_labels:
             _, target_values = prepare_raw_training_frame(training_df, target_column)
             artifact_labels = sorted(target_values.dropna().unique().tolist())
         class_labels = [str(value) for value in artifact_labels]
@@ -172,20 +188,22 @@ def predict_with_model(
             target_column,
         )
         raw_predictions = model.predict(prediction_input.values)
-        if target_encoder is not None:
+        if is_classification and target_encoder is not None:
             predictions = target_encoder.inverse_transform(
                 np.asarray(raw_predictions, dtype=int)
             ).tolist()
             class_labels = [str(value) for value in target_encoder.classes_.tolist()]
         else:
             predictions = [_jsonable(value) for value in raw_predictions.tolist()]
-            class_labels = [
-                str(value) for value in sorted(pd.Series(y_reference).unique().tolist())
-            ]
+            class_labels = (
+                [str(value) for value in sorted(pd.Series(y_reference).unique().tolist())]
+                if is_classification
+                else []
+            )
         probability_input = prediction_input.values
 
     probabilities = None
-    if include_probabilities:
+    if include_probabilities and is_classification:
         try:
             probabilities = np.asarray(
                 model.predict_proba(probability_input)
@@ -255,8 +273,12 @@ async def predict_rows(
         "target_column": task.target_column,
         "rows": len(rows),
         "predictions": prediction["predictions"],
-        "class_labels": prediction["class_labels"],
     }
+
+    # Classification-only metadata. Omitting these fields for regression keeps
+    # continuous target values from looking like an enormous class vocabulary.
+    if prediction["class_labels"]:
+        response["class_labels"] = prediction["class_labels"]
 
     if prediction["probabilities"] is not None:
         response["probabilities"] = [

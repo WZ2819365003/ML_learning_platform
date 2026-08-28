@@ -421,7 +421,11 @@ async def delete_model(
     return {"message": "Model deleted", "task_id": task_id}
 
 
-@router.post("/{task_id}/predict", response_model=PredictionResponse)
+@router.post(
+    "/{task_id}/predict",
+    response_model=PredictionResponse,
+    response_model_exclude_none=True,
+)
 async def predict_model(
     task_id: str,
     request: PredictionRequest,

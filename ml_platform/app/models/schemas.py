@@ -222,7 +222,9 @@ class PredictionResponse(BaseModel):
     target_column: str
     rows: int
     predictions: list[Any] = Field(default_factory=list)
-    class_labels: list[str] = Field(default_factory=list)
+    # Classification-only metadata. Regression responses omit this field
+    # instead of presenting every continuous target value as a "class".
+    class_labels: list[str] | None = None
     probabilities: list[dict[str, float]] | None = None
 
 
