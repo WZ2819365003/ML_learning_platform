@@ -414,7 +414,7 @@ const Dashboard = () => {
                   ghost
                   icon={<LineChartOutlined />}
                   size="large"
-                  onClick={() => navigate('/training/results')}
+                  onClick={() => navigate('/models')}
                   style={{ borderRadius: 10, borderColor: 'rgba(255,255,255,0.3)' }}
                 >
                   查看可视化结果
@@ -495,7 +495,7 @@ const Dashboard = () => {
         <Col xs={24} md={14} lg={16}>
           <Card
             title="模型性能对比"
-            extra={<Button type="link" size="small" onClick={() => navigate('/training/results')}>查看详情</Button>}
+            extra={<Button type="link" size="small" onClick={() => navigate('/models')}>查看详情</Button>}
             style={{ height: '100%' }}
             bodyStyle={{ padding: '8px 20px 16px' }}
           >

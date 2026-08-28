@@ -88,12 +88,12 @@ function highlight(text, term) {
   return parts
 }
 
-export default function LogViewer({ historical, domainTaskId, isLive }) {
+export default function LogViewer({ historical, domainTaskId, isLive, streamEnabled = true }) {
   // Connect to WS. `enabled` gate avoids opening a socket when we don't
   // have a task id yet (loading state) or when caller explicitly disables.
   const { logs, connected, paused, setPaused, clear, seedHistorical } = useLogStream({
     domainTaskId: domainTaskId || null,
-    enabled: !!domainTaskId,
+    enabled: !!domainTaskId && streamEnabled,
     maxEntries: 2000,
   })
 

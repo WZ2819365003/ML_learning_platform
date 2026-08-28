@@ -37,8 +37,8 @@ import {
 import EChart from '../EChart'
 import DLDiagnostics from '../viz/DLDiagnostics'
 import PredictedActualCurve from '../viz/PredictedActualCurve'
+import { classifyVizUnavailable } from '../viz/vizAvailability'
 import { deriveRegressionViz, getVizEntries } from '../viz/vizRegistry'
-import { buildResultsUrl } from '../../utils/resultRoutes'
 
 const { Text } = Typography
 
@@ -56,13 +56,21 @@ function inferTaskType(modelType) {
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
-export function settleVizRequest(label, promise) {
+export function settleVizRequest(label, promise, key = null) {
   return promise
-    .then((data) => ({ data, error: null }))
-    .catch((error) => ({
-      data: null,
-      error: `${label}：${error?.response?.data?.detail || error?.message || '加载失败'}`,
-    }))
+    .then((data) => key
+      ? ({ data, error: null, unavailable: null })
+      : ({ data, error: null }))
+    .catch((error) => {
+      const unavailable = key ? classifyVizUnavailable(key, error) : null
+      const result = {
+        data: null,
+        error: unavailable
+          ? null
+          : `${label}：${error?.response?.data?.detail || error?.message || '加载失败'}`,
+      }
+      return key ? { ...result, unavailable } : result
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -321,7 +329,7 @@ export default function TrainingViz({
         surface: 'workbench',
       })
       const results = await Promise.all(entries.map((entry) =>
-        settleVizRequest(entry.title, entry.fetch(trainingTaskId))))
+        settleVizRequest(entry.title, entry.fetch(trainingTaskId), entry.key)))
       const payloads = Object.fromEntries(entries.map((entry, index) => [entry.key, results[index].data]))
       const derived = deriveRegressionViz(payloads.predictedVsActual)
 
@@ -370,7 +378,6 @@ export default function TrainingViz({
               深度学习模型 · {modelType || '未知'}
             </Text>
           </Space>
-          <a href={buildResultsUrl({ family: 'dl', taskId: trainingTaskId })}>查看完整 DL 结果</a>
         </Space>
         {notReady && (
           <Alert
@@ -504,15 +511,16 @@ export default function TrainingViz({
             </Col>
           )}
 
-          <Col span={24} xl={12}>
-            <VizCard
-              icon={<BarChartOutlined style={{ color: '#8b5cf6' }} />}
-              title="特征重要度 Top-10"
-              hint="模型自带的 feature_importances_ / coef_。越靠上贡献越大，为特征选择提供参考。"
-              option={options.fi}
-              empty="该模型不暴露特征重要度（如 kNN、SVM 默认内核）"
-            />
-          </Col>
+          {data.fi && (
+            <Col span={24} xl={12}>
+              <VizCard
+                icon={<BarChartOutlined style={{ color: '#8b5cf6' }} />}
+                title="特征重要度 Top-10"
+                hint="模型自带的 feature_importances_ / coef_。越靠上贡献越大，为特征选择提供参考。"
+                option={options.fi}
+              />
+            </Col>
+          )}
         </Row>
       </Space>
     </Spin>
