@@ -190,14 +190,14 @@ export const vizApi = {
   getLearningCurve(taskId) {
     return api.get(`/viz/${taskId}/learning_curve`);
   },
-  getShapSummary(taskId, params) {
-    return api.get(`/viz/${taskId}/shap_summary`, { params });
+  getShapSummary(taskId, params, config = {}) {
+    return api.get(`/viz/${taskId}/shap_summary`, { ...config, params });
   },
-  getResidualPlot(taskId) {
-    return api.get(`/viz/${taskId}/residual_plot`);
+  getResidualPlot(taskId, params) {
+    return api.get(`/viz/${taskId}/residual_plot`, { params });
   },
-  getPredictedVsActual(taskId) {
-    return api.get(`/viz/${taskId}/predicted_vs_actual`);
+  getPredictedVsActual(taskId, params) {
+    return api.get(`/viz/${taskId}/predicted_vs_actual`, { params });
   },
   getPerClass(taskId) {
     return api.get(`/viz/${taskId}/per_class`);

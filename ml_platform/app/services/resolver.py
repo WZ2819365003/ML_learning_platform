@@ -80,6 +80,11 @@ def _require_dataset_file(dataset: Dataset) -> Dataset:
 
 LEGACY_REGRESSOR_MODEL_TYPES: set[str] = {
     "linear_regression",
+    "ridge",
+    "lasso",
+    "elasticnet",
+    "svr",
+    "mlp_regressor",
     "random_forest_regressor",
     "xgboost_regressor",
     "lightgbm_regressor",

@@ -275,3 +275,28 @@ async def test_distribution_regression_returns_residual_histogram(regressor_rf_t
     assert len(payload["counts"]) == 15
     assert isinstance(payload["mean"], float)
     assert payload["std"] > 0
+
+
+async def test_regression_prediction_payload_uses_bounded_tail_window(
+    regressor_rf_task, db
+):
+    payload = await viz_service.get_predicted_vs_actual(
+        regressor_rf_task, db, max_samples=10
+    )
+
+    assert payload["sample_count"] == 10
+    assert payload["total_count"] == 38  # ceil(150 × 0.25)
+    assert payload["sample_offset"] == 28
+    assert payload["truncated"] is True
+    assert len(payload["actual"]) == len(payload["predicted"]) == 10
+
+
+async def test_regression_distribution_respects_sample_limit(regressor_rf_task, db):
+    payload = await viz_service.get_prediction_distribution(
+        regressor_rf_task, db, bins=10, max_samples=12
+    )
+
+    assert payload["sample_count"] == 12
+    assert payload["total_count"] == 38
+    assert payload["truncated"] is True
+    assert sum(payload["counts"]) == 12

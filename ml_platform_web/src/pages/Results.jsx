@@ -32,7 +32,7 @@ import {
   SlidersOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { dlApi, modelApi, vizApi } from '../services/api';
+import { modelApi } from '../services/api';
 import { formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
 import EChart from '../components/EChart';
 import ShapView from '../components/viz/ShapView';
@@ -43,6 +43,12 @@ import PRCurveChart from '../components/viz/PRCurveChart';
 import CalibrationCurveChart from '../components/viz/CalibrationCurveChart';
 import PredictionDistributionChart from '../components/viz/PredictionDistributionChart';
 import ThresholdTuningTable from '../components/viz/ThresholdTuningTable';
+import PredictedActualCurve from '../components/viz/PredictedActualCurve';
+import {
+  deriveRegressionViz,
+  getVizEntries,
+  getVizEntry,
+} from '../components/viz/vizRegistry';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -364,8 +370,10 @@ function ResultDetailView({ taskId, navigate }) {
     isDL: false,
   });
   const [vizErrors, setVizErrors] = useState({});
+  const [vizPending, setVizPending] = useState({});
   const [loading, setLoading] = useState(true);
   const [vizLoading, setVizLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('performance');
 
   const loadAllRef = useRef(null);
 
@@ -373,35 +381,45 @@ function ResultDetailView({ taskId, navigate }) {
 
   async function loadAll() {
     setLoading(true);
+    setDetail(null);
+    setVizErrors({});
+    setVizPending({});
+    setVizState(prev => Object.fromEntries(
+      Object.keys(prev).map(key => [key, key === 'taskKind' ? 'classification' : key === 'isDL' ? false : null]),
+    ));
     let modelItems = [];
     try {
       const res = await modelApi.listModels({ page_size: 200 });
       modelItems = res.items ?? [];
       setModels(modelItems);
     } catch { /* ignore */ }
-    // Keep the skeleton up until detail + taskKind + viz payloads resolve.
-    // Otherwise the page paints once with the default taskKind ('classification')
-    // and empty charts, then re-renders when data lands — a visible flicker /
-    // "wrong page first, correct after". Awaiting avoids that first bad paint.
     try {
-      await loadVisualizations(modelItems);
+      await loadVisualizations(modelItems, { releasePage: true });
     } finally {
       setLoading(false);
     }
   }
 
-  async function loadVisualizations(modelItems = models) {
+  async function loadVisualizations(modelItems = models, options = {}) {
+    const {
+      tabKey = null,
+      refreshDetail = true,
+      keys = null,
+      releasePage = false,
+    } = options;
     setVizLoading(true);
     const fallbackModel = (modelItems ?? []).find(m => m.task_id === taskId) ?? null;
-    let detailPayload = null;
+    let detailPayload = detail;
     let detailError = null;
 
-    try {
-      detailPayload = await modelApi.getModelDetail(taskId);
-      setDetail(detailPayload);
-    } catch (err) {
-      detailError = getApiErrorText(err);
-      setDetail(null);
+    if (refreshDetail || !detailPayload) {
+      try {
+        detailPayload = await modelApi.getModelDetail(taskId);
+        setDetail(detailPayload);
+      } catch (err) {
+        detailError = getApiErrorText(err);
+        setDetail(null);
+      }
     }
 
     const metrics = detailPayload?.result_metrics ?? fallbackModel?.result_metrics ?? {};
@@ -409,41 +427,37 @@ function ResultDetailView({ taskId, navigate }) {
     const taskKind = inferTaskKind(modelType, metrics);
     const dlTask = isDLTask(modelType, metrics);
 
-    // Build the fetcher list dynamically by task kind so we don't spam the
-    // backend with endpoints that will cleanly 400 with task-kind guards.
-    const baseRequests = [
-      ['featureImportance', () => vizApi.getFeatureImportance(taskId)],
-      ['learningCurve', () => vizApi.getLearningCurve(taskId)],
-      ['distribution', () => vizApi.getDistribution(taskId)],
-      ['shap', () => vizApi.getShapSummary(taskId)],
-    ];
-    // Only fetch DL epoch table when the heuristic flagged a DL task —
-    // for ML tasks /api/dl/{id}/epochs would 404 without value.
-    if (dlTask) {
-      baseRequests.push(['dlEpochs', () => dlApi.getEpochs(taskId, { page_size: 200 })]);
-    }
-    const classificationRequests = [
-      ['confusionMatrix', () => vizApi.getConfusionMatrix(taskId)],
-      ['rocCurve', () => vizApi.getRocCurve(taskId)],
-      ['perClass', () => vizApi.getPerClass(taskId)],
-      ['prCurve', () => vizApi.getPrCurve(taskId)],
-      ['calibration', () => vizApi.getCalibration(taskId)],
-      ['threshold', () => vizApi.getThreshold(taskId)],
-    ];
-    const regressionRequests = [
-      ['residualPlot', () => vizApi.getResidualPlot(taskId)],
-      ['predictedVsActual', () => vizApi.getPredictedVsActual(taskId)],
-    ];
-    const chartRequests = [
-      ...baseRequests,
-      ...(taskKind === 'regression' ? regressionRequests : classificationRequests),
-    ];
+    const family = dlTask ? 'dl' : 'ml';
+    const defaultTab = taskKind === 'regression' ? 'comparison' : 'performance';
+    const targetTab = tabKey ?? defaultTab;
+    if (tabKey == null) setActiveTab(defaultTab);
+    setVizState(prev => ({ ...prev, taskKind, isDL: dlTask }));
 
-    const results = await Promise.allSettled(chartRequests.map(([, fn]) => fn()));
+    // Detail and task type are enough to render the page shell. Chart requests
+    // continue independently, so one slow endpoint no longer holds the whole
+    // route behind a 30-second skeleton.
+    if (releasePage) setLoading(false);
+
+    let entries = keys
+      ? keys.map(getVizEntry).filter(Boolean)
+      : getVizEntries({ taskType: taskKind, family, surface: 'results', tab: targetTab });
+    if (!keys) entries = entries.filter(entry => entry.loadPolicy !== 'manual');
+    if (!entries.length) {
+      setVizErrors(prev => ({ ...prev, detail: detailError }));
+      setVizLoading(false);
+      return;
+    }
+
+    const requestKeys = entries.map(entry => entry.key);
+    setVizPending(prev => ({
+      ...prev,
+      ...Object.fromEntries(requestKeys.map(key => [key, true])),
+    }));
+    const results = await Promise.allSettled(entries.map(entry => entry.fetch(taskId)));
     const nextErrors = { detail: detailError };
     const payloads = {};
     results.forEach((r, idx) => {
-      const k = chartRequests[idx][0];
+      const k = entries[idx].key;
       if (r.status === 'fulfilled') {
         nextErrors[k] = null;
         payloads[k] = r.value;
@@ -452,31 +466,43 @@ function ResultDetailView({ taskId, navigate }) {
         payloads[k] = null;
       }
     });
-    setVizErrors(nextErrors);
+    setVizErrors(prev => ({ ...prev, ...nextErrors }));
+    const regressionDerived = deriveRegressionViz(payloads.predictedVsActual);
     setVizState(prev => ({
       ...prev,
-      confusionMatrix: payloads.confusionMatrix ?? null,
-      rocCurve: payloads.rocCurve ?? null,
-      featureImportance: payloads.featureImportance ?? null,
-      learningCurve: payloads.learningCurve ?? null,
-      residualPlot: payloads.residualPlot ?? null,
-      predictedVsActual: payloads.predictedVsActual ?? null,
-      perClass: payloads.perClass ?? null,
-      prCurve: payloads.prCurve ?? null,
-      calibration: payloads.calibration ?? null,
-      threshold: payloads.threshold ?? null,
-      distribution: payloads.distribution ?? null,
-      shap: payloads.shap ?? null,
-      dlEpochs: payloads.dlEpochs ?? null,
+      ...payloads,
+      ...(regressionDerived.residualPlot ? { residualPlot: regressionDerived.residualPlot } : {}),
+      ...(regressionDerived.distribution ? { distribution: regressionDerived.distribution } : {}),
       taskKind,
       isDL: dlTask,
     }));
     // Only surface a toast if every single endpoint failed; otherwise the
     // per-chart inline error is enough (no N-popup spam).
-    const chartKeys = chartRequests.map(([k]) => k);
-    const allFailed = chartKeys.every(k => nextErrors[k]);
+    const allFailed = requestKeys.every(k => nextErrors[k]);
     if (allFailed) message.error('加载可视化详情失败');
+    setVizPending(prev => ({
+      ...prev,
+      ...Object.fromEntries(requestKeys.map(key => [key, false])),
+    }));
     setVizLoading(false);
+  }
+
+  function handleTabChange(nextTab) {
+    setActiveTab(nextTab);
+    const entries = getVizEntries({
+      taskType: vizState.taskKind,
+      family: vizState.isDL ? 'dl' : 'ml',
+      surface: 'results',
+      tab: nextTab,
+    }).filter(entry => entry.loadPolicy !== 'manual');
+    const unloaded = entries.filter(entry => !vizState[entry.key] && !vizPending[entry.key]);
+    if (unloaded.length) {
+      void loadVisualizations(models, {
+        tabKey: nextTab,
+        refreshDetail: false,
+        keys: unloaded.map(entry => entry.key),
+      });
+    }
   }
 
   loadAllRef.current = loadAll;
@@ -485,6 +511,9 @@ function ResultDetailView({ taskId, navigate }) {
   // (with retry) when that specific endpoint failed, empty state otherwise.
   function ChartSlot({ errorKey, hasData, emptyText, children }) {
     const err = vizErrors[errorKey];
+    if (vizPending[errorKey]) {
+      return <Skeleton active paragraph={{ rows: 5 }} style={{ padding: '28px 8px' }} />;
+    }
     if (err) {
       return (
         <Alert
@@ -493,7 +522,10 @@ function ResultDetailView({ taskId, navigate }) {
           message="图表加载失败"
           description={err}
           action={
-            <Button size="small" onClick={() => void loadVisualizations()} icon={<ReloadOutlined />}>
+            <Button size="small" onClick={() => void loadVisualizations(models, {
+              refreshDetail: false,
+              keys: [errorKey],
+            })} icon={<ReloadOutlined />}>
               重试
             </Button>
           }
@@ -828,6 +860,21 @@ function ResultDetailView({ taskId, navigate }) {
           点应密集地落在绿色 <code>y = x</code> 对角线两侧；超出黄色虚线 ±1σ 的样本属于较大误差。
         </Paragraph>
       </Card>
+      <Card
+        title={<Space><LineChartOutlined style={{ color: '#0f766e' }} />预测值 vs 实际值（时序曲线）</Space>}
+        {...cardProps('#0f766e')}
+      >
+        <ChartSlot
+          errorKey="predictedVsActual"
+          hasData={!!vizState.predictedVsActual}
+          emptyText="暂无预测-真实值曲线数据"
+        >
+          <PredictedActualCurve payload={vizState.predictedVsActual} height={360} />
+        </ChartSlot>
+        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+          两条线用于定位具体误差区间：可观察峰值是否被削平、预测是否整体滞后。曲线与散点图复用同一次预测结果，不重复计算模型。
+        </Paragraph>
+      </Card>
     </Space>
   );
 
@@ -957,9 +1004,26 @@ function ResultDetailView({ taskId, navigate }) {
   const explanationTab = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card title={<Space><BulbOutlined style={{ color: '#f59e0b' }} />SHAP / 特征解释</Space>} {...cardProps('#f59e0b')}>
-        <ChartSlot errorKey="shap" hasData={!!vizState.shap} emptyText="暂无 SHAP 解释数据">
-          <ShapView payload={vizState.shap} />
-        </ChartSlot>
+        {!vizState.shap && !vizErrors.shap && !vizPending.shap ? (
+          <Empty
+            description="SHAP 需要额外计算，部分模型可能耗时数分钟"
+            style={{ padding: '48px 0' }}
+          >
+            <Button
+              type="primary"
+              onClick={() => void loadVisualizations(models, {
+                refreshDetail: false,
+                keys: ['shap'],
+              })}
+            >
+              开始计算 SHAP
+            </Button>
+          </Empty>
+        ) : (
+          <ChartSlot errorKey="shap" hasData={!!vizState.shap} emptyText="暂无 SHAP 解释数据">
+            <ShapView payload={vizState.shap} />
+          </ChartSlot>
+        )}
       </Card>
       <Card title={<Space><BarChartOutlined style={{ color: '#10b981' }} />模型原生特征重要性 (Top 10)</Space>} {...cardProps('#10b981')}>
         <ChartSlot errorKey="featureImportance" hasData={!!vizState.featureImportance}
@@ -1135,7 +1199,9 @@ function ResultDetailView({ taskId, navigate }) {
           </Button>
           <Title level={2} style={{ margin: 0 }}>结果可视化详情</Title>
         </Space>
-        <Button icon={<ReloadOutlined />} loading={vizLoading} onClick={() => void loadVisualizations()}>
+        <Button icon={<ReloadOutlined />} loading={vizLoading} onClick={() => void loadVisualizations(models, {
+          tabKey: activeTab,
+        })}>
           刷新
         </Button>
       </Space>
@@ -1197,7 +1263,8 @@ function ResultDetailView({ taskId, navigate }) {
               // classification view) when switching to a regression layout
               // whose roster doesn't include that key.
               key={taskKind}
-              defaultActiveKey={taskKind === 'regression' ? 'comparison' : 'performance'}
+              activeKey={activeTab}
+              onChange={handleTabChange}
               items={tabItems}
             />
           </Card>

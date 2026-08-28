@@ -31,4 +31,9 @@ describe('buildPredictedActualOption', () => {
     expect(o.series[0].data).toEqual([1, 2])
     expect(o.xAxis.data).toEqual([1, 2])
   })
+
+  it('keeps original test-set indexes for a bounded tail payload', () => {
+    const o = buildPredictedActualOption([7, 8, 9], [6.8, 8.1, 9.2], 200, 997)
+    expect(o.xAxis.data).toEqual([998, 999, 1000])
+  })
 })

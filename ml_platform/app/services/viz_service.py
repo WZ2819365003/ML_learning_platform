@@ -197,12 +197,28 @@ async def get_shap_summary(task_id: str, db: AsyncSession, max_samples: int = 20
 # ---------------------------------------------------------------------------
 
 
-async def get_residual_plot(task_id: str, db: AsyncSession) -> dict:
+def _tail_evaluation_rows(X_test, y_test, max_samples: int):
+    """Return a deterministic tail window without aggregating chart values.
+
+    Visualization endpoints do not need to predict an entire large hold-out
+    set merely to draw at most 1,000 points.  This is a view window rather than
+    statistical resampling: rows keep their original order and values.
+    """
+    total = int(len(y_test))
+    limit = max(1, min(int(max_samples), total)) if total else 0
+    start = max(0, total - limit)
+    return X_test[start:], y_test[start:], total, start
+
+
+async def get_residual_plot(
+    task_id: str, db: AsyncSession, max_samples: int = 1000
+) -> dict:
     """Return residuals (y_true - y_pred) and predicted values for residual plot."""
     prepared = await resolve_and_load(task_id, db, stratified=False)
     model = prepared["model"]
-    X_test = prepared["X_test"]
-    y_test = prepared["y_test"]
+    X_test, y_test, total_count, sample_offset = _tail_evaluation_rows(
+        prepared["X_test"], prepared["y_test"], max_samples
+    )
 
     y_pred = model.predict(X_test)
     residuals = (y_test - y_pred).tolist()
@@ -214,15 +230,22 @@ async def get_residual_plot(task_id: str, db: AsyncSession) -> dict:
         "residuals": [round(float(v), 4) for v in residuals],
         "mean_residual": round(float(np.mean(residuals)), 4),
         "std_residual": round(float(np.std(residuals)), 4),
+        "sample_count": len(y_pred_list),
+        "total_count": total_count,
+        "sample_offset": sample_offset,
+        "truncated": len(y_pred_list) < total_count,
     }
 
 
-async def get_predicted_vs_actual(task_id: str, db: AsyncSession) -> dict:
-    """Return predicted vs actual values for scatter plot."""
+async def get_predicted_vs_actual(
+    task_id: str, db: AsyncSession, max_samples: int = 1000
+) -> dict:
+    """Return a bounded predicted/actual window for scatter and line charts."""
     prepared = await resolve_and_load(task_id, db, stratified=False)
     model = prepared["model"]
-    X_test = prepared["X_test"]
-    y_test = prepared["y_test"]
+    X_test, y_test, total_count, sample_offset = _tail_evaluation_rows(
+        prepared["X_test"], prepared["y_test"], max_samples
+    )
 
     y_pred = model.predict(X_test)
 
@@ -230,6 +253,10 @@ async def get_predicted_vs_actual(task_id: str, db: AsyncSession) -> dict:
         "task_id": task_id,
         "actual": [round(float(v), 4) for v in y_test.tolist()],
         "predicted": [round(float(v), 4) for v in y_pred.tolist()],
+        "sample_count": int(len(y_pred)),
+        "total_count": total_count,
+        "sample_offset": sample_offset,
+        "truncated": int(len(y_pred)) < total_count,
     }
 
 
@@ -482,7 +509,7 @@ async def get_threshold_analysis(
 
 
 async def get_prediction_distribution(
-    task_id: str, db: AsyncSession, bins: int = 30
+    task_id: str, db: AsyncSession, bins: int = 30, max_samples: int = 5000
 ) -> dict:
     """Prediction distribution for classification (probability histogram)
     or regression (residual histogram).
@@ -494,8 +521,9 @@ async def get_prediction_distribution(
     prepared = await resolve_and_load(task_id, db)
     task = prepared["task"]
     model = prepared["model"]
-    X_test = prepared["X_test"]
-    y_test = prepared["y_test"]
+    X_test, y_test, total_count, sample_offset = _tail_evaluation_rows(
+        prepared["X_test"], prepared["y_test"], max_samples
+    )
     bins = max(10, min(100, int(bins)))
 
     if is_regressor(task.model_type):
@@ -511,6 +539,10 @@ async def get_prediction_distribution(
             "std": round(float(np.std(residuals)), 4),
             "min": round(float(np.min(residuals)), 4),
             "max": round(float(np.max(residuals)), 4),
+            "sample_count": int(len(residuals)),
+            "total_count": total_count,
+            "sample_offset": sample_offset,
+            "truncated": int(len(residuals)) < total_count,
         }
 
     class_labels = prepared["class_labels"]
@@ -532,6 +564,9 @@ async def get_prediction_distribution(
             "bin_edges": [round(float(e), 4) for e in edges],
             "counts": [int(c) for c in counts],
             "n_classes": int(y_proba.shape[1]),
+            "sample_count": int(len(max_probs)),
+            "total_count": total_count,
+            "truncated": int(len(max_probs)) < total_count,
         }
 
     positive = classes[1]
@@ -548,4 +583,7 @@ async def get_prediction_distribution(
         "bin_edges": [round(float(e), 4) for e in edges],
         "positive_counts": [int(c) for c in pos_counts],
         "negative_counts": [int(c) for c in neg_counts],
+        "sample_count": int(len(positive_scores)),
+        "total_count": total_count,
+        "truncated": int(len(positive_scores)) < total_count,
     }

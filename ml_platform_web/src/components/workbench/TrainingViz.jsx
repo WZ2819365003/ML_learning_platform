@@ -35,9 +35,9 @@ import {
   InfoCircleOutlined,
 } from '@ant-design/icons'
 import EChart from '../EChart'
-import { vizApi } from '../../services/api'
 import DLDiagnostics from '../viz/DLDiagnostics'
 import PredictedActualCurve from '../viz/PredictedActualCurve'
+import { deriveRegressionViz, getVizEntries } from '../viz/vizRegistry'
 
 const { Text } = Typography
 
@@ -48,7 +48,9 @@ const { Text } = Typography
 function inferTaskType(modelType) {
   if (!modelType) return 'classification'
   const m = String(modelType).toLowerCase()
-  if (m.includes('regress') || m.endsWith('regressor')) return 'regression'
+  if (m.includes('regress') || m.endsWith('regressor') || [
+    'ridge', 'lasso', 'elasticnet', 'svr', 'mlp_regressor',
+  ].includes(m)) return 'regression'
   return 'classification'
 }
 
@@ -312,29 +314,25 @@ export default function TrainingViz({
     setLoading(true)
     setError(null)
     try {
-      if (resolvedTaskType === 'classification') {
-        const [cm, roc, fi, lc] = await Promise.all([
-          settleVizRequest('混淆矩阵', vizApi.getConfusionMatrix(trainingTaskId)),
-          settleVizRequest('ROC 曲线', vizApi.getRocCurve(trainingTaskId)),
-          settleVizRequest('特征重要度', vizApi.getFeatureImportance(trainingTaskId)),
-          settleVizRequest('学习曲线', vizApi.getLearningCurve(trainingTaskId)),
-        ])
-        setData({
-          cm: cm.data, roc: roc.data, fi: fi.data, lc: lc.data, res: null, pva: null,
-        })
-        setError([cm, roc, fi, lc].map((result) => result.error).filter(Boolean).join('；') || null)
-      } else {
-        const [res, pva, fi, lc] = await Promise.all([
-          settleVizRequest('残差图', vizApi.getResidualPlot(trainingTaskId)),
-          settleVizRequest('预测 vs 真实', vizApi.getPredictedVsActual(trainingTaskId)),
-          settleVizRequest('特征重要度', vizApi.getFeatureImportance(trainingTaskId)),
-          settleVizRequest('学习曲线', vizApi.getLearningCurve(trainingTaskId)),
-        ])
-        setData({
-          cm: null, roc: null, fi: fi.data, lc: lc.data, res: res.data, pva: pva.data,
-        })
-        setError([res, pva, fi, lc].map((result) => result.error).filter(Boolean).join('；') || null)
-      }
+      const entries = getVizEntries({
+        taskType: resolvedTaskType,
+        family: 'ml',
+        surface: 'workbench',
+      })
+      const results = await Promise.all(entries.map((entry) =>
+        settleVizRequest(entry.title, entry.fetch(trainingTaskId))))
+      const payloads = Object.fromEntries(entries.map((entry, index) => [entry.key, results[index].data]))
+      const derived = deriveRegressionViz(payloads.predictedVsActual)
+
+      setData({
+        cm: payloads.confusionMatrix ?? null,
+        roc: payloads.rocCurve ?? null,
+        fi: payloads.featureImportance ?? null,
+        lc: payloads.learningCurve ?? null,
+        res: derived.residualPlot,
+        pva: payloads.predictedVsActual ?? null,
+      })
+      setError(results.map((result) => result.error).filter(Boolean).join('；') || null)
     } catch (e) {
       setError(e?.message || '加载训练可视化失败')
     } finally {

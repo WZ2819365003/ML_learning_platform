@@ -83,19 +83,21 @@ async def shap_summary_route(
 @router.get("/{task_id}/residual_plot")
 async def residual_plot_route(
     task_id: str = Depends(owned_task_id),
+    max_samples: int = Query(1000, ge=50, le=5000),
     db: AsyncSession = Depends(get_db),
 ):
     """Return residuals vs predicted values for regression tasks."""
-    return await get_residual_plot(task_id, db)
+    return await get_residual_plot(task_id, db, max_samples=max_samples)
 
 
 @router.get("/{task_id}/predicted_vs_actual")
 async def predicted_vs_actual_route(
     task_id: str = Depends(owned_task_id),
+    max_samples: int = Query(1000, ge=50, le=5000),
     db: AsyncSession = Depends(get_db),
 ):
     """Return predicted vs actual scatter data for regression tasks."""
-    return await get_predicted_vs_actual(task_id, db)
+    return await get_predicted_vs_actual(task_id, db, max_samples=max_samples)
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +148,11 @@ async def threshold_route(
 async def distribution_route(
     task_id: str = Depends(owned_task_id),
     bins: int = Query(30, ge=10, le=100),
+    max_samples: int = Query(5000, ge=100, le=20000),
     db: AsyncSession = Depends(get_db),
 ):
     """Prediction distribution — probability histogram (classification)
     or residual histogram (regression)."""
-    return await get_prediction_distribution(task_id, db, bins=bins)
+    return await get_prediction_distribution(
+        task_id, db, bins=bins, max_samples=max_samples
+    )
