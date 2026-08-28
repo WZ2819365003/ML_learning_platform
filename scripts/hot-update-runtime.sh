@@ -149,22 +149,29 @@ rollback() {
 }
 trap 'rollback $?' ERR
 
-wait_for_health() {
-  local container="$1"
+wait_for_http() {
+  local url="$1"
   local attempts="${2:-60}"
-  local status
   for _ in $(seq 1 "$attempts"); do
-    status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container")"
-    if [[ "$status" == "healthy" || "$status" == "running" ]]; then
+    if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
       return 0
     fi
-    if [[ "$status" == "unhealthy" || "$status" == "exited" || "$status" == "dead" ]]; then
-      docker logs --tail=80 "$container" >&2 || true
-      return 1
-    fi
-    sleep 2
+    sleep 1
   done
-  docker logs --tail=80 "$container" >&2 || true
+  return 1
+}
+
+wait_for_worker() {
+  local attempts="${1:-30}"
+  for _ in $(seq 1 "$attempts"); do
+    if docker exec ml_platform_worker \
+      celery -A app.scheduler.celery_app inspect ping --timeout=2 2>/dev/null \
+      | grep -q pong; then
+      return 0
+    fi
+    sleep 1
+  done
+  docker logs --tail=80 ml_platform_worker >&2 || true
   return 1
 }
 
@@ -179,8 +186,8 @@ if [[ "$BACKEND_CHANGED" == true ]]; then
     docker exec "$container" sh -c 'mv /app/app /app/app.previous && mv /app/app.next /app/app'
   done
   docker restart ml_platform_backend ml_platform_worker >/dev/null
-  wait_for_health ml_platform_backend 60
-  wait_for_health ml_platform_worker 90
+  wait_for_http http://127.0.0.1:8000/health 60
+  wait_for_worker 30
 fi
 
 if [[ "$FRONTEND_CHANGED" == true ]]; then
@@ -203,7 +210,7 @@ if [[ "$FRONTEND_CHANGED" == true ]]; then
   docker exec ml_platform_frontend sh -c 'mv /app/dist /app/dist.previous && mv /app/dist.next /app/dist'
   FRONTEND_SWAPPED=true
   docker restart ml_platform_frontend >/dev/null
-  wait_for_health ml_platform_frontend 60
+  wait_for_http http://127.0.0.1:3000 60
 fi
 
 # Check both the direct backend and the real public path through Nginx. Docker

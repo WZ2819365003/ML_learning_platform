@@ -7,7 +7,6 @@ HOST="${DEPLOY_HOST:-your-server.example.com}"
 PORT="${DEPLOY_PORT:-22}"
 REMOTE_USER="${DEPLOY_USER:-opsadmin}"
 REMOTE_DIR="${DEPLOY_DIR:-/home/opsadmin/ml_platform}"
-REPO_URL="${DEPLOY_REPO:-https://github.com/WZ2819365003/ML_learning_platform.git}"
 BRANCH="${DEPLOY_BRANCH:-$(git branch --show-current)}"
 FORCE_BACKEND=false
 
@@ -32,16 +31,9 @@ if [[ "$LOCAL_HEAD" != "$REMOTE_BRANCH_HEAD" ]]; then
   exit 3
 fi
 
-ssh -p "$PORT" "${REMOTE_USER}@${HOST}" bash -s -- \
-  "$REPO_URL" "$BRANCH" "$LOCAL_HEAD" "$REMOTE_DIR" "$FORCE_BACKEND" <<'REMOTE_SCRIPT'
+FROM_HEAD="$(ssh -p "$PORT" "${REMOTE_USER}@${HOST}" bash -s -- "$REMOTE_DIR" <<'REMOTE_STATE'
 set -euo pipefail
-
-REPO_URL="$1"
-BRANCH="$2"
-EXPECTED_HEAD="$3"
-APP_DIR="$4"
-FORCE_BACKEND="$5"
-
+APP_DIR="$1"
 cd "$APP_DIR"
 if [[ ! -d .git ]]; then
   echo "Cloud directory is not a git checkout; run the full deploy once first." >&2
@@ -59,14 +51,53 @@ if [[ -s "$RUNTIME_HEAD_FILE" ]]; then
 else
   FROM_HEAD="$(git rev-parse HEAD)"
 fi
+printf '%s\n' "$FROM_HEAD"
+REMOTE_STATE
+)"
 
-git remote set-url origin "$REPO_URL"
-git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=60 \
-  fetch --depth=50 --prune origin "$BRANCH"
-ACTUAL_HEAD="$(git rev-parse FETCH_HEAD)"
-if [[ "$ACTUAL_HEAD" != "$EXPECTED_HEAD" ]]; then
-  echo "Cloud fetch mismatch: expected $EXPECTED_HEAD, got $ACTUAL_HEAD" >&2
+git cat-file -e "${FROM_HEAD}^{commit}"
+if ! git merge-base --is-ancestor "$FROM_HEAD" "$LOCAL_HEAD"; then
+  echo "Cloud runtime is not an ancestor of the target commit; full deployment is required." >&2
   exit 6
+fi
+
+BUNDLE_PATH=""
+BUNDLE_DIR=""
+if [[ "$FROM_HEAD" != "$LOCAL_HEAD" ]]; then
+  BUNDLE_DIR="$(mktemp -d)"
+  trap 'rm -rf "$BUNDLE_DIR"' EXIT
+  BUNDLE_PATH="$BUNDLE_DIR/ml-platform.bundle"
+  git bundle create "$BUNDLE_PATH" "$BRANCH" "^$FROM_HEAD"
+  REMOTE_BUNDLE="/tmp/ml-platform-${LOCAL_HEAD}.bundle"
+  scp -q -P "$PORT" "$BUNDLE_PATH" "${REMOTE_USER}@${HOST}:$REMOTE_BUNDLE"
+else
+  REMOTE_BUNDLE=""
+fi
+
+ssh -p "$PORT" "${REMOTE_USER}@${HOST}" bash -s -- \
+  "$BRANCH" "$FROM_HEAD" "$LOCAL_HEAD" "$REMOTE_DIR" "$FORCE_BACKEND" "$REMOTE_BUNDLE" <<'REMOTE_SCRIPT'
+set -euo pipefail
+
+BRANCH="$1"
+FROM_HEAD="$2"
+EXPECTED_HEAD="$3"
+APP_DIR="$4"
+FORCE_BACKEND="$5"
+BUNDLE_PATH="$6"
+
+if [[ -n "$BUNDLE_PATH" ]]; then
+  trap 'rm -f "$BUNDLE_PATH"' EXIT
+fi
+cd "$APP_DIR"
+if [[ -n "$BUNDLE_PATH" ]]; then
+  git fetch "$BUNDLE_PATH" "refs/heads/$BRANCH"
+  ACTUAL_HEAD="$(git rev-parse FETCH_HEAD)"
+else
+  ACTUAL_HEAD="$(git rev-parse HEAD)"
+fi
+if [[ "$ACTUAL_HEAD" != "$EXPECTED_HEAD" ]]; then
+  echo "Cloud bundle mismatch: expected $EXPECTED_HEAD, got $ACTUAL_HEAD" >&2
+  exit 7
 fi
 git checkout -B "$BRANCH" "$ACTUAL_HEAD"
 
