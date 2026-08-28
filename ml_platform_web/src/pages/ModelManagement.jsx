@@ -40,6 +40,7 @@ import echarts from '../utils/echarts';
 import api, { dataApi, deployApi, dlApi, modelApi, timesfmApi, trainingApi } from '../services/api';
 import TrainingLogModal from '../components/workbench/TrainingLogModal';
 import { formatBytes, formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
+import { buildResultsUrl } from '../utils/resultRoutes';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -730,7 +731,10 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
                 <Button
                   type="primary"
                   icon={<TrophyOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/dl/results?taskId=${detail.id}`); }}
+                  onClick={() => {
+                    setDetailOpen(false);
+                    navigate(buildResultsUrl({ family: 'dl', taskId: detail.id }));
+                  }}
                 >
                   查看结果可视化
                 </Button>

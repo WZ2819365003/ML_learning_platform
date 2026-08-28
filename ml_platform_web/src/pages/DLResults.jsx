@@ -9,6 +9,7 @@ import { ArrowLeftOutlined, DownloadOutlined, EyeOutlined, ReloadOutlined } from
 import DLDiagnostics from '../components/viz/DLDiagnostics';
 import { dlApi } from '../services/api';
 import { formatDateTime } from '../utils/formatters'
+import { buildResultsUrl } from '../utils/resultRoutes'
 
 const { Title, Text } = Typography;
 
@@ -121,7 +122,7 @@ function DLResultListView({ navigate }) {
         <Button
           size="small"
           icon={<EyeOutlined />}
-          onClick={() => navigate(`/dl/results?taskId=${r.id}`)}
+          onClick={() => navigate(buildResultsUrl({ family: 'dl', taskId: r.id }))}
         >
           查看
         </Button>
@@ -149,7 +150,7 @@ function DLResultListView({ navigate }) {
           locale={{ emptyText: <Empty description="还没有完成训练的深度学习任务" /> }}
           onRow={r => ({
             style: { cursor: 'pointer' },
-            onClick: () => navigate(`/dl/results?taskId=${r.id}`),
+            onClick: () => navigate(buildResultsUrl({ family: 'dl', taskId: r.id })),
           })}
         />
         <div style={{ marginTop: 16, textAlign: 'right' }}>
@@ -205,7 +206,7 @@ function DLResultDetailView({ taskId, navigate }) {
     <div>
       <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 24 }}>
         <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/dl/results')}>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(buildResultsUrl({ family: 'dl' }))}>
             返回列表
           </Button>
           <Title level={2} style={{ margin: 0 }}>深度学习结果详情</Title>

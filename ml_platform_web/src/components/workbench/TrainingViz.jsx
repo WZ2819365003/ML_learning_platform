@@ -38,6 +38,7 @@ import EChart from '../EChart'
 import DLDiagnostics from '../viz/DLDiagnostics'
 import PredictedActualCurve from '../viz/PredictedActualCurve'
 import { deriveRegressionViz, getVizEntries } from '../viz/vizRegistry'
+import { buildResultsUrl } from '../../utils/resultRoutes'
 
 const { Text } = Typography
 
@@ -369,7 +370,7 @@ export default function TrainingViz({
               深度学习模型 · {modelType || '未知'}
             </Text>
           </Space>
-          <a href={`/dl/results?taskId=${trainingTaskId}`}>查看完整 DL 结果</a>
+          <a href={buildResultsUrl({ family: 'dl', taskId: trainingTaskId })}>查看完整 DL 结果</a>
         </Space>
         {notReady && (
           <Alert

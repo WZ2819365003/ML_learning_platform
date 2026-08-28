@@ -49,6 +49,7 @@ import {
   getVizEntries,
   getVizEntry,
 } from '../components/viz/vizRegistry';
+import { classifyVizUnavailable } from '../components/viz/vizAvailability';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -370,6 +371,7 @@ function ResultDetailView({ taskId, navigate }) {
     isDL: false,
   });
   const [vizErrors, setVizErrors] = useState({});
+  const [vizUnavailable, setVizUnavailable] = useState({});
   const [vizPending, setVizPending] = useState({});
   const [loading, setLoading] = useState(true);
   const [vizLoading, setVizLoading] = useState(false);
@@ -383,6 +385,7 @@ function ResultDetailView({ taskId, navigate }) {
     setLoading(true);
     setDetail(null);
     setVizErrors({});
+    setVizUnavailable({});
     setVizPending({});
     setVizState(prev => Object.fromEntries(
       Object.keys(prev).map(key => [key, key === 'taskKind' ? 'classification' : key === 'isDL' ? false : null]),
@@ -455,18 +458,22 @@ function ResultDetailView({ taskId, navigate }) {
     }));
     const results = await Promise.allSettled(entries.map(entry => entry.fetch(taskId)));
     const nextErrors = { detail: detailError };
+    const nextUnavailable = {};
     const payloads = {};
     results.forEach((r, idx) => {
       const k = entries[idx].key;
       if (r.status === 'fulfilled') {
         nextErrors[k] = null;
+        nextUnavailable[k] = null;
         payloads[k] = r.value;
       } else {
-        nextErrors[k] = getApiErrorText(r.reason);
+        nextUnavailable[k] = classifyVizUnavailable(k, r.reason);
+        nextErrors[k] = nextUnavailable[k] ? null : getApiErrorText(r.reason);
         payloads[k] = null;
       }
     });
     setVizErrors(prev => ({ ...prev, ...nextErrors }));
+    setVizUnavailable(prev => ({ ...prev, ...nextUnavailable }));
     const regressionDerived = deriveRegressionViz(payloads.predictedVsActual);
     setVizState(prev => ({
       ...prev,
@@ -495,7 +502,9 @@ function ResultDetailView({ taskId, navigate }) {
       surface: 'results',
       tab: nextTab,
     }).filter(entry => entry.loadPolicy !== 'manual');
-    const unloaded = entries.filter(entry => !vizState[entry.key] && !vizPending[entry.key]);
+    const unloaded = entries.filter(entry => (
+      !vizState[entry.key] && !vizPending[entry.key] && !vizUnavailable[entry.key]
+    ));
     if (unloaded.length) {
       void loadVisualizations(models, {
         tabKey: nextTab,
@@ -530,6 +539,15 @@ function ResultDetailView({ taskId, navigate }) {
             </Button>
           }
           style={{ margin: '40px 0' }}
+        />
+      );
+    }
+    if (vizUnavailable[errorKey]) {
+      return (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={vizUnavailable[errorKey]}
+          style={{ padding: '52px 20px' }}
         />
       );
     }

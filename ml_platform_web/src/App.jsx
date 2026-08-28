@@ -10,13 +10,12 @@ const Dashboard = lazy(() => import('./pages/Dashboard'))
 const DataManagement = lazy(() => import('./pages/DataManagement'))
 const TrainingConfig = lazy(() => import('./pages/TrainingConfig'))
 const TrainingMonitor = lazy(() => import('./pages/TrainingMonitor'))
-const Results = lazy(() => import('./pages/Results'))
+const UnifiedResults = lazy(() => import('./pages/UnifiedResults'))
 const ModelManagement = lazy(() => import('./pages/ModelManagement'))
 const ModelDeploy = lazy(() => import('./pages/ModelDeploy'))
 const Settings = lazy(() => import('./pages/Settings'))
 const DLConfig = lazy(() => import('./pages/DLConfig'))
 const DLMonitor = lazy(() => import('./pages/DLMonitor'))
-const DLResults = lazy(() => import('./pages/DLResults'))
 const TSConfig = lazy(() => import('./pages/TSConfig'))
 const TSMonitor = lazy(() => import('./pages/TSMonitor'))
 const TSResults = lazy(() => import('./pages/TSResults'))
@@ -86,13 +85,13 @@ function AppShell() {
               <Route path="/training/config" element={<TrainingConfig />} />
               <Route path="/training/monitor" element={<TrainingMonitor />} />
               <Route path="/results" element={<Navigate to="/training/results" replace />} />
-              <Route path="/training/results" element={<Results />} />
+              <Route path="/training/results" element={<UnifiedResults />} />
               <Route path="/models" element={<ModelManagement />} />
               <Route path="/deploy" element={<ModelDeploy />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/dl/config" element={<DLConfig />} />
               <Route path="/dl/monitor" element={<DLMonitor />} />
-              <Route path="/dl/results" element={<DLResults />} />
+              <Route path="/dl/results" element={<UnifiedResults />} />
 
               <Route path="/timesfm" element={<Navigate to="/ts/tasks" replace />} />
               <Route path="/ts/tasks" element={<TSMonitor />} />

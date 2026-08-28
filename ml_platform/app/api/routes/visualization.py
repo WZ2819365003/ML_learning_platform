@@ -73,7 +73,7 @@ async def learning_curve_route(
 @router.get("/{task_id}/shap_summary")
 async def shap_summary_route(
     task_id: str = Depends(owned_task_id),
-    max_samples: int = Query(100, ge=10, le=500, description="Max samples for SHAP"),
+    max_samples: int = Query(100, ge=1, le=500, description="Max samples for SHAP"),
     db: AsyncSession = Depends(get_db),
 ):
     """Return SHAP values for model explainability."""

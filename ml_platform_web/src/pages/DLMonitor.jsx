@@ -12,6 +12,7 @@ import {
 import EChart from '../components/EChart';
 import { dlApi, withWsToken } from '../services/api';
 import { formatDateTime, parseServerDate } from '../utils/formatters'
+import { buildResultsUrl } from '../utils/resultRoutes'
 
 const { Text, Title } = Typography;
 
@@ -310,7 +311,7 @@ function DLTaskListView({ navigate }) {
                 size="small"
                 type="primary"
                 icon={<TrophyOutlined />}
-                onClick={() => navigate(`/dl/results?taskId=${record.id}`)}
+                onClick={() => navigate(buildResultsUrl({ family: 'dl', taskId: record.id }))}
               >
                 结果
               </Button>
@@ -577,7 +578,7 @@ function DLTaskDetailView({ taskId, navigate }) {
             <Button
               icon={<TrophyOutlined />}
               type="primary"
-              onClick={() => navigate(`/dl/results?taskId=${taskId}`)}
+              onClick={() => navigate(buildResultsUrl({ family: 'dl', taskId }))}
             >
               查看结果
             </Button>
