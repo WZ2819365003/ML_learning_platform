@@ -72,9 +72,16 @@ export default function UnifiedResultDetail({ family, taskId }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const raw = family === 'dl'
-        ? await dlApi.getStatus(taskId)
-        : await modelApi.getModelDetail(taskId)
+      let raw
+      if (family === 'dl') {
+        const [status, detail] = await Promise.all([
+          dlApi.getStatus(taskId),
+          modelApi.getModelDetail(taskId),
+        ])
+        raw = { ...detail, ...status, dataset: detail?.dataset ?? status?.dataset }
+      } else {
+        raw = await modelApi.getModelDetail(taskId)
+      }
       setResult(normalizeResult(raw, family, taskId))
     } catch (err) {
       message.error(err?.response?.data?.detail || '加载模型结果失败')
