@@ -5,13 +5,15 @@ import {
   Space, Statistic, Tabs, Tag, Typography, message,
 } from 'antd'
 import {
-  ArrowLeftOutlined, BarChartOutlined, FileTextOutlined,
-  ReloadOutlined, SafetyCertificateOutlined,
+  ArrowLeftOutlined, BarChartOutlined, DownloadOutlined, FileTextOutlined,
+  LineChartOutlined, ReloadOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons'
 
 import ResultLogPanel from './ResultLogPanel'
 import ModelExplainPanel from './ModelExplainPanel'
 import TrainingViz from '../workbench/TrainingViz'
+import BacktestPanel from './BacktestPanel'
+import ModelDownloadPanel from './ModelDownloadPanel'
 import { getResultViewEntries } from './resultViewRegistry'
 import { dlApi, modelApi } from '../../services/api'
 import { formatDateTime, metricLabels } from '../../utils/formatters'
@@ -126,6 +128,17 @@ export default function UnifiedResultDetail({ family, taskId }) {
         metrics={result.metrics}
       />
     ),
+    backtest: (
+      <BacktestPanel
+        family={family}
+        taskId={taskId}
+        taskType={result.taskType}
+        metrics={result.metrics}
+      />
+    ),
+    download: (
+      <ModelDownloadPanel family={family} taskId={taskId} result={result} />
+    ),
     explain: (
       <ModelExplainPanel taskId={taskId} modelType={result.modelType} />
     ),
@@ -134,6 +147,8 @@ export default function UnifiedResultDetail({ family, taskId }) {
   const tabIcons = {
     logs: <FileTextOutlined />,
     visualization: <BarChartOutlined />,
+    backtest: <LineChartOutlined />,
+    download: <DownloadOutlined />,
     explain: <SafetyCertificateOutlined />,
   }
 

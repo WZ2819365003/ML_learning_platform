@@ -360,14 +360,23 @@ class BaseDLTrainer(ABC):
             if nonzero.sum() > 0:
                 mape = float(np.mean(np.abs((labels[nonzero] - preds[nonzero]) / labels[nonzero])))
                 result["val_mape"] = mape
-            # Predicted vs actual scatter (max 500 points)
+            # Predicted vs actual samples (max 500 points), kept CONTIGUOUS and
+            # in validation order.
+            #
+            # This used to be rng.choice(...), a random subsample. That is fine
+            # for a scatter, where each point stands alone, but it destroys the
+            # ordering — so the same field could not be drawn as a
+            # predicted-vs-actual *curve* without connecting randomly ordered
+            # points into a line that looks like data and is not. A trailing
+            # window keeps both readings valid: the scatter is unchanged in
+            # character, and the curve now means something.
             try:
                 sample_n = min(len(preds), 500)
-                rng = np.random.default_rng(42)
-                idx = rng.choice(len(preds), sample_n, replace=False)
+                start = len(preds) - sample_n          # most recent window
                 result["val_scatter"] = {
-                    "actual":    [round(float(v), 6) for v in labels[idx]],
-                    "predicted": [round(float(v), 6) for v in preds[idx]],
+                    "actual":    [round(float(v), 6) for v in labels[start:]],
+                    "predicted": [round(float(v), 6) for v in preds[start:]],
+                    "ordered": True,                   # older runs lack this flag
                 }
             except Exception as e:
                 logger.warning("Scatter data computation skipped: %s", e)
