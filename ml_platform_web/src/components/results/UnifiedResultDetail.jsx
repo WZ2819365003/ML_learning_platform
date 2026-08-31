@@ -129,12 +129,7 @@ export default function UnifiedResultDetail({ family, taskId }) {
       />
     ),
     backtest: (
-      <BacktestPanel
-        family={family}
-        taskId={taskId}
-        taskType={result.taskType}
-        metrics={result.metrics}
-      />
+      <BacktestPanel family={family} taskId={taskId} taskType={result.taskType} />
     ),
     download: (
       <ModelDownloadPanel family={family} taskId={taskId} result={result} />

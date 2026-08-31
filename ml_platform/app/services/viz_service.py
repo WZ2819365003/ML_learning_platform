@@ -6,6 +6,7 @@ this module stays focused on the per-chart metric computation.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -261,6 +262,17 @@ async def get_shap_summary(
 # ---------------------------------------------------------------------------
 
 
+async def _is_dl_task(task_id: str, db: AsyncSession) -> bool:
+    """True when the id names a DL training task."""
+    from app.models.database import DLTrainingTask
+    from sqlalchemy import select
+
+    found = (await db.execute(
+        select(DLTrainingTask.id).where(DLTrainingTask.id == task_id)
+    )).scalar_one_or_none()
+    return found is not None
+
+
 def _tail_evaluation_rows(X_test, y_test, max_samples: int):
     """Return a deterministic tail window without aggregating chart values.
 
@@ -301,10 +313,92 @@ async def get_residual_plot(
     }
 
 
+def _dl_predicted_vs_actual_sync(
+    file_path: str,
+    target_column: str,
+    test_size: float,
+    task_type: str,
+    model_type: str,
+    model_path: str,
+    max_samples: int,
+) -> dict:
+    """Replay a DL task's hold-out and predict it, keeping row order.
+
+    Synchronous and CPU-bound — the caller runs it in a worker thread.
+
+    The stored `val_scatter` cannot serve this: it is a bounded window saved
+    during training, and runs from before it became contiguous hold a random
+    subsample, which is fine for a scatter but meaningless as a curve. Replaying
+    the split gives ordered rows for every model, including ones trained before
+    that changed, without asking anyone to retrain.
+    """
+    from app.core.dl_registry import get_dl_trainer
+    from app.services.dl_service import _prepare_dl_data
+
+    _X_train, X_val, _y_train, y_val, artifact, resolved_kind = _prepare_dl_data(
+        file_path, target_column, test_size, task_type,
+    )
+    X_win, y_win, total, offset = _tail_evaluation_rows(X_val, y_val, max_samples)
+
+    trainer = get_dl_trainer(model_type)
+    trainer.load_for_inference(model_path)
+    preds, _probas = trainer.predict(X_win, resolved_kind)
+
+    actual = artifact.decode_predictions(y_win) if resolved_kind == "classification" else y_win
+    predicted = artifact.decode_predictions(preds) if resolved_kind == "classification" else preds
+
+    return {
+        "actual": [round(float(v), 4) for v in np.asarray(actual).ravel().tolist()],
+        "predicted": [round(float(v), 4) for v in np.asarray(predicted).ravel().tolist()],
+        "sample_count": int(len(y_win)),
+        "total_count": int(total),
+        "sample_offset": int(offset),
+    }
+
+
+async def _dl_predicted_vs_actual(task_id: str, db: AsyncSession, max_samples: int) -> dict:
+    """DL branch of get_predicted_vs_actual."""
+    from app.models.database import DLTrainingTask, Dataset
+    from app.services.object_storage import restore_dataset_file, restore_model_bundle
+    from sqlalchemy import select
+
+    task = (await db.execute(
+        select(DLTrainingTask).where(DLTrainingTask.id == task_id)
+    )).scalar_one_or_none()
+    if task is None or not task.model_path:
+        raise HTTPException(status_code=404, detail="深度学习模型不存在或尚无产物")
+
+    dataset = (await db.execute(
+        select(Dataset).where(Dataset.id == task.dataset_id)
+    )).scalar_one_or_none()
+    dataset_path = restore_dataset_file(dataset.id, dataset.file_path) if dataset else None
+    model_path = restore_model_bundle(task.model_path)
+    if dataset_path is None or model_path is None:
+        raise HTTPException(status_code=404, detail="数据集或模型文件不存在，无法回测")
+
+    train_config = task.train_config or {}
+    payload = await asyncio.to_thread(
+        _dl_predicted_vs_actual_sync,
+        str(dataset_path),
+        task.target_column,
+        float(train_config.get("test_size", 0.2)),
+        task.task_type or "auto",
+        task.model_type,
+        str(model_path),
+        max_samples,
+    )
+    return {"task_id": task_id, **payload}
+
+
 async def get_predicted_vs_actual(
     task_id: str, db: AsyncSession, max_samples: int = 1000
 ) -> dict:
     """Return a bounded predicted/actual window for scatter and line charts."""
+    # DL models are not loadable through resolve_and_load, which refuses them
+    # outright; they get their own branch rather than being unsupported.
+    if await _is_dl_task(task_id, db):
+        return await _dl_predicted_vs_actual(task_id, db, max_samples)
+
     prepared = await resolve_and_load(task_id, db, stratified=False)
     model = prepared["model"]
     X_test, y_test, total_count, sample_offset = _tail_evaluation_rows(

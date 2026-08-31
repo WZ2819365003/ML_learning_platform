@@ -24,6 +24,9 @@ the single source of truth for "which metrics/charts apply to this task".
 
 from __future__ import annotations
 
+import threading
+from collections import OrderedDict
+
 import json
 import logging
 import re
@@ -621,12 +624,52 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
 # ---------------------------------------------------------------------------
 
 
+# Prepared bundles are cached because every chart endpoint calls this, and each
+# call re-reads the model off disk and re-splits the whole dataset — on an 87k
+# row set that is most of the wait when opening a result page with six charts.
+#
+# Safe to cache: a finished task's model and dataset never change, and
+# retraining produces a new task id. Small and bounded because each entry holds
+# a model plus the hold-out arrays; four is enough to keep one result page
+# responsive without growing into a memory leak.
+_PREPARED_CACHE: OrderedDict[tuple[str, bool], dict] = OrderedDict()
+_PREPARED_CACHE_MAX = 4
+_PREPARED_CACHE_LOCK = threading.Lock()
+
+
+def _cache_get(key: tuple[str, bool]) -> dict | None:
+    with _PREPARED_CACHE_LOCK:
+        bundle = _PREPARED_CACHE.get(key)
+        if bundle is not None:
+            _PREPARED_CACHE.move_to_end(key)          # least-recently-used order
+        # Shallow copy: callers add their own keys to the returned dict, and
+        # sharing one object would leak those between requests.
+        return dict(bundle) if bundle is not None else None
+
+
+def _cache_put(key: tuple[str, bool], bundle: dict) -> None:
+    with _PREPARED_CACHE_LOCK:
+        _PREPARED_CACHE[key] = bundle
+        _PREPARED_CACHE.move_to_end(key)
+        while len(_PREPARED_CACHE) > _PREPARED_CACHE_MAX:
+            _PREPARED_CACHE.popitem(last=False)
+
+
+def clear_prepared_cache() -> None:
+    """Drop every cached bundle. Used by tests and after a task is deleted."""
+    with _PREPARED_CACHE_LOCK:
+        _PREPARED_CACHE.clear()
+
+
 async def resolve_and_load(task_id: str, db: AsyncSession, *, stratified: bool | None = None):
     """Resolve a task then load model + split dataset.
 
     `stratified` auto-picks based on task_kind when None (False for regression,
     True for classification). Override when the caller explicitly wants a
     non-stratified split even for classification (SHAP sampling, for example).
+
+    The prepared bundle is cached per (task_id, stratified) — see the note on
+    `_PREPARED_CACHE`.
     """
     task, dataset = await resolve_task_and_dataset(task_id, db)
     if isinstance(task, DLTrainingTask):
@@ -641,6 +684,11 @@ async def resolve_and_load(task_id: str, db: AsyncSession, *, stratified: bool |
         stratified = task.task_kind == "classification" if isinstance(task, TaskFacade) \
             else not is_regressor(getattr(task, "model_type", None))
 
+    cache_key = (task_id, bool(stratified))
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     loaded_model = load_model(task.model_path)
     prepared = load_and_split_data_for_model(
         dataset.file_path,
@@ -649,8 +697,10 @@ async def resolve_and_load(task_id: str, db: AsyncSession, *, stratified: bool |
         loaded_model,
         stratified=stratified,
     )
-    return {
+    bundle = {
         "task": task,
         "dataset": dataset,
         **prepared,
     }
+    _cache_put(cache_key, bundle)
+    return dict(bundle)

@@ -31,7 +31,6 @@ import {
   DownloadOutlined,
   EyeOutlined,
   PlayCircleOutlined,
-  RocketOutlined,
   TagOutlined,
   TrophyOutlined,
 } from '@ant-design/icons';
@@ -702,12 +701,8 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
 
             <Card size="small" title="快捷操作">
               <Space wrap>
-                <Button
-                  icon={<RocketOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/dl/monitor?taskId=${detail.id}`); }}
-                >
-                  查看训练监控
-                </Button>
+                {/* 查看训练监控 is gone: the result view opens on 训练日志 as
+                    its first tab, so this was a second route to the same panel. */}
                 <Button
                   type="primary"
                   icon={<TrophyOutlined />}
@@ -717,6 +712,19 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
                   }}
                 >
                   查看结果可视化
+                </Button>
+                {/* Matches the ML drawer. The result view also has a download
+                    tab with the artifact caveats; this is the quick grab. */}
+                <Button
+                  icon={<DownloadOutlined />}
+                  onClick={() => {
+                    const a = document.createElement('a');
+                    a.href = modelApi.downloadModelUrl(detail.id);
+                    a.download = '';
+                    a.click();
+                  }}
+                >
+                  下载模型文件
                 </Button>
               </Space>
             </Card>

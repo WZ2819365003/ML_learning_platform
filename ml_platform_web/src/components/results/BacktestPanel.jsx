@@ -7,14 +7,13 @@
  *   scatter — predicted against actual with a y=x diagonal: how tight the fit
  *             is overall, and whether the model systematically over/under-shoots
  *
- * Where the numbers come from differs by family, and so does one caveat:
- *   ML — /viz/{id}/predicted_vs_actual, the full ordered hold-out
- *   DL — metrics.val_scatter, a trailing window saved during training
- *
- * DL runs trained before that field became ordered hold a *random* subsample.
- * Those points are fine as a scatter but meaningless as a curve — joining
- * randomly ordered points draws a line that looks like data and is not — so
- * the curve is withheld for them rather than drawn misleadingly.
+ * Both families read /viz/{id}/predicted_vs_actual, which replays the task's
+ * hold-out and predicts it in row order. DL used to fall back to the
+ * `val_scatter` saved during training, but runs from before that field became
+ * contiguous hold a *random* subsample — fine as a scatter, meaningless as a
+ * curve, since joining randomly ordered points draws a line that looks like
+ * data and is not. Replaying server-side gives ordered rows for every model,
+ * including ones trained before that changed, with nobody having to retrain.
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { Alert, Card, Col, Empty, Row, Space, Spin, Statistic, Tooltip, Typography } from 'antd'
@@ -68,7 +67,7 @@ export function buildScatterOption(actual = [], predicted = []) {
   }
 }
 
-export default function BacktestPanel({ family, taskId, taskType, metrics }) {
+export default function BacktestPanel({ family, taskId, taskType }) {
   const [payload, setPayload] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -76,7 +75,7 @@ export default function BacktestPanel({ family, taskId, taskType, metrics }) {
   const isDl = family === 'dl'
 
   useEffect(() => {
-    if (isDl || !taskId) return undefined
+    if (!taskId) return undefined
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -87,14 +86,10 @@ export default function BacktestPanel({ family, taskId, taskType, metrics }) {
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [isDl, taskId])
+  }, [taskId])
 
-  const source = isDl ? (metrics?.val_scatter || null) : payload
-  const actual = Array.isArray(source?.actual) ? source.actual : []
-  const predicted = Array.isArray(source?.predicted) ? source.predicted : []
-
-  // Older DL runs sampled randomly and carry no ordering flag.
-  const curveTrustworthy = !isDl || source?.ordered === true
+  const actual = Array.isArray(payload?.actual) ? payload.actual : []
+  const predicted = Array.isArray(payload?.predicted) ? payload.predicted : []
 
   const stats = useMemo(() => backtestStats(actual, predicted), [actual, predicted])
   const scatterOption = useMemo(() => buildScatterOption(actual, predicted), [actual, predicted])
@@ -111,9 +106,7 @@ export default function BacktestPanel({ family, taskId, taskType, metrics }) {
   if (actual.length === 0) {
     return (
       <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description={isDl
-          ? '该模型训练时没有保存验证集预测样本，重新训练后即可回测'
-          : '暂无回测数据'} />
+        description="暂无回测数据" />
     )
   }
 
@@ -132,16 +125,7 @@ export default function BacktestPanel({ family, taskId, taskType, metrics }) {
         </Row>
       )}
 
-      {!curveTrustworthy && (
-        <Alert
-          type="warning" showIcon
-          message="该模型的样本是随机抽取的，无法按顺序绘制曲线"
-          description="它训练于样本改为按顺序保存之前。散点图仍然可信；重新训练后曲线即可用。"
-        />
-      )}
-
-      {curveTrustworthy && (
-        <Card size="small" variant="outlined"
+      <Card size="small" variant="outlined"
           title={
             <Space size={6}>
               <LineChartOutlined style={{ color: '#2563eb' }} />
@@ -151,9 +135,8 @@ export default function BacktestPanel({ family, taskId, taskType, metrics }) {
               </Tooltip>
             </Space>
           }>
-          <PredictedActualCurve payload={{ actual, predicted }} height={300} />
-        </Card>
-      )}
+        <PredictedActualCurve payload={{ actual, predicted }} height={300} />
+      </Card>
 
       <Card size="small" variant="outlined"
         title={
@@ -169,9 +152,9 @@ export default function BacktestPanel({ family, taskId, taskType, metrics }) {
       </Card>
 
       <Text type="secondary" style={{ fontSize: 12 }}>
-        {isDl
-          ? '数据来自训练时保存的验证集尾部样本。'
-          : '数据来自该模型的测试集预测结果。'}
+        {payload?.total_count
+          ? `数据来自该模型留出集的最近 ${actual.length} 条（共 ${payload.total_count} 条）。`
+          : '数据来自该模型留出集的预测结果。'}
       </Text>
     </Space>
   )
