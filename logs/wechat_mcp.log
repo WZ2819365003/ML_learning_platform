@@ -1,0 +1,24 @@
+2026-08-28 10:00:57,721 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-28 10:00:58,022 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-28 10:00:58,024 [INFO] wechat_mcp - Transport: stdio
+2026-08-28 10:00:58,025 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-28 10:01:11,527 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-28 10:01:11,649 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-28 10:01:11,651 [INFO] wechat_mcp - Transport: stdio
+2026-08-28 10:01:11,651 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-28 10:01:12,450 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-28 10:01:12,577 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-28 10:01:12,579 [INFO] wechat_mcp - Transport: stdio
+2026-08-28 10:01:12,579 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-28 15:47:40,951 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-28 15:47:41,098 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-28 15:47:41,100 [INFO] wechat_mcp - Transport: stdio
+2026-08-28 15:47:41,101 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-28 22:51:03,148 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-28 22:51:03,782 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-28 22:51:03,784 [INFO] wechat_mcp - Transport: stdio
+2026-08-28 22:51:03,784 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-29 22:10:01,897 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-29 22:10:02,438 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-29 22:10:02,441 [INFO] wechat_mcp - Transport: stdio
+2026-08-29 22:10:02,442 [INFO] wechat_mcp - MCP Debug mode: False

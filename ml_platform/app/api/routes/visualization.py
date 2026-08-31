@@ -74,10 +74,16 @@ async def learning_curve_route(
 async def shap_summary_route(
     task_id: str = Depends(owned_task_id),
     max_samples: int = Query(100, ge=1, le=500, description="Max samples for SHAP"),
+    refresh: bool = Query(False, description="Recompute instead of returning the cached summary"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return SHAP values for model explainability."""
-    return await get_shap_summary(task_id, db, max_samples=max_samples)
+    """Return SHAP values for model explainability.
+
+    Cached on the task row after the first run — the computation is expensive
+    and its result cannot change while the model does not. `refresh=true`
+    forces a new one.
+    """
+    return await get_shap_summary(task_id, db, max_samples=max_samples, refresh=refresh)
 
 
 @router.get("/{task_id}/residual_plot")

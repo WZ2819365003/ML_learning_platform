@@ -29,7 +29,6 @@ import {
   CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
-  FileTextOutlined,
   EyeOutlined,
   PlayCircleOutlined,
   RocketOutlined,
@@ -38,7 +37,6 @@ import {
 } from '@ant-design/icons';
 import echarts from '../utils/echarts';
 import api, { dataApi, deployApi, dlApi, modelApi, timesfmApi, trainingApi } from '../services/api';
-import TrainingLogModal from '../components/workbench/TrainingLogModal';
 import { formatBytes, formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
 import { buildResultsUrl } from '../utils/resultRoutes';
 
@@ -230,8 +228,6 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
     }
   }
 
-  const [logModalOpen, setLogModalOpen] = useState(false);
-
   async function openDetail(record) {
     setSelectedAsset(record);
     setDetailOpen(true);
@@ -422,15 +418,6 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
 
             <Card size="small" title="快捷操作">
               <Space wrap>
-                {/* Opens the log in place instead of navigating to the V2
-                    monitor page — you came here to look at this model, not to
-                    leave the list. */}
-                <Button
-                  icon={<FileTextOutlined />}
-                  onClick={() => setLogModalOpen(true)}
-                >
-                  查看训练日志
-                </Button>
                 <Button
                   type="primary"
                   icon={<TrophyOutlined />}
@@ -498,13 +485,6 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
         )}
       </Modal>
 
-      <TrainingLogModal
-        open={logModalOpen}
-        onClose={() => setLogModalOpen(false)}
-        domainTaskId={detail?.task_id}
-        title={detail?.model_type}
-        isLive={detail?.status === 'RUNNING' || detail?.status === 'PENDING'}
-      />
 
       {/* Compare modal */}
       <Modal

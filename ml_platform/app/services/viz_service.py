@@ -177,12 +177,76 @@ async def get_learning_curve(task_id: str, db: AsyncSession) -> dict:
     }
 
 
-async def get_shap_summary(task_id: str, db: AsyncSession, max_samples: int = 200) -> dict[str, Any]:
-    """Thin wrapper around `shap_service.compute_shap_summary` — keeps viz_service
-    as the single import surface for route handlers.
+# Where a computed explanation is parked on the task row, and the shape that
+# tells us whether a cached one still answers the current request.
+_SHAP_CACHE_KEY = "shap_cache"
+
+
+def _cached_shap(task: Any, max_samples: int) -> dict[str, Any] | None:
+    """Return a previously computed summary if it matches this request."""
+    metrics = getattr(task, "result_metrics", None) or {}
+    cached = metrics.get(_SHAP_CACHE_KEY)
+    if not isinstance(cached, dict):
+        return None
+    # A summary computed over fewer samples is not the one being asked for.
+    if cached.get("max_samples") != max_samples:
+        return None
+    payload = cached.get("payload")
+    return payload if isinstance(payload, dict) else None
+
+
+async def _store_shap(db: AsyncSession, task: Any, max_samples: int, payload: dict) -> None:
+    """Park the computed summary on the task row. Never raises.
+
+    Losing the cache costs a recomputation; failing the request the user just
+    waited minutes for would be worse, so a storage problem is logged and
+    swallowed.
     """
     try:
-        return await shap_service.compute_shap_summary(task_id, db, max_samples=max_samples)
+        if not hasattr(task, "result_metrics"):
+            return   # an on-disk orphan facade has no row to write back to
+        metrics = dict(task.result_metrics or {})
+        metrics[_SHAP_CACHE_KEY] = {"max_samples": max_samples, "payload": payload}
+        task.result_metrics = metrics
+        await db.flush()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Caching SHAP summary for %s failed: %s", getattr(task, "id", "?"), exc)
+
+
+async def get_shap_summary(
+    task_id: str,
+    db: AsyncSession,
+    max_samples: int = 200,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """Return a SHAP summary, computing it only when there is no usable cache.
+
+    SHAP is the most expensive thing this service does — a TreeExplainer on a
+    deep forest once took six minutes in production — and the result does not
+    change unless the model does. Recomputing it every time the tab is opened
+    made an already slow operation feel broken, so the payload is parked on the
+    task row and returned directly next time. `refresh=True` forces a new run.
+    """
+    if not refresh:
+        try:
+            task, _dataset = await shap_service.resolve_task_and_dataset(task_id, db)
+            cached = _cached_shap(task, max_samples)
+            if cached is not None:
+                return {**cached, "cached": True}
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a cache miss must not break the request
+            logger.warning("SHAP cache lookup for %s failed: %s", task_id, exc)
+
+    try:
+        payload = await shap_service.compute_shap_summary(task_id, db, max_samples=max_samples)
+        try:
+            task, _dataset = await shap_service.resolve_task_and_dataset(task_id, db)
+            await _store_shap(db, task, max_samples, payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not cache SHAP summary for %s: %s", task_id, exc)
+        return {**payload, "cached": False}
     except HTTPException:
         raise
     except ImportError as exc:
