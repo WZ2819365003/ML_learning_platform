@@ -27,17 +27,6 @@ export const RESULT_VIEW_REGISTRY = [
     renderer: 'backtest',
   },
   {
-    key: 'download',
-    label: '模型下载',
-    // DL only for now: a checkpoint is the thing you take away to serve
-    // elsewhere, and the result view had no way to reach it. ML models are
-    // already downloadable from 模型管理.
-    families: ['dl'],
-    taskTypes: ['classification', 'regression'],
-    statuses: ['SUCCESS'],
-    renderer: 'download',
-  },
-  {
     key: 'explain',
     label: '模型解释',
     families: ['ml', 'dl'],

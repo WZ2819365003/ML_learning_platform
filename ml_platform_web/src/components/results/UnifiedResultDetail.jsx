@@ -5,15 +5,14 @@ import {
   Space, Statistic, Tabs, Tag, Typography, message,
 } from 'antd'
 import {
-  ArrowLeftOutlined, BarChartOutlined, DownloadOutlined, FileTextOutlined,
+  ArrowLeftOutlined, BarChartOutlined, FileTextOutlined,
   LineChartOutlined, ReloadOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons'
 
 import ResultLogPanel from './ResultLogPanel'
 import ModelExplainPanel from './ModelExplainPanel'
-import TrainingViz from '../workbench/TrainingViz'
 import BacktestPanel from './BacktestPanel'
-import ModelDownloadPanel from './ModelDownloadPanel'
+import TrainingProcessPanel from './TrainingProcessPanel'
 import { getResultViewEntries } from './resultViewRegistry'
 import { dlApi, modelApi } from '../../services/api'
 import { formatDateTime, metricLabels } from '../../utils/formatters'
@@ -53,6 +52,7 @@ function normalizeResult(raw, family, taskId) {
     datasetName: raw?.dataset?.name || raw?.dataset_name || raw?.dataset_id || '-',
     targetColumn: raw?.target_column || '-',
     finishedAt: raw?.finished_at || raw?.updated_at || null,
+    trainConfig: raw?.train_config ?? {},
     metrics,
   }
 }
@@ -118,21 +118,16 @@ export default function UnifiedResultDetail({ family, taskId }) {
       <ResultLogPanel family={family} taskId={taskId} status={result.status} />
     ),
     trainingViz: (
-      <TrainingViz
-        trainingTaskId={taskId}
-        modelType={result.modelType}
-        taskStatus={result.status}
+      <TrainingProcessPanel
         family={family}
+        taskId={taskId}
         taskType={result.taskType}
-        history={result.metrics?.history}
         metrics={result.metrics}
+        trainConfig={result.trainConfig}
       />
     ),
     backtest: (
       <BacktestPanel family={family} taskId={taskId} taskType={result.taskType} />
-    ),
-    download: (
-      <ModelDownloadPanel family={family} taskId={taskId} result={result} />
     ),
     explain: (
       <ModelExplainPanel taskId={taskId} modelType={result.modelType} />
@@ -143,7 +138,6 @@ export default function UnifiedResultDetail({ family, taskId }) {
     logs: <FileTextOutlined />,
     visualization: <BarChartOutlined />,
     backtest: <LineChartOutlined />,
-    download: <DownloadOutlined />,
     explain: <SafetyCertificateOutlined />,
   }
 

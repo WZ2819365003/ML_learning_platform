@@ -1,14 +1,36 @@
 import React, { useEffect, useState } from 'react'
-import { Alert, Button, Empty, Spin, Typography } from 'antd'
+import { Alert, Button, Card, Empty, Spin, Typography } from 'antd'
 import { BulbOutlined } from '@ant-design/icons'
 
+import EChart from '../EChart'
 import ShapView from '../viz/ShapView'
 import { vizApi } from '../../services/api'
 
 const { Paragraph, Text } = Typography
 
+/** Native feature importance — the model's own ranking, when it has one. */
+function buildImportanceOption(payload) {
+  const items = (payload?.features || payload?.feature_names || []).slice(0, 15)
+  const values = (payload?.importances || payload?.values || []).slice(0, 15)
+  if (items.length === 0 || values.length === 0) return null
+  // Horizontal bars ascending, so the most important sits at the top.
+  const pairs = items.map((f, i) => [String(f), Number(values[i]) || 0])
+    .sort((a, b) => a[1] - b[1])
+  return {
+    grid: { left: 140, right: 24, top: 10, bottom: 30 },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    xAxis: { type: 'value' },
+    yAxis: { type: 'category', data: pairs.map(p => p[0]), axisLabel: { fontSize: 11 } },
+    series: [{
+      type: 'bar', data: pairs.map(p => p[1]),
+      itemStyle: { color: '#8b5cf6', borderRadius: [0, 4, 4, 0] },
+    }],
+  }
+}
+
 export default function ModelExplainPanel({ taskId, modelType }) {
   const [payload, setPayload] = useState(null)
+  const [importance, setImportance] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -16,6 +38,14 @@ export default function ModelExplainPanel({ taskId, modelType }) {
     setPayload(null)
     setError(null)
     setLoading(false)
+    if (!taskId) { setImportance(null); return undefined }
+    let cancelled = false
+    // Cheap and always available for models that expose it — no reason to make
+    // the user press a button for this one. SHAP stays on demand.
+    vizApi.getFeatureImportance(taskId)
+      .then(resp => { if (!cancelled) setImportance(resp) })
+      .catch(() => { if (!cancelled) setImportance(null) })
+    return () => { cancelled = true }
   }, [taskId])
 
   async function loadShap() {
@@ -34,7 +64,26 @@ export default function ModelExplainPanel({ taskId, modelType }) {
     }
   }
 
-  if (payload) return <ShapView payload={payload} />
+  const importanceOption = buildImportanceOption(importance)
+
+  const nativeImportance = importanceOption ? (
+    <Card size="small" variant="outlined" title="原生特征重要度 Top-15"
+      style={{ marginTop: 12 }}>
+      <EChart option={importanceOption} style={{ height: 340 }} />
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        模型自带的重要度，反映特征被用于分裂的程度；SHAP 则给出每个特征对单条预测的贡献方向与大小。
+      </Text>
+    </Card>
+  ) : null
+
+  if (payload) {
+    return (
+      <>
+        <ShapView payload={payload} />
+        {nativeImportance}
+      </>
+    )
+  }
 
   return (
     <Spin spinning={loading} tip="正在计算 SHAP 解释">
@@ -64,6 +113,7 @@ export default function ModelExplainPanel({ taskId, modelType }) {
           </Button>
         </Empty>
       )}
+      {nativeImportance}
     </Spin>
   )
 }

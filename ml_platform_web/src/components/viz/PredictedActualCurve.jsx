@@ -40,14 +40,18 @@ export function buildPredictedActualOption(actual = [], predicted = [], windowSi
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 6 }],
     series: [
       {
+        // Red vs blue: the previous near-black and blue read as one colour
+        // once the two lines overlapped, which is most of the chart.
         name: '实际值', type: 'line', showSymbol: false, smooth: false,
         data: actual.slice(from, from + size),
-        lineStyle: { width: 1.6, color: '#0f172a' },
+        lineStyle: { width: 1.8, color: '#dc2626' },
+        itemStyle: { color: '#dc2626' },
       },
       {
         name: '预测值', type: 'line', showSymbol: false, smooth: false,
         data: predicted.slice(from, from + size),
-        lineStyle: { width: 1.6, color: '#2563eb' },
+        lineStyle: { width: 1.8, color: '#2563eb' },
+        itemStyle: { color: '#2563eb' },
       },
     ],
   }

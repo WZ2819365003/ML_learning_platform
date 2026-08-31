@@ -46,6 +46,28 @@ export function backtestStats(actual = [], predicted = []) {
   }
 }
 
+/** Residual against predicted — derived, so it costs no extra request. */
+export function buildResidualOption(actual = [], predicted = []) {
+  const n = Math.min(actual.length, predicted.length)
+  const points = Array.from({ length: n }, (_, i) => [predicted[i], actual[i] - predicted[i]])
+  return {
+    grid: { left: 62, right: 20, top: 20, bottom: 44 },
+    tooltip: { formatter: ({ value }) => `预测=${value[0]}<br/>残差=${value[1]}` },
+    xAxis: { type: 'value', name: '预测值', scale: true, nameLocation: 'middle', nameGap: 26 },
+    yAxis: { type: 'value', name: '残差（实际−预测）', scale: true },
+    series: [
+      { type: 'scatter', symbolSize: 5, data: points, itemStyle: { color: '#8b5cf6', opacity: 0.5 } },
+      // A flat line at zero: residuals fanning out or curving away from it is
+      // the pattern worth catching.
+      { type: 'line', symbol: 'none', markLine: {
+          silent: true, symbol: 'none',
+          lineStyle: { type: 'dashed', color: '#94a3b8' },
+          data: [{ yAxis: 0 }],
+        }, data: [] },
+    ],
+  }
+}
+
 export function buildScatterOption(actual = [], predicted = []) {
   const n = Math.min(actual.length, predicted.length)
   const points = Array.from({ length: n }, (_, i) => [actual[i], predicted[i]])
@@ -93,6 +115,7 @@ export default function BacktestPanel({ family, taskId, taskType }) {
 
   const stats = useMemo(() => backtestStats(actual, predicted), [actual, predicted])
   const scatterOption = useMemo(() => buildScatterOption(actual, predicted), [actual, predicted])
+  const residualOption = useMemo(() => buildResidualOption(actual, predicted), [actual, predicted])
 
   if (taskType === 'classification') {
     return (
@@ -149,6 +172,19 @@ export default function BacktestPanel({ family, taskId, taskType }) {
           </Space>
         }>
         <EChart option={scatterOption} style={{ height: 300 }} />
+      </Card>
+
+      <Card size="small" variant="outlined"
+        title={
+          <Space size={6}>
+            <DotChartOutlined style={{ color: '#8b5cf6' }} />
+            <span>残差分布</span>
+            <Tooltip title="残差应随机散布在 0 线两侧。呈喇叭状或弯曲，说明模型漏掉了某种结构。">
+              <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+            </Tooltip>
+          </Space>
+        }>
+        <EChart option={residualOption} style={{ height: 280 }} />
       </Card>
 
       <Text type="secondary" style={{ fontSize: 12 }}>

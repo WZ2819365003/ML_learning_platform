@@ -48,13 +48,12 @@ describe('result view registry ordering', () => {
     expect(keys).toEqual(['logs', 'visualization', 'backtest', 'explain'])
   })
 
-  it('gives DL a download tab that ML does not get', () => {
+  it('gives ML and DL the same tabs', () => {
     const dl = getResultViewEntries({ family: 'dl', taskType: 'regression', status: 'SUCCESS' })
       .map(e => e.key)
     const ml = getResultViewEntries({ family: 'ml', taskType: 'regression', status: 'SUCCESS' })
       .map(e => e.key)
-    expect(dl).toContain('download')
-    expect(ml).not.toContain('download')
+    expect(dl).toEqual(ml)
   })
 
   it('omits backtest for classification', () => {
