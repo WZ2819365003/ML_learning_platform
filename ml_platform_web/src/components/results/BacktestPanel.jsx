@@ -21,6 +21,7 @@ import { InfoCircleOutlined, LineChartOutlined, DotChartOutlined } from '@ant-de
 
 import EChart from '../EChart'
 import PredictedActualCurve from '../viz/PredictedActualCurve'
+import { buildConfusionMatrixOption, buildRocCurveOption } from '../workbench/TrainingViz'
 import { vizApi } from '../../services/api'
 
 const { Text } = Typography
@@ -89,6 +90,81 @@ export function buildScatterOption(actual = [], predicted = []) {
   }
 }
 
+/**
+ * The classification half of 结果回测.
+ *
+ * A confusion matrix *is* predictions lined up against truth — the same
+ * question the regression curve answers, asked of labels instead of numbers.
+ * These lived under 训练可视化 until the tabs were split by what they answer,
+ * and would otherwise have had nowhere to go.
+ */
+function ClassificationBacktest({ taskId }) {
+  const [cm, setCm] = useState(null)
+  const [roc, setRoc] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!taskId) return undefined
+    let cancelled = false
+    setLoading(true)
+    // allSettled: a model without predict_proba has no ROC, which must not
+    // take the confusion matrix down with it.
+    Promise.allSettled([
+      vizApi.getConfusionMatrix(taskId),
+      vizApi.getRocCurve(taskId),
+    ]).then(([c, r]) => {
+      if (cancelled) return
+      setCm(c.status === 'fulfilled' ? c.value : null)
+      setRoc(r.status === 'fulfilled' ? r.value : null)
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [taskId])
+
+  const cmOption = useMemo(() => buildConfusionMatrixOption(cm), [cm])
+  const rocOption = useMemo(() => buildRocCurveOption(roc), [roc])
+
+  if (loading) return <Spin><div style={{ height: 220 }} /></Spin>
+  if (!cmOption && !rocOption) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无回测数据" />
+  }
+
+  return (
+    <Row gutter={[12, 12]}>
+      <Col xs={24} xl={12}>
+        <Card size="small" variant="outlined"
+          title={
+            <Space size={6}>
+              <span>混淆矩阵</span>
+              <Tooltip title="对角线是预测正确的样本。非对角线上的大数字指出模型把哪一类错认成了哪一类。">
+                <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+              </Tooltip>
+            </Space>
+          }>
+          {cmOption
+            ? <EChart option={cmOption} style={{ height: 320 }} />
+            : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无混淆矩阵" />}
+        </Card>
+      </Col>
+      <Col xs={24} xl={12}>
+        <Card size="small" variant="outlined"
+          title={
+            <Space size={6}>
+              <span>ROC 曲线</span>
+              <Tooltip title="越贴近左上角越好。模型不支持 predict_proba 时无法绘制。">
+                <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+              </Tooltip>
+            </Space>
+          }>
+          {rocOption
+            ? <EChart option={rocOption} style={{ height: 320 }} />
+            : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="该模型不支持 predict_proba，无法绘制 ROC" />}
+        </Card>
+      </Col>
+    </Row>
+  )
+}
+
 export default function BacktestPanel({ family, taskId, taskType }) {
   const [payload, setPayload] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -118,10 +194,7 @@ export default function BacktestPanel({ family, taskId, taskType }) {
   const residualOption = useMemo(() => buildResidualOption(actual, predicted), [actual, predicted])
 
   if (taskType === 'classification') {
-    return (
-      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="结果回测面向回归任务；分类任务请看训练可视化里的混淆矩阵与 ROC" />
-    )
+    return <ClassificationBacktest taskId={taskId} />
   }
 
   if (loading) return <Spin><div style={{ height: 220 }} /></Spin>

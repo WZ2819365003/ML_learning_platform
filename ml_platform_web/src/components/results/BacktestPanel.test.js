@@ -56,13 +56,14 @@ describe('result view registry ordering', () => {
     expect(dl).toEqual(ml)
   })
 
-  it('omits backtest for classification', () => {
-    // Lining predictions up against the truth is a numeric comparison; a
-    // classifier gets its confusion matrix under 训练可视化 instead.
+  it('offers backtest for classification too', () => {
+    // A confusion matrix is predictions against truth just as much as a
+    // predicted-vs-actual curve is. Splitting the tabs by question left
+    // classification with nowhere to show one, which was a capability loss.
     const keys = getResultViewEntries({
       family: 'ml', taskType: 'classification', status: 'SUCCESS',
     }).map(e => e.key)
-    expect(keys).not.toContain('backtest')
+    expect(keys).toContain('backtest')
   })
 
   it('shows only logs while a run is still going', () => {

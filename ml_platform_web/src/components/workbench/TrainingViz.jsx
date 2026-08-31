@@ -76,7 +76,7 @@ export function settleVizRequest(label, promise, key = null) {
 // ECharts option builders
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildConfusionMatrixOption(cm) {
+export function buildConfusionMatrixOption(cm) {
   if (!cm?.matrix || !cm?.labels) return null
   const max = Math.max(...cm.matrix.flat())
   return {
@@ -105,7 +105,7 @@ function buildConfusionMatrixOption(cm) {
   }
 }
 
-function buildRocCurveOption(roc) {
+export function buildRocCurveOption(roc) {
   if (!roc) return null
   const baseline = {
     name: '随机基线', type: 'line',

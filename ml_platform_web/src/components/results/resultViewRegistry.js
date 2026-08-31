@@ -19,10 +19,9 @@ export const RESULT_VIEW_REGISTRY = [
     key: 'backtest',
     label: '结果回测',
     families: ['ml', 'dl'],
-    // Regression only: lining predictions up against the truth is a numeric
-    // comparison. Classification gets its confusion matrix and ROC under
-    // 训练可视化 instead.
-    taskTypes: ['regression'],
+    // Both kinds: a confusion matrix is predictions against truth just as much
+    // as a predicted-vs-actual curve is, only asked of labels.
+    taskTypes: ['classification', 'regression'],
     statuses: ['SUCCESS'],
     renderer: 'backtest',
   },
