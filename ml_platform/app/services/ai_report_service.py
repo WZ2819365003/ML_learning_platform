@@ -208,7 +208,179 @@ def _fmt_value(value: Any, decimals: int = 4) -> str:
     return text or "—"
 
 
+# ---------------------------------------------------------------------------
+# Reference frames
+# ---------------------------------------------------------------------------
+# A metric on its own says nothing to a reader: "RMSE 72.47" is only meaningful
+# once you know the target averages 8897. These translations are computed here
+# rather than asked of the model, because arithmetic is exactly what an LLM is
+# least reliable at, and a wrong ratio in a report is worse than no ratio.
+
+_ERROR_METRIC_KEYS = ("rmse", "mae", "mse", "final_test_rmse", "final_test_mae")
+
+
+def _target_column_stats(context: dict[str, Any]) -> dict[str, Any] | None:
+    """Numeric summary of the target column, when the dataset profile has one."""
+    task = context.get("task") or {}
+    dataset = context.get("dataset") or {}
+    target = task.get("target_column")
+    if not target:
+        return None
+    for name, info in _iter_column_info(dataset.get("columns_info")):
+        if name != target or not isinstance(info, dict):
+            continue
+        mean = info.get("mean")
+        if not isinstance(mean, (int, float)):
+            return None
+        return {
+            "mean": float(mean),
+            "min": info.get("min"),
+            "max": info.get("max"),
+            "std": info.get("std"),
+        }
+    return None
+
+
+def _majority_class_share(context: dict[str, Any]) -> float | None:
+    """Share of the largest class — the accuracy of always guessing it.
+
+    A classifier at 0.92 reads very differently depending on whether this is
+    0.50 or 0.90, and the reader cannot tell without being told.
+    """
+    task = context.get("task") or {}
+    dataset = context.get("dataset") or {}
+    target = task.get("target_column")
+    if not target:
+        return None
+    for name, info in _iter_column_info(dataset.get("columns_info")):
+        if name != target or not isinstance(info, dict):
+            continue
+        counts = info.get("value_counts") or info.get("top_values")
+        if isinstance(counts, dict) and counts:
+            values = [v for v in counts.values() if isinstance(v, (int, float))]
+            if values and sum(values) > 0:
+                return max(values) / sum(values)
+        return None
+    return None
+
+
+def build_reference_frames(context: dict[str, Any]) -> dict[str, Any]:
+    """Plain-language translations of this task's headline numbers.
+
+    Handed to the model as established facts it may quote, so the report can say
+    "off by about 0.8% of a typical value" instead of restating the raw metric.
+    """
+    task = context.get("task") or {}
+    task_type = str(task.get("task_type") or "").lower()
+    frames: dict[str, Any] = {}
+
+    best = (context.get("leaderboard") or [{}])[0] if context.get("leaderboard") else {}
+    metrics = {**(context.get("metrics") or {}), **(best.get("metrics") or {})}
+
+    if task_type == "regression":
+        stats = _target_column_stats(context)
+        if stats and abs(stats["mean"]) > 1e-9:
+            frames["target"] = {
+                "column": task.get("target_column"),
+                "mean": round(stats["mean"], 4),
+                "range": [stats.get("min"), stats.get("max")],
+            }
+            for key in _ERROR_METRIC_KEYS:
+                value = metrics.get(key)
+                if isinstance(value, (int, float)):
+                    pct = abs(value) / abs(stats["mean"]) * 100
+                    frames[key] = {
+                        "value": round(float(value), 4),
+                        "pct_of_mean": round(pct, 2),
+                        "plain": (
+                            f"{key.upper()} {value:.4g}，约为目标列均值 "
+                            f"{stats['mean']:.4g} 的 {pct:.1f}%"
+                        ),
+                    }
+    else:
+        share = _majority_class_share(context)
+        if share is not None:
+            frames["majority_baseline"] = {
+                "share": round(share, 4),
+                "plain": (
+                    f"多数类占比 {share * 100:.1f}%，即“永远猜多数类”就能拿到 "
+                    f"{share * 100:.1f}% 的准确率；模型的准确率必须显著高于这个数才有意义"
+                ),
+            }
+    return frames
+
+
+# Weights for the readiness score. They sum to 100 and are stated in the report
+# so the number can be argued with — the point is an auditable summary, not a
+# precise measurement.
+_SCORE_RUBRIC = (
+    ("final_evaluation", 40, "已在封存测试集上完成最终评估"),
+    ("cross_fold_stability", 30, "跨折波动可接受（最大变异系数 ≤ 15%）"),
+    ("run_success", 30, "本任务的 Run 全部训练成功"),
+)
+
+
+def compute_readiness_score(context: dict[str, Any]) -> dict[str, Any]:
+    """Score this task against a fixed, published rubric.
+
+    Replaces a number the model used to invent: the prompt asked for
+    "总分：xx/100" and the backend scraped it back out with a regex, so the
+    same task could score differently on a rerun and nothing anywhere defined
+    what the number meant. Deriving it from facts already in the context makes
+    it reproducible and lets the report show its working.
+    """
+    task = context.get("task") or {}
+    runs = context.get("runs") or context.get("leaderboard") or []
+    metrics = context.get("metrics") or {}
+
+    checks: list[dict[str, Any]] = []
+
+    finalized = bool(
+        task.get("final_evaluation_state") == "FINALIZED"
+        or task.get("final_test_value") is not None
+        or any(r.get("final_test_value") is not None for r in runs if isinstance(r, dict))
+    )
+    checks.append({"key": "final_evaluation", "passed": finalized})
+
+    cvs = [
+        abs(v) / abs(metrics[f"cv_avg_{k[len('cv_std_'):]}"]) * 100
+        for k, v in metrics.items()
+        if k.startswith("cv_std_")
+        and isinstance(v, (int, float))
+        and isinstance(metrics.get(f"cv_avg_{k[len('cv_std_'):]}"), (int, float))
+        and abs(metrics[f"cv_avg_{k[len('cv_std_'):]}"]) > 1e-9
+    ]
+    # No CV data is not a failure — it is an unknown, and scoring an unknown as
+    # a pass would overstate readiness.
+    checks.append({
+        "key": "cross_fold_stability",
+        "passed": bool(cvs) and max(cvs) <= 15,
+        "detail": f"最大变异系数 {max(cvs):.1f}%" if cvs else "无交叉验证数据",
+    })
+
+    statuses = [str(r.get("status") or "").upper() for r in runs if isinstance(r, dict)]
+    checks.append({
+        "key": "run_success",
+        "passed": bool(statuses) and all(st == "SUCCESS" for st in statuses),
+        "detail": f"{statuses.count('SUCCESS')}/{len(statuses)} 成功" if statuses else "无 Run 记录",
+    })
+
+    weights = {key: weight for key, weight, _ in _SCORE_RUBRIC}
+    labels = {key: label for key, _, label in _SCORE_RUBRIC}
+    score = sum(weights[c["key"]] for c in checks if c["passed"])
+    for check in checks:
+        check["weight"] = weights[check["key"]]
+        check["label"] = labels[check["key"]]
+
+    return {"score": score, "checks": checks}
+
+
 def _extract_ai_score(markdown: str) -> int | None:
+    """Legacy scrape of a model-written 总分.
+
+    Kept only for archived reports generated before the score became computed;
+    new reports carry it in the payload instead.
+    """
     match = re.search(r"总分\s*[:：]\s*(\d{1,3})(?:\s*/\s*100)?", markdown or "")
     if not match:
         return None
@@ -2260,14 +2432,14 @@ async def build_task_report_context(
         ],
         "report_requirements": {
             "language": "简体中文",
-            "style": "报告格式，总分结构，自然段表达",
+            "style": "结论先行，章节按内容出现，指标必须带参照系",
             "reader_goal": "让读者了解任务要做什么、做了什么、训练过程怎么样、效果怎么样",
             "scope": "单 task 研究报告，不是单模型说明书",
             "presentation": "信息密度大的内容用 ECharts 图；信息密度低的内容用表格。只展示数据集概况、参数设置、训练过程数据、模型评价",
             "model_name_rule": "模型名称必须保留原始英文/代码标识，不要翻译或音译",
             "structured_tables": ["数据集概况", "参数设置", "模型评价"],
             "structured_charts": ["训练过程/调参过程指标曲线", "ROC 曲线", "预测结果曲线"],
-            "sections": ["第一章 结论", "第二章 过程与评价", "第三章 建议"],
+            "sections": "由内容决定；结论小节必需，其余小节有数据才写",
             "suggestion_scope": "建议只能围绕数据集概况、参数设置、训练过程数据、模型评价展开；不要提出 SHAP、特征重要性、部署监控或其他未展示数据类别",
         },
     }
@@ -2277,71 +2449,70 @@ def build_ai_report_messages(context: dict[str, Any] | str) -> list[dict[str, st
     if isinstance(context, str):
         context_text = context[:_MAX_CONTEXT_CHARS]
     else:
+        # Reference frames and the readiness score are computed here and handed
+        # over as facts. Asking the model to divide one metric by another is
+        # asking it to do the thing it is worst at, in a document people will
+        # quote.
+        enriched = dict(context)
+        try:
+            enriched["reference_frames"] = build_reference_frames(context)
+            enriched["readiness"] = compute_readiness_score(context)
+        except Exception as exc:  # noqa: BLE001 — a report without them beats no report
+            logger.warning("Reference frame computation failed: %s", exc)
         context_text = json.dumps(
-            _context_for_llm(context),
+            _context_for_llm(enriched),
             ensure_ascii=False,
             indent=2,
             default=str,
         )[:_MAX_CONTEXT_CHARS]
 
     system = (
-        "你是机器学习建模结果审计与解释助手。你必须只依据用户给出的 JSON 上下文写报告；"
-        "如果证据不足，就明确写“暂无足够证据”，不要编造数据、业务背景或实验结果。"
+        "你是一位帮工程团队读懂建模结果的分析师。你只依据给出的 JSON 上下文写作；"
+        "上下文没有的事实一律写“暂无数据”，绝不推测业务背景、数据来源或未记录的实验。"
+        "上下文里的 reference_frames 与 readiness 已由后端算好，可以直接引用，不要自己重算。"
     )
+
+    # Written as a short brief plus one worked example rather than a long list of
+    # prohibitions. The previous prompt mandated a fixed 三章 skeleton, demanded
+    # "每个小节至少包含一个多自然段说明" and forbade about ten things; between
+    # padding empty sections and dodging the bans, the output came out uniform
+    # and nearly unreadable. What follows asks for the judgement and lets the
+    # structure follow whatever the task actually has.
     user = (
-        "请根据下面的建模任务上下文生成一份中文 Markdown 研究报告。严格使用这个结构，"
-        "不要输出代码块，不要输出额外章节，不要输出 Markdown 表格：\n\n"
-        "报告给人看的核心目标是让读者清楚了解：任务要做什么、实际做了什么、"
-        "训练过程怎么样、效果怎么样。请用正式报告口吻写，但每个自然段都要有明确证据，"
-        "不要写成很短的摘要，不要使用口语化表达。每个小节至少包含一个多自然段说明。\n\n"
-        "这是一份单 task 研究报告，不是某一个模型的说明书。报告的主语应该是“本任务”，"
-        "不要机械地逐个模型罗列；只有当模型差异直接影响本 task 结论时才展开比较。\n\n"
-        "章节必须有层次感，严格使用“第一章、第二章、第三章”以及“1.1、1.1.1”这类编号。"
-        "每个自然段的第一句应写成明确结论句，前端会将第一句加粗亮色显示；"
-        "因此第一句必须能独立表达本段结论，后续句子再做解释和补充说明。"
-        "如果同一小节有多个结论或多条建议，必须用空行拆成多个自然段，不能挤在一个段落里。\n\n"
-        "信息呈现原则：信息密度大的内容用 ECharts 图，例如有逐轮记录时的 loss 曲线、ROC 曲线、预测曲线；"
-        "如果没有逐 epoch 记录，后端会使用真实 Trial 级选择指标与最终测试指标生成调参过程曲线，不能编造 loss。"
-        "信息密度低的内容用表格，例如数据集字段概况、参数设置、Accuracy/F1/ROC-AUC 等模型评价指标。"
-        "只展示数据集概况、参数设置、训练过程数据、模型评价，其他内容不要扩展成新的图表或表格。\n\n"
-        "模型名称必须保留原始英文/代码标识，不要翻译或音译；例如 ARIMA 不要写成阿里玛，"
-        "random_forest 不要写成随机森林，logistic_regression 不要写成逻辑回归。\n\n"
-        "# AI 建模报告\n\n"
-        "## 第一章 结论\n\n"
-        "### 1.1 综合判断\n\n"
-        "#### 1.1.1 任务结论\n\n"
-        "总分：xx/100。随后用 1-2 个自然段说明整体判断、是否建议进入下一步、主要风险。"
-        "必须说明本任务的入参是什么（数据集、目标列、任务类型、候选模型/策略），"
-        "出参是什么（预测输出、评估指标、报告输出），但不要把所有字段挤成一个超长句。\n\n"
-        "#### 1.1.2 关键依据\n\n"
-        "用 1-2 个自然段说明结论所依据的核心数据，包括最终测试指标、训练过程稳定性和主要限制。\n\n"
-        "## 第二章 过程与评价\n\n"
-        "### 2.1 数据集概况\n\n"
-        "#### 2.1.1 数据输入结论\n\n"
-        "用自然段解释数据规模、目标列和字段质量，不要写字段百科。\n\n"
-        "### 2.2 参数设置\n\n"
-        "#### 2.2.1 训练配置结论\n\n"
-        "用自然段解释本 task 的参数设置和搜索策略，不要机械罗列所有参数。\n\n"
-        "### 2.3 训练过程\n\n"
-        "#### 2.3.1 过程数据结论\n\n"
-        "用自然段解释训练过程图应该如何支持或限制结论；如果上下文没有逐轮 loss，只能解释 Trial 级指标变化，不能编造 loss。\n\n"
-        "### 2.4 模型评价\n\n"
-        "#### 2.4.1 评价结论\n\n"
-        "用自然段解释最终评估/选择阶段指标含义。"
-        "必须区分选择阶段指标和最终测试指标；没有最终测试时说明结论可信度受限。"
-        "准确率、召回率、F1、AUC、RMSE 这类低密度评价指标会由后端模型评价表展示，"
-        "你只需要用自然段总结读法和结论，不要自己写 Markdown 表格。"
-        "训练过程中的 loss 曲线、Trial 指标曲线、ROC 曲线、预测曲线会由前端用 ECharts 根据结构化 payload 渲染；"
-        "你要根据上下文实际存在的曲线类型解释训练是否稳定，不要把曲线数据改写成表格，也不要声称看到了不存在的 loss 曲线。"
-        "运行成功率不要作为重点图表，只在影响结论置信度时用自然段说明。"
-        "如果上下文包含多个 Run，请围绕本 task 的参数变化、过程曲线和最终评价差异概括，不要写成模型百科。\n\n"
-        "## 第三章 建议\n\n"
-        "### 3.1 后续工作\n\n"
-        "#### 3.1.1 优化建议\n\n"
-        "用自然段提出可执行建议。每条建议必须连接前文四类数据中的证据：数据集概况、参数设置、训练过程数据或模型评价，"
-        "不要罗列空泛建议，也不要新增未展示的数据类别。不要提出 SHAP、特征重要性、部署监控、业务流程、"
-        "额外解释图等未在本报告结构化内容中展示的数据类别。多条建议必须分别成为独立自然段，每段第一句为结论句。\n\n"
-        "建模任务上下文 JSON：\n"
+        "请根据下面的建模任务上下文，写一份中文 Markdown 报告，给两类读者看："
+        "要决定这个模型能不能用的人，以及要接手继续做的人。\n\n"
+
+        "## 写作要求\n\n"
+        "1. **结论先行。** 开头用「## 结论」小节，三到五句话说清三件事：这个模型能不能用、"
+        "好到什么程度、最大的风险是什么。这一段要让不懂机器学习的人也能读懂。\n"
+        "2. **指标必须带参照系。** 不要只写「RMSE = 72.47」。上下文的 reference_frames 里已经"
+        "算好了换算结果，直接引用，例如「预测平均偏离约 72.5，相当于目标列均值的 0.8%」。"
+        "分类任务要对照多数类基线：准确率 92% 在多数类占 90% 时几乎没有价值。\n"
+        "3. **章节按内容出现。** 有逐轮训练记录才写训练过程，有最终测试才谈最终结论。"
+        "没有的内容直接略过，不要写一节只为了说「暂无」。\n"
+        "4. **区分选择分和最终测试分。** 选择分是在选择集上得到的，不能当作泛化能力的证据；"
+        "如果还没做最终评估，必须说明当前结论的可信度受限。\n"
+        "5. **建议要具体到能执行**，并指明依据哪条数据。「建议调参」不算；"
+        "「rmse 跨折变异系数 18%，说明划分敏感，建议增大数据量或改用分层切分」才算。\n\n"
+
+        "## 格式\n\n"
+        "- 用 `##` 和 `###` 两级标题，不要「第一章」「1.1.1」这类编号\n"
+        "- 不要输出表格、代码块或图表：数据集概况、参数、评价指标的表格和曲线图由前端另行渲染，"
+        "你只需要在正文里解释怎么读、说明了什么\n"
+        "- 模型名保留原始标识：写 random_forest、ARIMA，不要写成随机森林、阿里玛\n"
+        "- 篇幅控制在 800-1500 字。写不满不要注水，把话说完就停\n\n"
+
+        "## 示例（示范语气和密度，不是要你照抄结构）\n\n"
+        "> ## 结论\n"
+        "> \n"
+        "> 这个模型可以进入试用，但还不能直接上生产。xgboost_regressor 在留出集上的 "
+        "RMSE 是 72.47，约为目标列均值 8897 的 0.8%，也就是典型情况下预测误差不到 1%，"
+        "对负荷预测这个量级是够用的。\n"
+        "> \n"
+        "> 主要风险是这个成绩尚未在封存测试集上验证过，目前的 72.47 来自选择阶段，"
+        "而选择阶段的数据参与过模型挑选，天然偏乐观。建议先完成最终评估再决定是否上线。\n\n"
+
+        "## 建模任务上下文 JSON\n\n"
         f"{context_text}"
     )
     return [

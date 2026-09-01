@@ -180,7 +180,7 @@ async def test_generate_ai_report_requires_configured_key(db):
     assert "ARK_API_KEY" in str(exc.value.detail)
 
 
-async def test_generate_ai_report_uses_three_part_report_prompt(db, monkeypatch):
+async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, monkeypatch):
     task_id = await _seed_task(db)
     captured = {}
 
@@ -216,46 +216,38 @@ async def test_generate_ai_report_uses_three_part_report_prompt(db, monkeypatch)
 
     prompt_text = "\n".join(message["content"] for message in captured["messages"])
     assert captured["settings"].doubao_model == "doubao-test"
-    assert "## 第一章 结论" in prompt_text
-    assert "### 1.1" in prompt_text
-    assert "#### 1.1.1" in prompt_text
-    assert "## 第二章" in prompt_text
-    assert "## 第三章" in prompt_text
-    assert "多自然段" in prompt_text
-    assert "第一句" in prompt_text
-    assert "加粗亮色" in prompt_text
-    assert "入参" in prompt_text
-    assert "出参" in prompt_text
-    assert "参数设置" in prompt_text
-    assert "指标" in prompt_text
-    assert "图表" in prompt_text
-    assert "表格" in prompt_text
-    assert "任务要做什么" in prompt_text
-    assert "做了什么" in prompt_text
-    assert "训练过程" in prompt_text
-    assert "效果怎么样" in prompt_text
-    assert "单 task" in prompt_text
-    assert "信息密度大的内容用 ECharts 图" in prompt_text
-    assert "信息密度低的内容用表格" in prompt_text
-    assert "只展示数据集概况、参数设置、训练过程数据、模型评价" in prompt_text
-    assert "运行成功率" in prompt_text
-    assert "不要输出 Markdown 表格" in prompt_text
-    assert "不要提出 SHAP" in prompt_text
-    assert "未展示的数据类别" in prompt_text
-    assert "loss 曲线" in prompt_text
-    assert "预测曲线" in prompt_text
-    assert "模型名称必须保留原始英文/代码标识" in prompt_text
-    assert "不要翻译或音译" in prompt_text
-    assert "模型评价表" in prompt_text
-    assert "总分" in prompt_text
+
+    # The prompt asks for judgement, not for a skeleton to be filled. It used to
+    # paste a literal 第一章/1.1/1.1.1 outline and demand "每个小节至少包含一个
+    # 多自然段说明", which produced uniform padded prose; those are gone.
+    assert "## 第一章 结论" not in prompt_text
+    assert "#### 1.1.1" not in prompt_text
+    assert "多自然段" not in prompt_text
+    assert "总分：xx/100" not in prompt_text
+
+    # What it asks for instead.
+    assert "结论先行" in prompt_text
+    assert "章节按内容出现" in prompt_text
+    assert "参照系" in prompt_text
+    assert "多数类基线" in prompt_text
+    assert "选择分" in prompt_text          # selection vs final-test separation
+
+    # Facts computed server-side and handed over rather than left to the model.
+    assert "reference_frames" in prompt_text
+    assert "readiness" in prompt_text
+
+    # Still enforced: the model writes prose, the frontend renders the tables
+    # and charts, and model identifiers stay untranslated.
+    assert "不要输出表格、代码块或图表" in prompt_text
+    assert "模型名保留原始标识" in prompt_text
+
+    # The task's own facts still reach it.
     assert "客户流失预测" in prompt_text
     assert "random_forest" in prompt_text
     assert "tenure" in prompt_text
+
     assert result["task_id"] == task_id
     assert result["model"] == "doubao-test"
-    assert "## 第一章 结论" in result["markdown"]
-    assert "### 1.1" in result["markdown"]
-    assert "#### 1.1.1" in result["markdown"]
     assert "## 第三章 建议" in result["markdown"]
     assert "**总分：82/100。**" in result["markdown"]
     assert result["report_schema_version"] == "ai_report.rich.v1"
