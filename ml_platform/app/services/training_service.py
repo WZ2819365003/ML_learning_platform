@@ -469,7 +469,12 @@ async def _run_training_sync_by_id(
             hyperparams, test_size, eval_metrics, cv_folds,
             str(settings.storage_models), None, progress_callback, evaluation_mode,
         )
-        metrics = {k: v for k, v in training_result["result_metrics"].items() if k != "cv_folds"}
+        # cv_folds (per-fold scores) used to be dropped here. It is what turns
+        # "mean ± std" into a picture of *where* the spread comes from — one bad
+        # fold reads very differently from uniform noise — and it is tiny: five
+        # folds times a handful of numbers. The log line still strips it, since
+        # a log entry is not the place for a nested list.
+        metrics = dict(training_result["result_metrics"])
 
         async with async_session_factory() as db:
             result = await db.execute(select(TrainingTask).where(TrainingTask.id == training_task_id))
