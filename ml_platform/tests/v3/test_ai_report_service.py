@@ -241,7 +241,7 @@ async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, m
     # Still enforced: the model writes prose, the frontend renders the tables
     # and charts, and model identifiers stay untranslated.
     assert "不要输出表格、代码块或图表" in prompt_text
-    assert "模型名保留原始标识" in prompt_text
+    assert "不要翻译成中文" in prompt_text
 
     # The task's own facts still reach it.
     assert "客户流失预测" in prompt_text

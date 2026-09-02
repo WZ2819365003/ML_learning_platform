@@ -256,18 +256,30 @@ class TestModelCountIsAFactNotAnEstimate:
     everything after it.
     """
 
-    def test_the_count_comes_from_the_leaderboard(self):
-        ctx = {"leaderboard": [{"run_id": str(i)} for i in range(7)],
+    def test_the_count_and_the_winner_come_from_the_leaderboard(self):
+        ctx = {"leaderboard": [{"run_id": str(i), "model_type": f"m{i}"} for i in range(7)],
                "experiments": [{"id": "a"}, {"id": "b"}, {"id": "c"}]}
         user = build_ai_report_messages(ctx)[-1]["content"]
         assert "本次共训练了 7 个模型" in user
+        assert "表现最好的是 m0" in user
+
+    def test_no_example_model_name_appears_anywhere_in_the_prompt(self):
+        # "写 random_forest、ARIMA，不要写成随机森林" taught the model that ARIMA
+        # was in play; the report then opened with "其中 ARIMA 表现最好" on a task
+        # that never trained one. Inside a prompt, an example name and a fact
+        # are indistinguishable.
+        user = build_ai_report_messages({})[-1]["content"]
+        for invented in ("ARIMA", "阿里玛"):
+            assert invented not in user, invented
 
     def test_it_says_which_number_not_to_use(self):
         user = build_ai_report_messages(REGRESSION_CTX)[-1]["content"]
         assert "实验批次数，不是模型数" in user
 
     def test_an_empty_leaderboard_does_not_crash_the_prompt(self):
-        assert "本次共训练了 0 个模型" in build_ai_report_messages({})[-1]["content"]
+        user = build_ai_report_messages({})[-1]["content"]
+        assert "本次共训练了 0 个模型" in user
+        assert "表现最好的是 暂无" in user
 
     def test_a_prebuilt_context_string_still_works(self):
         # The archive path passes context already serialised.
