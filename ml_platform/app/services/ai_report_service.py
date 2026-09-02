@@ -2304,6 +2304,10 @@ async def build_task_report_context(
             "row_count": dataset.row_count if dataset else None,
             "column_count": dataset.column_count if dataset else None,
             "columns_info": _compact_value(dataset.columns_info or {}) if dataset else {},
+            # _compact_value caps a dict at sixteen keys, so columns_info holds
+            # under half the columns of a wide dataset. The names alone are
+            # cheap and are what the report's field breakdown counts.
+            "column_names": list((dataset.columns_info or {}).keys()) if dataset else [],
         },
         "experiments": [
             {
