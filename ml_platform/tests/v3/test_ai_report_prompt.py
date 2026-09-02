@@ -11,6 +11,8 @@ from app.services.ai_report_service import (
     build_ai_report_messages,
     build_reference_frames,
     _build_headline_metrics,
+    _compact_metrics,
+    _context_for_llm,
     compute_readiness_score,
 )
 
@@ -183,3 +185,42 @@ class TestHeadlineScore:
         card = next(m for m in metrics if m["key"] == "ai_score")
         assert card["value"] == "60/100"
         assert "最终评估" in card["detail"] or "封存" in card["detail"]
+
+
+class TestCurveMetricsSurviveCompaction:
+    """Chart data must survive the trip that shrinks the prompt.
+
+    _compact_metrics keeps at most ten non-scalar values, chosen in alphabetical
+    order. val_scatter sorts near the end, so it was dropped from every run and
+    the 实际值 vs 预测值 chart had no data to draw — silently, since an absent
+    key just means "no chart for this model".
+    """
+
+    def _metrics(self, n=500):
+        return {
+            **{f"filler_{i}": [1, 2] for i in range(12)},   # eat the ten slots
+            "val_scatter": {"actual": list(range(n)), "predicted": list(range(n))},
+        }
+
+    def test_val_scatter_is_not_dropped(self):
+        out = _compact_metrics(self._metrics())
+        assert "val_scatter" in out
+
+    def test_parallel_series_keep_enough_points_to_plot(self):
+        out = _compact_metrics(self._metrics())
+        actual = out["val_scatter"]["actual"]
+        # The generic path cut these to twelve, which is not a curve.
+        assert len(actual) == 120
+        assert len(out["val_scatter"]["predicted"]) == len(actual)
+
+    def test_a_short_series_is_left_alone(self):
+        out = _compact_metrics(
+            {"val_scatter": {"actual": [1, 2, 3], "predicted": [1, 2, 3]}}
+        )
+        assert out["val_scatter"]["actual"] == [1, 2, 3]
+
+    def test_the_prompt_still_only_sees_a_summary(self):
+        # 120 points per run across eight runs would bloat the prompt for no
+        # gain; the model is told how many points there are, not what they are.
+        out = _context_for_llm({"val_scatter": {"actual": list(range(500))}})
+        assert out["val_scatter"] == {"actual": {"points": 500}}

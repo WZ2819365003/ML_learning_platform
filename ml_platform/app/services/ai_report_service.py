@@ -82,10 +82,27 @@ _CURVE_METRIC_KEYS = {
     "actuals",
     "predictions",
     "prediction_curve",
+    # A dict of parallel actual/predicted lists. Without this it fell through to
+    # the general branch of _compact_metrics, where it lost the race for the ten
+    # non-scalar slots on alphabetical order and was dropped outright — so the
+    # 实际值 vs 预测值 chart could never be built from a leaderboard entry.
+    "val_scatter",
 }
 
 
 def _compact_curve_value(value: Any, *, limit: int = 120) -> Any:
+    if isinstance(value, dict):
+        # Parallel series (val_scatter's actual/predicted). Truncating each to
+        # the same limit keeps them aligned; _compact_value would cut them to
+        # twelve points, which plots as a curve that is not one.
+        return {
+            str(key)[:80]: (
+                _compact_curve_value(val, limit=limit)
+                if isinstance(val, (list, tuple, dict))
+                else _compact_value(val, depth=2)
+            )
+            for key, val in list(value.items())[:12]
+        }
     if isinstance(value, (list, tuple)):
         compact_items: list[Any] = []
         for item in list(value)[:limit]:
