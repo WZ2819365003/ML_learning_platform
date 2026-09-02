@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import logging
 import re
 from typing import Any, Callable
@@ -204,21 +205,29 @@ async def generate_narrative_report(
 # so a JS tick formatter is not available; the space is reserved up front.
 _GRID = {"left": 86, "right": 28, "top": 34, "bottom": 52}
 
+_CHART_METRIC_NAMES = {"r2": "R²", "rmse": "RMSE", "mae": "MAE",
+                       "mse": "MSE", "mape": "MAPE"}
+
 # An axis name defaults to the end of the axis, where it collides with the plot
 # edge and is cut to its first letter.
 _X_NAME = {"nameLocation": "middle", "nameGap": 28}
 
 
-def _padded_floor(values: list[float]) -> float:
-    lo, hi = min(values), max(values)
-    pad = (hi - lo) * 0.1 or abs(lo) * 0.001 or 1.0
-    return round(lo - pad, 6)
+def _axis_bounds(values: list[float]) -> tuple[float, float]:
+    """A padded, round-numbered range for a bar axis.
 
-
-def _padded_ceiling(values: list[float]) -> float:
+    Padding alone gave ticks like 74.32155 — ECharts prints an explicit min and
+    max verbatim, so an unrounded bound becomes a label. Snapping to a step one
+    order of magnitude below the padding keeps the axis readable.
+    """
     lo, hi = min(values), max(values)
     pad = (hi - lo) * 0.1 or abs(hi) * 0.001 or 1.0
-    return round(hi + pad, 6)
+    step = 10 ** math.floor(math.log10(pad)) if pad > 0 else 1.0
+    floor = math.floor((lo - pad) / step) * step
+    ceiling = math.ceil((hi + pad) / step) * step
+    # step can be tiny; round away the float noise it leaves behind.
+    digits = max(0, -math.floor(math.log10(step)) + 1)
+    return round(floor, digits), round(ceiling, digits)
 
 
 def _line(name: str, data: list[Any], color: str) -> dict[str, Any]:
@@ -297,9 +306,11 @@ def build_run_charts(
         values = [f.get(key) for f in folds if isinstance(f.get(key), (int, float))]
         if key and values:
             mean = sum(values) / len(values)
+            label = _CHART_METRIC_NAMES.get(key, key.upper())
+            bounds = _axis_bounds(values)
             charts.append({
                 "id": "fold_scores",
-                "title": f"交叉验证各折 {key}",
+                "title": f"交叉验证各折 {label}",
                 "description": "每折单独的得分与均值线。个别折偏低说明数据划分不均，而非模型整体不稳。",
                 "type": "echarts",
                 "option": {
@@ -309,15 +320,15 @@ def build_run_charts(
                     # Not scale:true — that puts the axis floor on the data
                     # minimum, so the lowest bar renders zero pixels high and
                     # silently disappears.
-                    "yAxis": {"type": "value", "name": key,
-                              "min": _padded_floor(values),
-                              "max": _padded_ceiling(values)},
+                    "yAxis": {"type": "value", "name": label,
+                              "min": bounds[0], "max": bounds[1]},
                     "series": [{
                         "type": "bar", "data": values,
                         "itemStyle": {"color": "#2563eb", "borderRadius": [4, 4, 0, 0]},
                         "markLine": {
                             "silent": True, "symbol": "none",
-                            "label": {"formatter": f"均值 {mean:.4f}"},
+                            "label": {"formatter": f"均值 {mean:.4f}",
+                                      "position": "insideStartTop"},
                             "lineStyle": {"type": "dashed", "color": "#dc2626"},
                             "data": [{"yAxis": mean}],
                         },

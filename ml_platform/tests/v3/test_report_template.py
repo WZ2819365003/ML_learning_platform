@@ -206,6 +206,24 @@ class TestChartDefects:
         assert axis.get("scale") is not True
         assert axis["min"] < 0.9972, axis
 
+    def test_the_axis_bounds_are_round_numbers(self):
+        # ECharts prints an explicit min and max verbatim, so an unrounded
+        # padded bound became the tick label "74.32155".
+        axis = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}})["option"]["yAxis"]
+        for bound in (axis["min"], axis["max"]):
+            assert len(str(bound).split(".")[-1]) <= 2, bound
+
+    def test_the_metric_name_is_capitalised_in_the_title(self):
+        chart = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}})
+        assert "RMSE" in chart["title"]
+        assert "rmse" not in chart["title"]
+
+    def test_the_mean_line_label_sits_inside_the_plot(self):
+        # At the default right-hand end the plot edge clipped it to "均值".
+        chart = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}})
+        mark = chart["option"]["series"][0]["markLine"]
+        assert mark["label"]["position"].startswith("inside")
+
     def test_identical_fold_values_still_get_a_usable_axis(self):
         flat = [{"fold": i + 1, "rmse": 5.0} for i in range(3)]
         axis = self._chart("fold_scores", {"metrics": {"cv_folds": flat}})["option"]["yAxis"]
