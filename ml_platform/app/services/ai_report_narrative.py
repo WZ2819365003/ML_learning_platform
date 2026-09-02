@@ -312,12 +312,24 @@ def _parse_placements(raw: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 def select_runs_for_reports(context: dict[str, Any]) -> list[dict[str, Any]]:
-    """The runs worth narrating: successful ones, best first, capped."""
+    """The runs worth narrating: best first, capped.
+
+    Reads `leaderboard`, which is what build_task_report_context actually
+    produces — it holds only successful runs, already ranked, with the metrics
+    and params a sub-report needs. `runs` is accepted as a fallback for callers
+    that assemble a context themselves.
+
+    Getting this key wrong is silent: an absent key yields an empty list, so
+    every report simply came back with no sub-reports at all and nothing
+    anywhere said why.
+    """
+    entries = context.get("leaderboard") or context.get("runs") or []
     runs = [
-        r for r in (context.get("runs") or [])
-        if str(r.get("status", "")).upper() == "SUCCESS"
+        r for r in entries
+        # Leaderboard entries carry no status field; they are successful by
+        # construction. Only filter when a status is actually present.
+        if str(r.get("status", "SUCCESS")).upper() == "SUCCESS"
     ]
-    # The leaderboard is already ordered; fall back to rank when it is absent.
     runs.sort(key=lambda r: (r.get("rank") is None, r.get("rank") or 0))
     return runs[:_MAX_RUN_REPORTS]
 
@@ -394,8 +406,7 @@ async def generate_narrative_report(
     return {
         "overview": overview,
         "runs": list(run_reports),
-        "runs_total": len([r for r in (context.get("runs") or [])
-                           if str(r.get("status", "")).upper() == "SUCCESS"]),
+        "runs_total": len(context.get("leaderboard") or context.get("runs") or []),
         "runs_reported": len(run_reports),
     }
 

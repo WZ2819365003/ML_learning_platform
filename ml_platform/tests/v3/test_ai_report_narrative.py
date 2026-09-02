@@ -96,6 +96,20 @@ class TestParsePlacements:
 
 
 class TestSelectRuns:
+    def test_reads_the_leaderboard_which_is_what_the_context_actually_has(self):
+        # build_task_report_context emits `leaderboard`, never `runs`. Reading
+        # the wrong key is silent — an absent key is an empty list, so every
+        # report came back with no sub-reports and nothing said why.
+        picked = narrative.select_runs_for_reports({"leaderboard": [
+            {"run_id": "b", "rank": 2}, {"run_id": "a", "rank": 1},
+        ]})
+        assert [r["run_id"] for r in picked] == ["a", "b"]
+
+    def test_leaderboard_entries_need_no_status_field(self):
+        # They are successful by construction; requiring status would drop them.
+        assert len(narrative.select_runs_for_reports(
+            {"leaderboard": [{"run_id": "a", "rank": 1}]})) == 1
+
     def test_keeps_only_successful_runs_best_first(self):
         picked = narrative.select_runs_for_reports({"runs": [
             {"run_id": "b", "status": "SUCCESS", "rank": 2},
