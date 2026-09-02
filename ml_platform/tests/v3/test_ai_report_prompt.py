@@ -11,6 +11,7 @@ from app.services.ai_report_service import (
     build_ai_report_messages,
     build_reference_frames,
     _build_headline_metrics,
+    _build_report_blocks,
     _compact_metrics,
     _highlight_report_lead_sentences,
     _context_for_llm,
@@ -312,3 +313,53 @@ class TestLeadSentenceBoldingRespectsDecimals:
         out = _highlight_report_lead_sentences("A 是 0.81%，B 是 1.6%，都可以。第二句。")
         assert "0.81%" in out and "1.6%" in out
         assert "**A 是 0.81%，B 是 1.6%，都可以。**" in out
+
+
+class TestReportBlocksCarryNoChapterScaffold:
+    """The overall report is prose plus artifacts, not a filled-in template.
+
+    Six server-written chapters used to be appended after the model's prose —
+    任务范围, 过程与评价, 数据集概况, 参数说明, 训练过程, 效果小结. They were
+    written when the report was one long document; now the overall report gives
+    the verdict and the dataset and a sub-report per model covers the rest, so
+    they said everything a third time. Their headings also leaked into the table
+    of contents, which listed "第二章 过程与评价" for a report with no chapters.
+    """
+
+    def _blocks(self, markdown="## 结论\n\n可以用。\n\n## 数据集概况\n\n八万行。"):
+        return _build_report_blocks(
+            markdown,
+            [{"id": "training_curves"}],
+            [{"id": "data_profile"}],
+        )
+
+    def test_the_models_prose_is_kept_whole(self):
+        # It used to be sliced on 第一章/第三章 headings the prompt no longer
+        # asks for, so the fallback quietly kept everything anyway.
+        body = self._blocks()[0]["markdown"]
+        assert "## 结论" in body and "## 数据集概况" in body
+
+    def test_no_chapter_boilerplate_is_appended(self):
+        joined = " ".join(b.get("markdown", "") for b in self._blocks())
+        for phrase in ("第二章", "1.2 任务范围", "过程与评价"):
+            assert phrase not in joined, phrase
+
+    def test_real_tables_and_charts_survive(self):
+        # They are computed from data and are the only place some facts appear.
+        ids = [b["id"] for b in self._blocks()]
+        assert "data_profile_block" in ids
+        assert "training_curves_block" in ids
+
+    def test_the_title_is_not_doubled(self):
+        # The body used to be a slice of the prose, so prepending a title was
+        # safe; the whole document goes in now, title included.
+        body = _build_report_blocks("# AI 建模报告\n\n## 结论\n\n可以用。", [], [])[0]["markdown"]
+        assert body.count("# AI 建模报告") == 1
+
+    def test_a_body_without_a_title_still_gets_one(self):
+        body = _build_report_blocks("## 结论\n\n可以用。", [], [])[0]["markdown"]
+        assert body.startswith("# AI 建模报告")
+
+    def test_an_artifact_that_was_not_built_is_not_referenced(self):
+        ids = [b["id"] for b in _build_report_blocks("正文。", [], [])]
+        assert ids == ["conclusion"]

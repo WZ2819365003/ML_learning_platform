@@ -1944,39 +1944,12 @@ def _intro_title(markdown: str) -> str:
     return f"# {first_heading.group(1).strip()}\n" if first_heading else "# AI 建模报告\n"
 
 
-def _task_scope_markdown(context: dict[str, Any]) -> str:
-    task = context.get("task") or {}
-    dataset = context.get("dataset") or {}
-    experiments = context.get("experiments") or []
-    counts = context.get("run_status_counts") or {}
-    total_runs = sum(int(value or 0) for value in counts.values())
-    success_runs = int(counts.get("SUCCESS", 0) or 0)
-    model_names: list[str] = []
-    strategy_names: list[str] = []
-    for exp in experiments:
-        strategy = str(exp.get("strategy_type") or "—")
-        if strategy not in strategy_names:
-            strategy_names.append(strategy)
-        for model in exp.get("selected_models") or []:
-            model_text = str(model)
-            if model_text not in model_names:
-                model_names.append(model_text)
-    output_text = "分类标签与类别概率" if task.get("task_type") == "classification" else "连续数值预测"
-
-    return (
-        "### 1.2 任务范围\n\n"
-        "#### 1.2.1 入参与出参\n\n"
-        f"**本任务的研究边界是清晰的单 task 建模评估。** 本次建模使用数据集 "
-        f"`{dataset.get('name') or '—'}`，目标列是 `{task.get('target_column') or '—'}`，"
-        f"任务类型为 `{task.get('task_type') or '—'}`，主要评价指标为 "
-        f"`{task.get('objective_metric') or '—'}`。业务出参是{output_text}，平台出参是参数记录、"
-        "训练过程数据、模型评价结果和本报告归档。\n\n"
-        f"**本任务的完成情况应从训练批次、Run 结果和结构化证据共同判断。** 本次共执行 "
-        f"{len(experiments)} 个训练配置批次、{total_runs} 个 Run，其中成功 {success_runs} 个。"
-        f"参与模型包括 {'、'.join(model_names[:8]) or '暂无记录'}，训练策略包括 "
-        f"{'、'.join(strategy_names) or '暂无记录'}；下文只展开四类核心证据：数据集概况、参数设置、"
-        "训练过程数据和模型评价。"
-    )
+def _with_title(markdown: str) -> str:
+    """The report body, guaranteed to open with exactly one H1."""
+    body = _strip_markdown_tables(markdown or "")
+    if re.search(r"^#\s+\S", body, flags=re.MULTILINE):
+        return body
+    return _intro_title(body) + "\n" + body
 
 
 def _input_output_markdown(context: dict[str, Any]) -> str:
@@ -2009,90 +1982,6 @@ def _input_output_markdown(context: dict[str, Any]) -> str:
     )
 
 
-def _data_profile_markdown(context: dict[str, Any]) -> str:
-    task = context.get("task") or {}
-    dataset = context.get("dataset") or {}
-    columns_info = _iter_column_info(dataset.get("columns_info"))
-    target_column = task.get("target_column") or "—"
-    feature_count = max(len(columns_info) - (1 if target_column != "—" else 0), 0)
-    if not columns_info:
-        field_sentence = "当前数据集没有保存字段画像，因此只能读取样本量和列数，无法逐字段解释。"
-    else:
-        field_names = "、".join(
-            _readable_field_name(
-                column,
-                role=_column_role(column, info, task.get("target_column")),
-            )
-            for column, info in columns_info[:8]
-        )
-        suffix = "等字段" if len(columns_info) > 8 else "这些字段"
-        target_label = _readable_field_name(str(target_column), role="目标列")
-        field_sentence = f"字段画像显示，本表覆盖 {field_names}{suffix}，其中 {target_label} 是目标列。"
-
-    return (
-        "### 2.1 数据集概况\n\n"
-        "#### 2.1.1 数据输入结论\n\n"
-        f"**本任务的数据输入已经具备基本可解释边界。** 数据集 `{dataset.get('name') or '—'}` "
-        f"当前记录了 {_fmt_value(dataset.get('row_count'))} 行、{_fmt_value(dataset.get('column_count'))} 列。"
-        f"{field_sentence}除目标列外，大约有 {feature_count} 个可用输入字段需要进入后续特征处理和模型训练。\n\n"
-        "**字段概况表用于说明模型实际接收了哪些输入。** 下表把每个字段的角色、类型、缺失情况和唯一值数量列出；"
-        "它的作用不是替代数据质量审计，而是帮助读者判断目标列是否明确、输入字段是否完整、哪些字段可能需要补缺失或编码。"
-    )
-
-
-def _training_process_markdown(context: dict[str, Any]) -> str:
-    counts = context.get("run_status_counts") or {}
-    successful = int(counts.get("SUCCESS", 0) or 0)
-    failed = int(counts.get("FAILED", 0) or 0)
-    return (
-        "### 2.3 训练过程\n\n"
-        "#### 2.3.1 过程数据结论\n\n"
-        f"**训练过程的重点是指标轨迹，而不是运行成功率可视化。** 本任务当前成功 Run 为 {successful} 个，"
-        f"失败 Run 为 {failed} 个；这个信息只用于判断实验是否完整，不作为主要图表内容。\n\n"
-        "**训练曲线用于判断过程是否支撑最终结论。** 下方 ECharts 图优先展示 Run 记录中的 "
-        "`history`、`training_history`、`loss_history` 或 `evals_result`；如果当前训练器没有保存逐 epoch 曲线，"
-        "则展示真实 Trial 级选择指标与最终测试指标。读图时重点看三件事：过程指标是否随参数变化稳定、"
-        "验证指标是否与测试指标脱节、不同策略是否持续带来效果提升。"
-    )
-
-
-def _effect_summary_markdown(context: dict[str, Any]) -> str:
-    task = context.get("task") or {}
-    final_key, final_value, final_source = _available_final_metric(context)
-    best_final = _best_run_level_final(context)
-    best_model = (best_final or {}).get("model_type")
-    best_key = (best_final or {}).get("final_test_metric_key") or final_key
-    best_value = (best_final or {}).get("final_test_value")
-    if best_value is None:
-        best_value = final_value
-    best_sentence = ""
-    if best_model and best_value is not None:
-        best_sentence = (
-            f"当前表现最好的 {best_model} {_metric_label(best_key)}为 {_fmt_value(best_value)}，"
-            "这个数字比原始指标 key 更适合作为读者理解模型效果的主句。"
-        )
-    if final_value is None:
-        final_sentence = "当前尚未记录最终测试指标，因此只能先把选择/验证阶段指标当作相对比较依据。"
-    elif final_source == "run_level":
-        final_sentence = (
-            f"当前已有 Run 级最终测试指标：{_metric_text(final_key, final_value)}，"
-            "可以用于比较模型泛化效果；但任务级 final_evaluation 尚未固化，正式结论仍需完成最终评估确认。"
-        )
-    else:
-        final_sentence = (
-            f"当前已有{_metric_text(final_key, final_value)}，可以作为模型泛化效果的主要证据。"
-        )
-    return (
-        "### 2.4 模型评价\n\n"
-        "#### 2.4.1 评价结论\n\n"
-        f"**模型评价应优先用表格横向比较。** `{task.get('objective_metric') or '—'}`、F1、ROC-AUC "
-        "这类低密度指标更适合放在同一张表中对照不同模型、策略和 Trial，而不是重复绘制成柱状图。"
-        f"{best_sentence or final_sentence}{final_sentence if best_sentence else ''}\n\n"
-        "**评价表的阅读顺序是先看最终测试，再看选择阶段与最终测试的差距。** 下表把选择/验证指标和最终测试指标放在同一行；"
-        "如果差距过大，即使选择阶段排名靠前，也不能直接作为本 task 的推荐结论。"
-    )
-
-
 def _param_snippet(params: dict[str, Any] | None) -> str:
     compact = _compact_params(params)
     if not isinstance(compact, dict) or not compact:
@@ -2104,57 +1993,6 @@ def _param_snippet(params: dict[str, Any] | None) -> str:
     return "，".join(parts)
 
 
-def _parameter_markdown(context: dict[str, Any]) -> str:
-    leaderboard = context.get("leaderboard") or []
-    if not leaderboard:
-        return (
-            "### 2.2 参数设置\n\n"
-            "#### 2.2.1 训练配置结论\n\n"
-            "**当前参数证据不足以解释训练配置。** 当前没有成功 Run 的参数记录，无法解释本 task 的训练配置；"
-            "建议先完成至少一个成功训练，再查看参数与指标之间的关系。"
-        )
-    best = _best_run_level_final(context) or leaderboard[0]
-    model = best.get("model_type") or "未知模型"
-    strategy = best.get("strategy_type") or "未知策略"
-    params = _param_snippet(best.get("params"))
-    return (
-        "### 2.2 参数设置\n\n"
-        "#### 2.2.1 训练配置结论\n\n"
-        f"**参数设置表记录的是本 task 每个 Run 的训练配置证据。** 当前最终测试口径下最值得关注的是 "
-        f"`{model}` / `{strategy}`，关键参数为 {params}。"
-        "参数部分的读法不是看谁的参数最多，而是看同一任务下参数变化是否带来稳定的评价提升；"
-        "如果参数变化没有换来最终测试提升，后续调参应收窄搜索范围。"
-    )
-
-
-def _process_chapter_markdown() -> str:
-    return (
-        "## 第二章 过程与评价\n\n"
-        "**本章只围绕结构化证据解释训练过程和效果。** 报告正文将数据集概况、参数设置、训练过程数据、"
-        "模型评价四类信息按阅读顺序展开；字段和准确率等低密度信息用表格呈现，训练曲线和预测曲线等高密度信息用 ECharts 呈现。"
-    )
-
-
-def _metric_visual_markdown(context: dict[str, Any]) -> str:
-    task = context.get("task") or {}
-    final_key, final_value, final_source = _available_final_metric(context)
-    if final_value is None:
-        final_sentence = "当前尚未记录最终测试指标，因此只能先用选择阶段指标判断候选模型的相对表现。"
-    elif final_source == "run_level":
-        final_sentence = f"当前已有 Run 级最终测试指标 `{final_key}`={_fmt_value(final_value)}，但任务级最终评估尚未固化。"
-    else:
-        final_sentence = f"当前已有最终测试指标 `{final_key}`={_fmt_value(final_value)}。"
-    return (
-        "## 指标与图表读法\n\n"
-        f"任务目标指标是 `{task.get('objective_metric') or '—'}`，优化方向是 "
-        f"`{task.get('objective_direction') or '—'}`。选择阶段指标用于挑选候选模型，"
-        f"最终测试指标用于报告模型泛化表现，二者不能直接混在一张结论表里解读。{final_sentence}\n\n"
-        "效果指标表回答“哪个模型更好、差距在哪里”；训练过程曲线回答“训练是否收敛、是否过拟合”；"
-        "ROC 或预测结果曲线回答“模型输出是否稳定”。下面保留的特征重要性图回答"
-        "“模型主要依赖哪些输入变量”，它更适合解释模型行为，而不是重复展示准确率。"
-    )
-
-
 def _block_chart(chart_id: str, caption: str) -> dict[str, Any]:
     return {"type": "chart", "id": f"{chart_id}_block", "chart_id": chart_id, "caption": caption}
 
@@ -2164,61 +2002,56 @@ def _block_table(table_id: str, caption: str) -> dict[str, Any]:
 
 
 def _build_report_blocks(
-    context: dict[str, Any],
     markdown: str,
     charts: list[dict[str, Any]],
     tables: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """The overall report's body: the model's prose, then the real artifacts.
+
+    It used to slice the prose into 第一章/第三章 and pad the gaps with six
+    server-written chapters — 任务范围, 过程与评价, 数据集概况, 参数说明,
+    训练过程, 效果小结. That scaffold dates from when the report was one long
+    document and there was nothing else to read. There is now: the overall
+    report gives the verdict and the dataset, and a sub-report per model covers
+    training and results. The chapters said the same things a third time, in the
+    mechanical register that made the report hard to read — and their headings
+    are what put "第二章 过程与评价" in the table of contents of a report that
+    has no chapters.
+
+    The tables and charts stay. They are computed from real data, they are the
+    only place several of these facts appear at all, and each keeps its one-line
+    caption saying how to read it.
+    """
     chart_ids = {chart["id"] for chart in charts}
     table_ids = {table["id"] for table in tables}
-    conclusion = _strip_markdown_tables(
-        _section_from_markdown_any(markdown, ["第一章 结论", "一、结论"]) or markdown
-    )
-    suggestions = _strip_markdown_tables(
-        _section_from_markdown_any(markdown, ["第三章 建议", "三、建议"])
-    )
 
     blocks: list[dict[str, Any]] = [
-        {"type": "markdown", "id": "conclusion", "markdown": _intro_title(markdown) + "\n" + conclusion},
-        {"type": "markdown", "id": "task_scope", "markdown": _task_scope_markdown(context)},
-        {"type": "markdown", "id": "process_chapter", "markdown": _process_chapter_markdown()},
-        {"type": "markdown", "id": "data_profile_explanation", "markdown": _data_profile_markdown(context)},
+        # The title is prepended only when the prose lacks one. It used to be
+        # safe to always prepend because the body was a *slice* of the prose;
+        # now the whole document goes in, title included.
+        {"type": "markdown", "id": "conclusion", "markdown": _with_title(markdown)},
     ]
-    if "data_profile" in table_ids:
-        blocks.append(_block_table(
-            "data_profile",
-            "这张表说明数据集中有哪些字段、每个字段扮演什么角色，以及是否存在缺失或编码风险。",
-        ))
-    blocks.append({"type": "markdown", "id": "parameter_explanation", "markdown": _parameter_markdown(context)})
-    if "parameter_settings" in table_ids:
-        blocks.append(_block_table(
-            "parameter_settings",
-            "这张表只保留本 task 训练真正需要追溯的配置：模型、策略、Trial、验证设置和关键参数。",
-        ))
-    blocks.append({"type": "markdown", "id": "model_training_process_explanation", "markdown": _training_process_markdown(context)})
-    if "training_curves" in chart_ids:
-        blocks.append(_block_chart(
-            "training_curves",
-            "这张图优先展示逐 epoch 的 loss/score 曲线；没有逐轮记录时展示 Trial 级选择指标与最终测试指标，用来判断调参过程是否稳定。",
-        ))
-    blocks.append({"type": "markdown", "id": "effect_summary", "markdown": _effect_summary_markdown(context)})
-    if "metric_comparison" in table_ids:
-        blocks.append(_block_table(
-            "metric_comparison",
-            "这张表用来横向比较准确率等效果指标，优先看最终测试指标，其次看选择/验证阶段指标。",
-        ))
-    if "roc_curve" in chart_ids:
-        blocks.append(_block_chart(
-            "roc_curve",
-            "这张图用于分类任务，观察模型区分正负样本的能力；曲线越靠近左上角，区分能力越强。",
-        ))
-    if "prediction_curve" in chart_ids:
-        blocks.append(_block_chart(
-            "prediction_curve",
-            "这张图把真实值与预测值按样本序号放在一起，方便观察预测偏差是否集中在局部样本。",
-        ))
-    if suggestions:
-        blocks.append({"type": "markdown", "id": "suggestions", "markdown": suggestions})
+    captions = [
+        ("table", "data_profile",
+         "这张表说明数据集中有哪些字段、每个字段扮演什么角色，以及是否存在缺失或编码风险。"),
+        ("table", "parameter_settings",
+         "这张表只保留本 task 训练真正需要追溯的配置：模型、策略、Trial、验证设置和关键参数。"),
+        ("chart", "training_curves",
+         "这张图优先展示逐 epoch 的 loss/score 曲线；没有逐轮记录时展示 Trial 级选择指标与最终测试指标，用来判断调参过程是否稳定。"),
+        ("table", "metric_comparison",
+         "这张表用来横向比较准确率等效果指标，优先看最终测试指标，其次看选择/验证阶段指标。"),
+        ("chart", "roc_curve",
+         "这张图用于分类任务，观察模型区分正负样本的能力；曲线越靠近左上角，区分能力越强。"),
+        ("chart", "prediction_curve",
+         "这张图把真实值与预测值按样本序号放在一起，方便观察预测偏差是否集中在局部样本。"),
+    ]
+    for kind, artifact_id, caption in captions:
+        present = chart_ids if kind == "chart" else table_ids
+        if artifact_id in present:
+            blocks.append(
+                _block_chart(artifact_id, caption) if kind == "chart"
+                else _block_table(artifact_id, caption)
+            )
     return blocks
 
 
@@ -2233,7 +2066,7 @@ def build_rich_report_payload(context: dict[str, Any] | str, markdown: str) -> d
         "charts": charts,
         "tables": tables,
         "evidence": _build_evidence(structured),
-        "report_blocks": _build_report_blocks(structured, markdown, charts, tables),
+        "report_blocks": _build_report_blocks(markdown, charts, tables),
     }
 
 

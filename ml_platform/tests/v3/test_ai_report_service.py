@@ -282,13 +282,20 @@ async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, m
     blocks = result["report_blocks"]
     assert blocks[0]["type"] == "markdown"
     assert blocks[0]["id"] == "conclusion"
-    assert any(block["id"] == "task_scope" for block in blocks)
-    assert any(block["id"] == "process_chapter" for block in blocks)
-    assert any(block["id"] == "data_profile_explanation" for block in blocks)
-    assert any(block["id"] == "model_training_process_explanation" for block in blocks)
-    assert any(block["id"] == "effect_summary" for block in blocks)
-    assert not any(block["id"] == "ai_explanation" for block in blocks)
-    assert any(block["id"] == "parameter_explanation" for block in blocks)
+    # The six server-written chapters are gone; the body is the model's prose
+    # followed by the computed tables and charts.
+    assert not any(block["id"] == "task_scope" for block in blocks)
+    assert any(block["id"] == "data_profile_block" for block in blocks)
+    assert not any(block["id"] == "process_chapter" for block in blocks)
+    for gone in ("data_profile_explanation", "model_training_process_explanation",
+                 "effect_summary", "parameter_explanation", "ai_explanation"):
+        assert not any(block["id"] == gone for block in blocks), gone
+    # What is left is the prose and the artifacts it refers to.
+    assert {b["id"] for b in blocks} <= {
+        "conclusion", "data_profile_block", "parameter_settings_block",
+        "training_curves_block", "metric_comparison_block", "roc_curve_block",
+        "prediction_curve_block",
+    }
     assert any(block["type"] == "table" and block["table_id"] == "data_profile" for block in blocks)
     assert any(block["type"] == "table" and block["table_id"] == "parameter_settings" for block in blocks)
     assert any(block["type"] == "table" and block["table_id"] == "metric_comparison" for block in blocks)
@@ -313,25 +320,33 @@ async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, m
         if block["type"] == "markdown"
     )
     assert "|模型|分数|" not in report_text
-    assert "### 1.2 任务范围" in report_text
-    assert "## 第二章 过程与评价" in report_text
-    assert "### 2.1 数据集概况" in report_text
-    assert "### 2.2 参数设置" in report_text
-    assert "### 2.3 训练过程" in report_text
-    assert "### 2.4 模型评价" in report_text
-    assert "## 任务目标与完成情况" not in report_text
-    assert "## 数据概况与字段解释" not in report_text
-    assert "## 模型训练过程" not in report_text
+    # No numbered chapters at all any more, from either source: the prompt does
+    # not ask for them and the server no longer appends its own. They were what
+    # put "第二章 过程与评价" in the table of contents of a report with no
+    # chapters, and what made the whole thing read like a filled-in template.
+    # Only headings the *server* used to append are checked here. The stub
+    # reply above still contains 第一章/第二章/第三章 of its own, and whatever the
+    # model writes passes through untouched — the point is that nothing is
+    # bolted on after it any more.
+    for scaffold in ("1.2 任务范围", "1.2.1 入参与出参", "2.2 参数设置",
+                     "2.4 模型评价", "任务目标与完成情况", "数据概况与字段解释"):
+        assert scaffold not in report_text, scaffold
     # The report is a reading flow: text, then tables/charts, then more text.
     block_types = [block["type"] for block in blocks[:10]]
-    assert block_types.count("markdown") >= 5
+    # One markdown block now — the model's report, whole. It used to be five or
+    # more because the server interleaved its own chapters between the tables.
+    assert block_types.count("markdown") == 1
+    assert block_types[0] == "markdown"
     assert "table" in block_types
     data_profile_index = next(i for i, block in enumerate(blocks) if block.get("table_id") == "data_profile")
     parameter_index = next(i for i, block in enumerate(blocks) if block.get("table_id") == "parameter_settings")
     training_chart_index = next(i for i, block in enumerate(blocks) if block.get("chart_id") == "training_curves")
     metric_table_index = next(i for i, block in enumerate(blocks) if block.get("table_id") == "metric_comparison")
-    suggestions_index = next(i for i, block in enumerate(blocks) if block["id"] == "suggestions")
-    assert data_profile_index < parameter_index < training_chart_index < metric_table_index < suggestions_index
+    # No trailing "suggestions" block: the prose used to be sliced apart on
+    # 第一章/第三章 headings and reassembled around the artifacts. It is kept
+    # whole now, so the artifacts simply follow it in reading order.
+    assert not any(block["id"] == "suggestions" for block in blocks)
+    assert data_profile_index < parameter_index < training_chart_index < metric_table_index
 
     archived = (
         await db.execute(
@@ -456,7 +471,9 @@ def test_rich_report_uses_run_level_final_metric_when_task_final_state_is_open()
         if block["type"] == "markdown"
     )
     assert "尚未执行最终测试" not in report_text
-    assert "Run 级最终测试指标" in report_text
+    # The sentence that repeated this in the chapter scaffold is gone. The fact
+    # itself is unchanged — it reaches the reader through the evidence list and
+    # the headline metric strip, asserted just below and above.
     assert any("Run 级最终测试指标" in item for item in payload["evidence"])
 
 
@@ -588,7 +605,10 @@ def test_rich_report_uses_reader_facing_field_and_metric_labels():
     assert any(row["column"] == "空气温度（Air temperature [K]）" for row in data_table["rows"])
     assert any(row["column"] == "是否流失（churn）" for row in data_table["rows"])
     assert metric_table["rows"][0]["selection_metric"] == "交叉验证平均准确率（selection_cv_mean_accuracy）=0.8400"
-    assert "random_forest 最终测试准确率为 0.8100" in report_text
+    # Was a sentence in the removed chapter scaffold. The number still reaches
+    # the reader from the comparison table, keyed to the model it belongs to.
+    assert metric_table["rows"][0]["model_type"] == "random_forest"
+    assert metric_table["rows"][0]["test_accuracy"] == "0.8100"
 
 
 def test_highlighted_lead_sentences_are_split_into_readable_paragraphs():
