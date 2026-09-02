@@ -12,6 +12,7 @@ from app.services.ai_report_service import (
     build_reference_frames,
     _build_headline_metrics,
     _compact_metrics,
+    _highlight_report_lead_sentences,
     _context_for_llm,
     compute_readiness_score,
 )
@@ -284,3 +285,30 @@ class TestModelCountIsAFactNotAnEstimate:
     def test_a_prebuilt_context_string_still_works(self):
         # The archive path passes context already serialised.
         assert build_ai_report_messages("已经序列化好的上下文")[-1]["content"]
+
+
+class TestLeadSentenceBoldingRespectsDecimals:
+    """A decimal point is not the end of a sentence.
+
+    Every metric in these reports is a decimal, and the opening sentence is the
+    one place the bolding always applies — so "RMSE 为 72.47" rendered as
+    "RMSE 为 72.**47", with the bold closing inside the number.
+    """
+
+    def test_a_decimal_does_not_end_the_lead_sentence(self):
+        out = _highlight_report_lead_sentences("本次 RMSE 为 72.47，误差很小。后面还有一句。")
+        assert "72.47" in out
+        assert "72.**47" not in out
+
+    def test_the_full_sentence_is_still_bolded(self):
+        out = _highlight_report_lead_sentences("本次 RMSE 为 72.47，误差很小。后面还有一句。")
+        assert out.startswith("**本次 RMSE 为 72.47，误差很小。**")
+
+    def test_an_ascii_period_still_ends_a_sentence(self):
+        out = _highlight_report_lead_sentences("The RMSE is fine. More text here.")
+        assert out.startswith("**The RMSE is fine.**")
+
+    def test_several_decimals_in_one_sentence(self):
+        out = _highlight_report_lead_sentences("A 是 0.81%，B 是 1.6%，都可以。第二句。")
+        assert "0.81%" in out and "1.6%" in out
+        assert "**A 是 0.81%，B 是 1.6%，都可以。**" in out

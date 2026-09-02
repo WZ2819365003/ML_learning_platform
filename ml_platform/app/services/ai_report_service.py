@@ -2618,7 +2618,13 @@ def _highlight_report_lead_sentences(markdown: str) -> str:
     """Bold the first sentence of prose paragraphs so the UI can color them."""
     blocks = re.split(r"(\n\s*\n)", markdown or "")
     rendered: list[str] = []
-    sentence_pattern = re.compile(r"^(.+?[。！？.!?])(\s*)(.*)$", flags=re.DOTALL)
+    # An ASCII "." only ends a sentence when it is not a decimal point and
+    # something follows it. Treating every "." as a terminator bolded up to the
+    # first one, so "RMSE 为 72.47" rendered as "RMSE 为 72.**47" — the bold
+    # closing inside the number. The full-width 。！？ are unambiguous.
+    sentence_pattern = re.compile(
+        r"^(.+?(?:[。！？]|(?<!\d)[.!?](?=\s|$)))(\s*)(.*)$", flags=re.DOTALL
+    )
     for block in blocks:
         stripped = block.strip()
         if not stripped:
@@ -2645,7 +2651,7 @@ def _separate_repeated_bold_leads(markdown: str) -> str:
     blocks = re.split(r"(\n\s*\n)", markdown or "")
     rendered: list[str] = []
     split_pattern = re.compile(
-        r"(?<=[。！？.!?])\s*(?=(\*\*[^*\n]{4,120}?[。！？.!?]\*\*))"
+        r"(?<=[。！？])\s*(?=(\*\*[^*\n]{4,120}?[。！？.!?]\*\*))"
     )
     for block in blocks:
         stripped = block.strip()
