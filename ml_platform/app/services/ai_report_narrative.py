@@ -46,6 +46,11 @@ _SECTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("result", "训练结果", ("prediction_curve",)),
 )
 
+# Any other markdown heading. The model likes to open a sub-report with
+# "# AI 建模报告" despite not being asked for a title; kept, it renders as a
+# second report title inside the first one's page.
+_STRAY_HEADING = re.compile(r"^\s*#{1,6}\s+\S")
+
 # Matches a section heading however the model dresses it: bare, ###, or bolded.
 _HEADING = re.compile(
     r"^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(训练过程|训练结果)\s*(?:\*\*)?\s*[:：]?\s*$"
@@ -210,6 +215,8 @@ def split_run_sections(markdown: str) -> dict[str, str]:
         heading = _HEADING.match(line)
         if heading:
             current = by_title[heading.group(1)]
+            continue
+        if _STRAY_HEADING.match(line):
             continue
         buckets[current].append(line)
     return {key: "\n".join(v).strip() for key, v in buckets.items()}

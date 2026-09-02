@@ -288,3 +288,24 @@ class TestRunPromptAsksForInterpretationOnly:
         # model to shape the argument around them.
         user = narrative.build_run_messages({"model_type": "xgboost"}, {})[1]["content"]
         assert "不要提到任何图表" in user
+
+
+class TestStrayHeadingsAreDropped:
+    """The sub-report's shape is fixed; the model's own titles are not part of it."""
+
+    def test_drops_the_report_title_the_model_adds_unasked(self):
+        # 豆包 opens most sub-reports with "# AI 建模报告", which rendered as a
+        # second report title inside the page's own report.
+        out = narrative.split_run_sections("# AI 建模报告\n\n训练过程\n正文。")
+        assert "AI 建模报告" not in out["process"]
+        assert "正文。" in out["process"]
+
+    def test_drops_a_stray_heading_between_sections(self):
+        out = narrative.split_run_sections("训练过程\na\n## 小结\nb\n训练结果\nc")
+        assert "小结" not in out["process"]
+        assert "b" in out["process"]
+
+    def test_keeps_a_hash_that_is_not_a_heading(self):
+        # "#1" and the like are ordinary text, not markdown headings.
+        out = narrative.split_run_sections("训练过程\n排名 #1 的模型。")
+        assert "#1" in out["process"]

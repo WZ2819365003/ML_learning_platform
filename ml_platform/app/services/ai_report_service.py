@@ -2829,8 +2829,19 @@ async def _generate_narrative(
 
     result["overview"] = _post(result["overview"])
     for run_report in result["runs"]:
+        # Sub-reports get identifier protection only. The lead-sentence
+        # bolding is built for the overall report's long unbroken prose; on a
+        # sub-report it welds the section heading to the sentence beneath it
+        # into one bold run, which is what made these look mangled.
         if run_report.get("markdown"):
-            run_report["markdown"] = _post(run_report["markdown"])
+            run_report["markdown"] = _preserve_model_identifiers(
+                run_report["markdown"], context,
+            )
+        for section in run_report.get("sections") or []:
+            if section.get("markdown"):
+                section["markdown"] = _preserve_model_identifiers(
+                    section["markdown"], context,
+                )
     return result
 
 
