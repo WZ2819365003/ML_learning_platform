@@ -42,11 +42,6 @@ describe('buildReportViewModel', () => {
         tone: 'default',
       },
     ])
-    expect(vm.toc).toEqual([
-      { level: 2, title: '第一章 结论' },
-      { level: 3, title: '1.1 综合判断' },
-      { level: 2, title: '第二章 过程与评价' },
-    ])
   })
 
   it('builds the table of contents from visible report blocks when present', () => {
@@ -78,12 +73,8 @@ describe('buildReportViewModel', () => {
     }, '目录验证')
 
     expect(vm.summary).toContain('任务完成质量较好')
-    expect(vm.toc).toEqual([
-      { level: 2, title: '第一章 结论' },
-      { level: 3, title: '1.1 综合判断' },
-      { level: 2, title: '第二章 过程与评价' },
-      { level: 3, title: '2.1 数据集概况' },
-    ])
-    expect(vm.toc).not.toContainEqual({ level: 2, title: '第二章 原始生成内容' })
+    // The table of contents is gone: it duplicated the report's own side rail,
+    // and the two together squeezed the body below the width its tables need.
+    expect(vm.toc).toBeUndefined()
   })
 })

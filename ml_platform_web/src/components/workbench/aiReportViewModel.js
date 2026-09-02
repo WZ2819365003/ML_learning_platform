@@ -8,7 +8,6 @@ export function buildReportViewModel(report = {}, taskName = '建模任务') {
     title: extractTitle(markdownBlocks),
     taskName,
     score: extractScore(report, `${markdown}\n${report.markdown || ''}`),
-    toc: extractToc(markdownBlocks),
     summary: extractSummary(markdownBlocks),
     metrics: normalizeMetrics(report.headline_metrics || []),
     chartCount: Array.isArray(report.charts) ? report.charts.length : 0,
@@ -36,16 +35,6 @@ function extractScore(report, markdown) {
   if (metric?.value) return String(metric.value)
   const match = String(markdown || '').match(/(?:总分|综合得分)[：:]\s*([0-9]{1,3}\s*\/\s*100)/)
   return match ? match[1].replace(/\s+/g, '') : '—'
-}
-
-function extractToc(blocks) {
-  return blocks
-    .filter((block) => block.type === 'heading' && block.level >= 2 && block.level <= 3)
-    .slice(0, 10)
-    .map((block) => ({
-      level: block.level,
-      title: block.text,
-    }))
 }
 
 function extractSummary(blocks) {

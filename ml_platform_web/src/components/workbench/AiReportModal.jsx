@@ -350,25 +350,6 @@ function ReportMetricStrip({ viewModel }) {
   )
 }
 
-function ReportToc({ items }) {
-  if (!items?.length) return null
-  return (
-    <aside className="ai-report-toc">
-      <div className="ai-report-toc-title">目录</div>
-      <nav>
-        {items.map((item, index) => (
-          <div
-            key={`${item.title}-${index}`}
-            className={item.level === 2 ? 'ai-report-toc-chapter' : 'ai-report-toc-section'}
-          >
-            {item.title}
-          </div>
-        ))}
-      </nav>
-    </aside>
-  )
-}
-
 export function AiReportReader({ report, taskName = '建模任务', className = '' }) {
   const markdown = report?.markdown || ''
   const viewModel = useMemo(
@@ -379,12 +360,13 @@ export function AiReportReader({ report, taskName = '建模任务', className = 
     <div className={`report-body ai-report-body ${className}`.trim()}>
       <ReportCover viewModel={viewModel} report={report} />
       <ReportMetricStrip viewModel={viewModel} />
-      <div className="ai-report-layout">
-        <ReportToc items={viewModel.toc} />
-        <main className="ai-report-document">
-          <ReportFlow report={report} markdown={markdown} />
-        </main>
-      </div>
+      {/* No table of contents. It duplicated the side rail beside it, and the
+          two together left the body 818px for tables that need 1000–1160 —
+          every structured table had to be dragged sideways to be read. The
+          report is three sections; the headings are enough. */}
+      <main className="ai-report-document">
+        <ReportFlow report={report} markdown={markdown} />
+      </main>
     </div>
   )
 }
