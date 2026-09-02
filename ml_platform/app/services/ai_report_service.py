@@ -2492,7 +2492,10 @@ def build_ai_report_messages(context: dict[str, Any] | str) -> list[dict[str, st
         "没有的内容直接略过，不要写一节只为了说「暂无」。\n"
         "4. **区分选择分和最终测试分。** 选择分是在选择集上得到的，不能当作泛化能力的证据；"
         "如果还没做最终评估，必须说明当前结论的可信度受限。\n"
-        "5. **建议要具体到能执行**，并指明依据哪条数据。「建议调参」不算；"
+        "5. **交代数据是什么。** 用一小段自然语言说明这份数据的构成：多少行、目标列是什么，"
+        "哪些是原始采集字段、哪些明显是特征工程构造出来的（带 lag / roll / sin / cos / "
+        "交互项这类命名的列）。抓住构成和用意讲，不要罗列全部列名。\n"
+        "6. **建议要具体到能执行**，并指明依据哪条数据。「建议调参」不算；"
         "「rmse 跨折变异系数 18%，说明划分敏感，建议增大数据量或改用分层切分」才算。\n\n"
 
         "## 格式\n\n"
@@ -2712,12 +2715,57 @@ async def generate_ai_task_report(
         task_id,
         owner_username=owner_username,
     )
-    report = await generate_ai_report_from_context(
-        context,
-        task_id=task_id,
-        settings=settings,
-    )
+    narrative = await _generate_narrative(context, task_id, settings)
+    report = {
+        "task_id": task_id,
+        "model": getattr(settings, "doubao_model", None),
+        "source": "doubao",
+        "generated_at": _utc_iso(),
+        # `markdown` stays the overall report so every existing consumer —
+        # the archive title, the download button, the legacy reader — keeps
+        # working against the same field.
+        "markdown": narrative["overview"],
+        "run_reports": narrative["runs"],
+        "runs_total": narrative["runs_total"],
+        "runs_reported": narrative["runs_reported"],
+        **build_rich_report_payload(context, narrative["overview"]),
+    }
     return await archive_ai_report(db, report, owner_username=owner_username)
+
+
+async def _generate_narrative(
+    context: dict[str, Any],
+    task_id: str,
+    settings: Any,
+) -> dict[str, Any]:
+    """Overall report then per-run reports, through the narrative module."""
+    from app.services import ai_report_narrative
+
+    async def _call(messages: list[dict[str, str]]) -> str:
+        return _normalise_markdown(await _request_chat_completion(settings, messages))
+
+    task_type = ((context.get("task") or {}).get("task_type") or "regression")
+    result = await ai_report_narrative.generate_narrative_report(
+        context,
+        call_model=_call,
+        task_type=task_type,
+        # The overall report keeps the existing prompt: it already hands the
+        # model server-computed reference frames and a weighted readiness
+        # score rather than asking it to divide numbers or invent a total.
+        overview_messages=build_ai_report_messages(context),
+    )
+    # Same post-processing the single-report path applied. Dropping it silently
+    # removed the bolded lead sentences the reader highlights on.
+    def _post(markdown: str) -> str:
+        markdown = _preserve_model_identifiers(markdown, context)
+        markdown = _highlight_report_lead_sentences(markdown)
+        return _separate_repeated_bold_leads(markdown)
+
+    result["overview"] = _post(result["overview"])
+    for run_report in result["runs"]:
+        if run_report.get("markdown"):
+            run_report["markdown"] = _post(run_report["markdown"])
+    return result
 
 
 async def check_doubao_reachability(settings: Any | None = None) -> dict[str, Any]:

@@ -102,7 +102,14 @@ _SYSTEM = (
 
 
 def build_overview_messages(context: dict[str, Any]) -> list[dict[str, str]]:
-    """总报告：数据集有什么，该用哪个模型。"""
+    """Fallback overall-report prompt.
+
+    ai_report_service owns the real one — it enriches the context with
+    server-computed reference frames and a weighted readiness score first,
+    which is strictly better than asking the model to do that arithmetic. This
+    exists so the module stands alone in tests and for callers with no
+    enrichment step.
+    """
     user = (
         "请写一份简短的建模总报告，用中文自然段，**不要分章节、不要编号、不要表格、不要代码块**。"
         "总长度控制在 400 字以内，分两段：\n\n"
@@ -320,6 +327,7 @@ async def generate_narrative_report(
     *,
     call_model: Callable[[list[dict[str, str]]], Any],
     task_type: str = "regression",
+    overview_messages: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Overall report first, then the per-run ones concurrently.
 
@@ -330,7 +338,7 @@ async def generate_narrative_report(
     failing the whole request — the overall report and the other models are
     still worth showing.
     """
-    overview = await call_model(build_overview_messages(context))
+    overview = await call_model(overview_messages or build_overview_messages(context))
 
     runs = select_runs_for_reports(context)
     brief = build_task_brief(context)
