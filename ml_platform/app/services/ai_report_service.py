@@ -2509,6 +2509,13 @@ async def build_task_report_context(
 
 
 def build_ai_report_messages(context: dict[str, Any] | str) -> list[dict[str, str]]:
+    # Counted here rather than left to the model. Asked how many models were
+    # trained, it answered "3" for a task with 7 — the number of experiment
+    # batches, which is also in the context and is not the same thing.
+    model_count = (
+        len(context.get("leaderboard") or [])
+        if isinstance(context, dict) else 0
+    )
     if isinstance(context, str):
         context_text = context[:_MAX_CONTEXT_CHARS]
     else:
@@ -2575,6 +2582,8 @@ def build_ai_report_messages(context: dict[str, Any] | str) -> list[dict[str, st
         "- 讲数据集时抓构成和用意，说明哪些是原始采集字段、哪些是构造出来的特征，"
         "不要罗列全部列名\n"
         "- 上下文没有的事实一律写“暂无数据”，不要推测业务背景或数据来源\n"
+        f"- **本次共训练了 {model_count} 个模型**，直接用这个数，不要自己数；"
+        "experiments 里的数量是实验批次数，不是模型数\n"
         "- 模型名保留原始标识：写 random_forest、ARIMA，不要写成随机森林、阿里玛\n"
         "- 只写这两节，不要写建议、后续工作、给决策人员之类的段落 —— 每个模型的细节"
         "由分报告承担，这里不要逐个展开\n"

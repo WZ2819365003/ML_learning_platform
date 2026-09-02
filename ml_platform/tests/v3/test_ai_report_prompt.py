@@ -245,3 +245,30 @@ class TestCurveMetricsSurviveCompaction:
         # gain; the model is told how many points there are, not what they are.
         out = _context_for_llm({"val_scatter": {"actual": list(range(500))}})
         assert out["val_scatter"] == {"actual": {"points": 500}}
+
+
+class TestModelCountIsAFactNotAnEstimate:
+    """Counting is handed over, like the reference frames and the readiness score.
+
+    Asked how many models were trained, the model answered "3" for a task with
+    seven runs — the number of experiment batches, which is also in the context
+    and is not the same thing. A wrong count in the opening sentence discredits
+    everything after it.
+    """
+
+    def test_the_count_comes_from_the_leaderboard(self):
+        ctx = {"leaderboard": [{"run_id": str(i)} for i in range(7)],
+               "experiments": [{"id": "a"}, {"id": "b"}, {"id": "c"}]}
+        user = build_ai_report_messages(ctx)[-1]["content"]
+        assert "本次共训练了 7 个模型" in user
+
+    def test_it_says_which_number_not_to_use(self):
+        user = build_ai_report_messages(REGRESSION_CTX)[-1]["content"]
+        assert "实验批次数，不是模型数" in user
+
+    def test_an_empty_leaderboard_does_not_crash_the_prompt(self):
+        assert "本次共训练了 0 个模型" in build_ai_report_messages({})[-1]["content"]
+
+    def test_a_prebuilt_context_string_still_works(self):
+        # The archive path passes context already serialised.
+        assert build_ai_report_messages("已经序列化好的上下文")[-1]["content"]
