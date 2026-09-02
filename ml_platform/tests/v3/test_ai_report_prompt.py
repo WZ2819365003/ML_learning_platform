@@ -10,6 +10,7 @@ import pytest
 from app.services.ai_report_service import (
     build_ai_report_messages,
     build_reference_frames,
+    _build_headline_metrics,
     compute_readiness_score,
 )
 
@@ -110,3 +111,75 @@ class TestPrompt:
     def test_no_longer_asks_the_model_to_invent_a_score(self):
         user = build_ai_report_messages(REGRESSION_CTX)[-1]["content"]
         assert "总分：xx/100" not in user
+
+
+class TestReadinessReadsTheRealContext:
+    """The rubric must read the keys build_task_report_context really emits.
+
+    It previously read context["runs"] and context["metrics"], neither of which
+    exists. Both checks failed for every task, so a task with 7/7 successful
+    runs and 1.2% cross-fold variation scored 0/100 — silently, because a
+    missing key is an empty list, not an error.
+    """
+
+    def _ctx(self):
+        # Shapes copied from build_task_report_context: leaderboard entries
+        # carry metrics but no status; statuses live in run_status_counts.
+        return {
+            "task": {},
+            "run_status_counts": {"SUCCESS": 7},
+            "leaderboard": [
+                {"run_id": "a", "rank": 1,
+                 "metrics": {"cv_avg_rmse": 72.4673, "cv_std_rmse": 0.8539}},
+            ],
+            "successful_run_examples": [{"run_id": "a", "status": "SUCCESS"}],
+        }
+
+    def test_counts_successes_from_run_status_counts(self):
+        out = compute_readiness_score(self._ctx())
+        check = next(c for c in out["checks"] if c["key"] == "run_success")
+        assert check["passed"] is True
+        assert check["detail"] == "7/7 成功"
+
+    def test_finds_cross_fold_metrics_inside_each_run(self):
+        out = compute_readiness_score(self._ctx())
+        check = next(c for c in out["checks"] if c["key"] == "cross_fold_stability")
+        # 0.8539 / 72.4673 = 1.2%, comfortably inside the 15% bar.
+        assert check["passed"] is True
+
+    def test_a_failed_run_fails_the_check(self):
+        ctx = self._ctx()
+        ctx["run_status_counts"] = {"SUCCESS": 6, "FAILED": 1}
+        check = next(c for c in compute_readiness_score(ctx)["checks"]
+                     if c["key"] == "run_success")
+        assert check["passed"] is False
+        assert check["detail"] == "6/7 成功"
+
+    def test_unfinished_final_evaluation_still_costs_its_weight(self):
+        # 40 points for the sealed test set are genuinely unearned here; the
+        # fix must not hand them out.
+        out = compute_readiness_score(self._ctx())
+        assert out["score"] == 60
+        assert next(c for c in out["checks"]
+                    if c["key"] == "final_evaluation")["passed"] is False
+
+
+class TestHeadlineScore:
+    def test_ai_score_card_shows_the_computed_score(self):
+        # The card read "—" on every report: it called the legacy regex scrape
+        # of "总分：xx/100" that the prompt no longer asks the model to write.
+        metrics = _build_headline_metrics(
+            {
+                "task": {},
+                "run_status_counts": {"SUCCESS": 7},
+                "leaderboard": [
+                    {"run_id": "a", "rank": 1,
+                     "metrics": {"cv_avg_rmse": 72.0, "cv_std_rmse": 0.85}},
+                ],
+                "successful_run_examples": [{"run_id": "a", "status": "SUCCESS"}],
+            },
+            "# 报告\n正文里没有任何总分字样。",
+        )
+        card = next(m for m in metrics if m["key"] == "ai_score")
+        assert card["value"] == "60/100"
+        assert "最终评估" in card["detail"] or "封存" in card["detail"]

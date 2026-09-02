@@ -320,6 +320,24 @@ _SCORE_RUBRIC = (
 )
 
 
+_SUCCESS_STATUSES = frozenset({"SUCCESS", "COMPLETED"})
+
+
+def _cv_variation_percentages(metric_maps: Any) -> list[float]:
+    """Coefficient of variation, as a percentage, for each cv_std_/cv_avg_ pair."""
+    out: list[float] = []
+    for metrics in metric_maps:
+        if not isinstance(metrics, dict):
+            continue
+        for key, std in metrics.items():
+            if not key.startswith("cv_std_") or not isinstance(std, (int, float)):
+                continue
+            avg = metrics.get(f"cv_avg_{key[len('cv_std_'):]}")
+            if isinstance(avg, (int, float)) and abs(avg) > 1e-9:
+                out.append(abs(std) / abs(avg) * 100)
+    return out
+
+
 def compute_readiness_score(context: dict[str, Any]) -> dict[str, Any]:
     """Score this task against a fixed, published rubric.
 
@@ -330,8 +348,12 @@ def compute_readiness_score(context: dict[str, Any]) -> dict[str, Any]:
     it reproducible and lets the report show its working.
     """
     task = context.get("task") or {}
+    # `leaderboard`, `successful_run_examples` and `run_status_counts` are what
+    # build_task_report_context actually emits. A top-level `runs` or `metrics`
+    # never existed, so the two checks below read nothing and scored every task
+    # 0/100 in silence — no error, just a number that was always wrong.
     runs = context.get("runs") or context.get("leaderboard") or []
-    metrics = context.get("metrics") or {}
+    run_examples = context.get("successful_run_examples") or []
 
     checks: list[dict[str, Any]] = []
 
@@ -342,14 +364,12 @@ def compute_readiness_score(context: dict[str, Any]) -> dict[str, Any]:
     )
     checks.append({"key": "final_evaluation", "passed": finalized})
 
-    cvs = [
-        abs(v) / abs(metrics[f"cv_avg_{k[len('cv_std_'):]}"]) * 100
-        for k, v in metrics.items()
-        if k.startswith("cv_std_")
-        and isinstance(v, (int, float))
-        and isinstance(metrics.get(f"cv_avg_{k[len('cv_std_'):]}"), (int, float))
-        and abs(metrics[f"cv_avg_{k[len('cv_std_'):]}"]) > 1e-9
-    ]
+    # The cv_std_/cv_avg_ pairs live in each run's own metrics map.
+    cvs = _cv_variation_percentages(
+        [context.get("metrics")]
+        + [r.get("metrics") for r in runs if isinstance(r, dict)]
+        + [r.get("metrics") for r in run_examples if isinstance(r, dict)]
+    )
     # No CV data is not a failure — it is an unknown, and scoring an unknown as
     # a pass would overstate readiness.
     checks.append({
@@ -358,11 +378,27 @@ def compute_readiness_score(context: dict[str, Any]) -> dict[str, Any]:
         "detail": f"最大变异系数 {max(cvs):.1f}%" if cvs else "无交叉验证数据",
     })
 
-    statuses = [str(r.get("status") or "").upper() for r in runs if isinstance(r, dict)]
+    # run_status_counts covers every Run including failed ones, which is
+    # exactly the population this check is about. Leaderboard entries carry no
+    # status at all, so counting them read "" and failed 7/7-successful tasks.
+    counts = context.get("run_status_counts") or {}
+    if counts:
+        total = sum(v for v in counts.values() if isinstance(v, int))
+        succeeded = sum(
+            v for k, v in counts.items()
+            if isinstance(v, int) and str(k).upper() in _SUCCESS_STATUSES
+        )
+    else:
+        statuses = [
+            str(r.get("status") or "").upper()
+            for r in (run_examples or runs) if isinstance(r, dict)
+        ]
+        total = len(statuses)
+        succeeded = sum(1 for st in statuses if st in _SUCCESS_STATUSES)
     checks.append({
         "key": "run_success",
-        "passed": bool(statuses) and all(st == "SUCCESS" for st in statuses),
-        "detail": f"{statuses.count('SUCCESS')}/{len(statuses)} 成功" if statuses else "无 Run 记录",
+        "passed": total > 0 and succeeded == total,
+        "detail": f"{succeeded}/{total} 成功" if total else "无 Run 记录",
     })
 
     weights = {key: weight for key, weight, _ in _SCORE_RUBRIC}
@@ -605,7 +641,16 @@ def _build_headline_metrics(context: dict[str, Any], markdown: str) -> list[dict
     leaderboard = context.get("leaderboard") or []
     final_best = _best_run_level_final(context)
     best = final_best or (leaderboard[0] if leaderboard else {})
-    score = _extract_ai_score(markdown)
+    # The score is computed from the rubric, not scraped back out of the prose.
+    # _build_headline_metrics kept calling the legacy scrape long after the
+    # prompt stopped asking for "总分：xx/100", so the card always read "—".
+    try:
+        readiness = compute_readiness_score(context)
+    except Exception as exc:  # noqa: BLE001 — a report without a score beats no report
+        logger.warning("Readiness scoring failed: %s", exc)
+        readiness = {"score": _extract_ai_score(markdown), "checks": []}
+    score = readiness.get("score")
+    unmet = [c.get("label") for c in readiness.get("checks") or [] if not c.get("passed")]
     final_key, final_value, final_source = _available_final_metric(context)
     best_score = _metric_value_from_entry(best)
 
@@ -614,7 +659,8 @@ def _build_headline_metrics(context: dict[str, Any], markdown: str) -> list[dict
             "key": "ai_score",
             "label": "AI 总分",
             "value": f"{score}/100" if score is not None else "—",
-            "detail": "由豆包根据当前任务事实生成",
+            "detail": ("未达成：" + "、".join(str(u) for u in unmet if u)) if unmet
+                      else "评分细则各项均已达成",
             "tone": "success" if score is not None and score >= 80 else "warning",
         },
         {

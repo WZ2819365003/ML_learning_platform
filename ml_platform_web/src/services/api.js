@@ -380,7 +380,7 @@ export const modelingTaskApi = {
   report: (taskId) =>
     api.get(`/v3/tasks/${taskId}/report.md`, { responseType: 'text' }),
   aiReport: (taskId) =>
-    api.post(`/v3/tasks/${taskId}/ai-report`, null, { timeout: 150000 }),
+    api.post(`/v3/tasks/${taskId}/ai-report`, null, { timeout: 600000 }),
   aiReportArchives: (taskId) =>
     api.get(`/v3/tasks/${taskId}/ai-reports`),
   aiReportArchive: (taskId, reportId) =>
