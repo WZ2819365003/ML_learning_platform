@@ -161,30 +161,32 @@ def build_task_brief(context: dict[str, Any]) -> dict[str, Any]:
 def build_run_messages(
     run: dict[str, Any],
     task_brief: dict[str, Any],
-    charts: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    """分报告：这个模型训练得怎么样、结果怎么读。"""
-    chart_menu = (
-        "\n".join(f"  {{{{chart:{c['id']}}}}} — {c['desc']}" for c in charts)
-        if charts else "  （本次没有可用图表，请勿插入任何 {{chart:...}}）"
-    )
+    """分报告第一遍：只写文字。
+
+    Charts are not mentioned here at all. Asking one call to both write prose
+    and place figures makes it do neither well — placeholders end up mid
+    sentence and the argument gets shaped around what can be illustrated. The
+    placement pass runs afterwards, on finished text.
+    """
     user = (
         f"请为模型 {run.get('model_type')} 写一份简短的分报告，中文自然段，"
-        "**不要表格、不要代码块**，总长度 350 字以内。写成两到三段：\n\n"
+        "**不要表格、不要代码块、不要插图、不要提到任何图表**，总长度 350 字以内。"
+        "写成两到三段，段前用这样的小标题：\n\n"
 
-        "训练过程 — 这次训练是怎么进行的。有逐轮记录就讲收敛情况和早停位置；"
+        "训练过程\n"
+        "这次训练是怎么进行的。有逐轮记录就讲收敛情况和早停位置；"
         "有交叉验证各折得分就讲波动来自哪里（是某一折异常，还是整体都在抖）。\n\n"
 
-        "结果解读 — 这个模型的表现怎么读，指标要给参照系而不是裸数字。"
-        "如果它不是最优模型，说明和最优模型差在哪、差距是否重要。\n\n"
+        "结果解读\n"
+        "这个模型的表现怎么读。**指标必须给参照系**，不要裸数字 —— "
+        "上下文里有目标列统计量，例如均值 8897 时 RMSE 72.47 应写成"
+        "“约为均值的 0.8%”。如果它不是最优模型，说明和最优差在哪、差距是否重要。\n\n"
 
-        "值得注意 — 只在确实有异常时才写这一段，没有就不写。\n\n"
+        "值得注意\n"
+        "只在确实有异常时才写这一段，没有异常就整段省略。\n\n"
 
-        "可用图表（**只能用下面列出的 id**，把占位符单独放一行，"
-        "紧接在解释它的那句话之后；不需要图就不要放）：\n"
-        f"{chart_menu}\n\n"
-
-        "严禁自己生成图表数据或描述不存在的曲线。模型名保留原始英文标识。\n\n"
+        "模型名保留原始英文标识（random_forest 不要写成随机森林）。\n\n"
 
         f"该 Run 的数据：\n{run}\n\n"
         f"任务背景（目标列、统计量、当前最优模型）：\n{task_brief}"
@@ -193,6 +195,109 @@ def build_run_messages(
         {"role": "system", "content": _SYSTEM},
         {"role": "user", "content": user},
     ]
+
+
+def build_chart_placement_messages(
+    markdown: str,
+    charts: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """分报告第二遍：只决定图放在哪。
+
+    Deliberately tiny: the model reads finished text and answers with a JSON
+    array, so this pass costs a fraction of the first one despite being a
+    second round trip.
+    """
+    menu = "\n".join(f"  {c['id']} — {c['desc']}" for c in charts)
+    user = (
+        "下面是一份已经写好的模型分报告，以及本次可用的图表清单。"
+        "请判断每张图应该插在第几个自然段之后，只输出 JSON 数组，不要任何其它文字：\n\n"
+
+        '[{"chart": "图表id", "after_paragraph": 段落序号}]\n\n'
+
+        "规则：\n"
+        "- 段落序号从 1 开始，只数正文自然段，不数小标题行\n"
+        "- 只能使用清单里的 id；不合适就不要放，宁缺毋滥\n"
+        "- 一张图最多出现一次\n"
+        "- 图应该紧跟在解释它的那句话所在的段落之后\n"
+        "- 没有任何图适合就输出 []\n\n"
+
+        f"可用图表：\n{menu}\n\n"
+        f"报告正文：\n{markdown}"
+    )
+    return [
+        {"role": "system", "content": "你只输出 JSON，不输出解释。"},
+        {"role": "user", "content": user},
+    ]
+
+
+def apply_chart_placements(
+    markdown: str,
+    placements: Any,
+    allowed_ids: set[str],
+) -> tuple[str, list[str]]:
+    """Insert chart markers after the paragraphs the placement pass chose.
+
+    Tolerant by design: a malformed reply, an unknown id or an out-of-range
+    paragraph yields a report without that figure rather than a failed request.
+    The report is the deliverable; the illustration is not.
+    """
+    if not isinstance(placements, list):
+        return markdown, []
+
+    paragraphs = markdown.split("\n\n")
+    inserts: dict[int, list[str]] = {}
+    used: set[str] = set()
+    dropped: list[str] = []
+
+    for item in placements:
+        if not isinstance(item, dict):
+            continue
+        chart_id = str(item.get("chart") or "").strip().lower()
+        index = item.get("after_paragraph")
+        if chart_id not in allowed_ids or chart_id in used:
+            if chart_id:
+                dropped.append(chart_id)
+            continue
+        if not isinstance(index, int) or not (1 <= index <= len(paragraphs)):
+            dropped.append(chart_id)
+            continue
+        inserts.setdefault(index - 1, []).append(chart_id)
+        used.add(chart_id)
+
+    if not inserts:
+        return markdown, dropped
+
+    out: list[str] = []
+    for i, para in enumerate(paragraphs):
+        out.append(para)
+        for chart_id in inserts.get(i, []):
+            out.append(f"{{{{chart:{chart_id}}}}}")
+    return "\n\n".join(out), dropped
+
+
+def _parse_placements(raw: Any) -> Any:
+    """Pull the JSON array out of a placement reply.
+
+    Models wrap JSON in prose or fences however often they are told not to, and
+    a wrapped-but-correct answer should not cost the report its figures.
+    """
+    import json
+
+    if isinstance(raw, list):
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    fenced = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
+    if fenced:
+        text = fenced.group(1).strip()
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end <= start:
+        return []
+    try:
+        return json.loads(text[start:end + 1])
+    except ValueError:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +341,7 @@ async def generate_narrative_report(
         allowed = {c["id"] for c in charts}
         async with semaphore:
             try:
-                markdown = await call_model(build_run_messages(run, brief, charts))
+                markdown = await call_model(build_run_messages(run, brief))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Run report failed for %s: %s", run.get("run_id"), exc)
                 return {
@@ -245,10 +350,25 @@ async def generate_narrative_report(
                     "markdown": None,
                     "error": str(exc),
                 }
-        markdown, dropped = resolve_chart_placeholders(markdown, allowed)
+
+            # Second pass, on finished text. Failing here loses the figures,
+            # never the report — so it is caught separately and narrowly.
+            dropped: list[str] = []
+            if charts:
+                try:
+                    raw = await call_model(build_chart_placement_messages(markdown, charts))
+                    markdown, dropped = apply_chart_placements(
+                        markdown, _parse_placements(raw), allowed,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Chart placement failed for %s (report kept): %s",
+                        run.get("run_id"), exc,
+                    )
+
         if dropped:
             logger.info(
-                "Run %s report referenced unavailable charts: %s",
+                "Run %s: dropped chart placements %s",
                 run.get("run_id"), ", ".join(dropped),
             )
         return {

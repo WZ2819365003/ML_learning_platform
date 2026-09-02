@@ -37,31 +37,62 @@ class TestAvailableRunCharts:
             c["id"] for c in narrative.available_run_charts({"metrics": {}}, "classification")}
 
 
-class TestResolveChartPlaceholders:
-    def test_keeps_an_allowed_placeholder(self):
-        out, dropped = narrative.resolve_chart_placeholders(
-            "收敛良好。\n{{chart:loss_history}}\n", {"loss_history"})
-        assert "{{chart:loss_history}}" in out
+class TestApplyChartPlacements:
+    MD = "训练过程\n\n第一段正文。\n\n结果解读\n\n第二段正文。"
+
+    def test_inserts_a_marker_after_the_chosen_paragraph(self):
+        out, dropped = narrative.apply_chart_placements(
+            self.MD, [{"chart": "loss_history", "after_paragraph": 2}], {"loss_history"})
+        parts = out.split("\n\n")
+        assert parts[2] == "{{chart:loss_history}}"
         assert dropped == []
 
     def test_drops_a_chart_the_run_does_not_have(self):
-        # Rendering an empty frame would look like a broken chart rather than
-        # like the model having asked for something that does not exist.
-        out, dropped = narrative.resolve_chart_placeholders(
-            "见下图。\n{{chart:loss_history}}\n", set())
+        # An empty frame reads as a broken chart rather than as the model
+        # having asked for something that does not exist.
+        out, dropped = narrative.apply_chart_placements(
+            self.MD, [{"chart": "loss_history", "after_paragraph": 1}], set())
         assert "chart:" not in out
         assert dropped == ["loss_history"]
 
-    def test_drops_an_invented_id(self):
-        out, dropped = narrative.resolve_chart_placeholders(
-            "{{chart:magic_curve}}", {"loss_history"})
-        assert out.strip() == ""
-        assert dropped == ["magic_curve"]
+    def test_drops_an_out_of_range_paragraph(self):
+        out, dropped = narrative.apply_chart_placements(
+            self.MD, [{"chart": "loss_history", "after_paragraph": 99}], {"loss_history"})
+        assert "chart:" not in out
+        assert dropped == ["loss_history"]
 
-    def test_tolerates_spacing_and_case(self):
-        out, _ = narrative.resolve_chart_placeholders(
-            "{{ Chart : Loss_History }}", {"loss_history"})
-        assert out == "{{chart:loss_history}}"
+    def test_never_places_the_same_chart_twice(self):
+        out, _ = narrative.apply_chart_placements(
+            self.MD,
+            [{"chart": "loss_history", "after_paragraph": 1},
+             {"chart": "loss_history", "after_paragraph": 2}],
+            {"loss_history"})
+        assert out.count("{{chart:loss_history}}") == 1
+
+    def test_a_malformed_reply_costs_the_figures_not_the_report(self):
+        for junk in (None, "抱歉，我无法完成", {"chart": "x"}, 42):
+            out, _ = narrative.apply_chart_placements(self.MD, junk, {"loss_history"})
+            assert out == self.MD
+
+
+class TestParsePlacements:
+    def test_reads_a_bare_array(self):
+        assert narrative._parse_placements('[{"chart":"a","after_paragraph":1}]') == [
+            {"chart": "a", "after_paragraph": 1}]
+
+    def test_unwraps_a_fenced_reply(self):
+        # Models fence JSON however often they are told not to, and a
+        # wrapped-but-correct answer should not cost the report its figures.
+        assert narrative._parse_placements('```json\n[{"chart":"a","after_paragraph":1}]\n```') == [
+            {"chart": "a", "after_paragraph": 1}]
+
+    def test_finds_an_array_buried_in_prose(self):
+        assert narrative._parse_placements('好的，结果是 [{"chart":"a","after_paragraph":2}] 。') == [
+            {"chart": "a", "after_paragraph": 2}]
+
+    def test_returns_empty_for_unparseable_text(self):
+        assert narrative._parse_placements("我觉得不需要图") == []
+        assert narrative._parse_placements("") == []
 
 
 class TestSelectRuns:
@@ -130,11 +161,12 @@ class TestGenerateNarrativeReport:
         async def call(messages):
             first = messages[1]["content"]
             order.append("overview" if "建模总报告" in first else "run")
-            return "文本"
+            return "文本"  # placement pass parses this as "no charts"
 
         await narrative.generate_narrative_report(context, call_model=call)
         assert order[0] == "overview", "the verdict is what the page shows first"
-        assert order.count("run") == 2
+        # Two calls per run: prose, then chart placement on the finished text.
+        assert order.count("run") >= 2
 
     async def test_run_reports_run_concurrently(self, context):
         active = concurrent_peak = 0
