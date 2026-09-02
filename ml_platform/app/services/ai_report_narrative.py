@@ -371,11 +371,14 @@ async def generate_narrative_report(
                 "Run %s: dropped chart placements %s",
                 run.get("run_id"), ", ".join(dropped),
             )
+        placed = placed_chart_ids(markdown)
         return {
             "run_id": run.get("run_id"),
             "model_type": run.get("model_type"),
             "markdown": markdown,
-            "charts": sorted(allowed),
+            # Only what the text actually references: an unplaced chart is a
+            # payload shipped to the browser for nothing.
+            "charts": build_run_charts(run, placed),
             "dropped_charts": dropped,
         }
 
@@ -387,3 +390,135 @@ async def generate_narrative_report(
                            if str(r.get("status", "")).upper() == "SUCCESS"]),
         "runs_reported": len(run_reports),
     }
+
+
+# ---------------------------------------------------------------------------
+# Run-scoped chart builders
+# ---------------------------------------------------------------------------
+# Same shape as the task-level charts in ai_report_service so the existing
+# frontend reader renders them unchanged: {id, title, description, type, option}.
+
+def _line(name: str, data: list[Any], color: str) -> dict[str, Any]:
+    return {
+        "name": name, "type": "line", "data": data, "showSymbol": False,
+        "lineStyle": {"width": 1.8, "color": color}, "itemStyle": {"color": color},
+    }
+
+
+def build_run_charts(run: dict[str, Any], chart_ids: list[str]) -> list[dict[str, Any]]:
+    """Real ECharts options for the charts a run report actually placed.
+
+    Only the ids that survived placement are built — an unplaced chart is work
+    nobody asked for, and its payload would be shipped to the browser unused.
+    """
+    metrics = run.get("metrics") or {}
+    history = metrics.get("history") if isinstance(metrics.get("history"), list) else []
+    folds = metrics.get("cv_folds") if isinstance(metrics.get("cv_folds"), list) else []
+    charts: list[dict[str, Any]] = []
+    wanted = set(chart_ids)
+
+    if "loss_history" in wanted and history:
+        epochs = [r.get("epoch") for r in history]
+        charts.append({
+            "id": "loss_history",
+            "title": "训练/验证损失",
+            "description": "逐轮损失。训练损失下降而验证损失回升，就是过拟合的起点。",
+            "type": "echarts",
+            "option": {
+                "grid": {"left": 56, "right": 20, "top": 34, "bottom": 40},
+                "tooltip": {"trigger": "axis"},
+                "legend": {"top": 0},
+                "xAxis": {"type": "category", "data": epochs, "name": "Epoch"},
+                "yAxis": {"type": "value", "scale": True},
+                "series": [
+                    _line("训练损失", [r.get("train_loss") for r in history], "#2563eb"),
+                    _line("验证损失", [r.get("val_loss") for r in history], "#dc2626"),
+                ],
+            },
+        })
+
+    if "lr_history" in wanted and any(isinstance(r.get("lr"), (int, float)) for r in history):
+        charts.append({
+            "id": "lr_history",
+            "title": "学习率变化",
+            "description": "对数轴。调度器折半降速，线性轴上后续步进会挤在零附近看不见。",
+            "type": "echarts",
+            "option": {
+                "grid": {"left": 68, "right": 20, "top": 24, "bottom": 40},
+                "tooltip": {"trigger": "axis"},
+                "xAxis": {"type": "category", "data": [r.get("epoch") for r in history], "name": "Epoch"},
+                "yAxis": {"type": "log", "name": "学习率"},
+                "series": [{
+                    "name": "学习率", "type": "line", "step": "end", "showSymbol": False,
+                    "data": [r.get("lr") for r in history],
+                    "lineStyle": {"width": 1.8, "color": "#8b5cf6"},
+                }],
+            },
+        })
+
+    if "fold_scores" in wanted and folds:
+        key = next(
+            (k for k in (folds[0] or {}) if k != "fold" and isinstance(folds[0][k], (int, float))),
+            None,
+        )
+        values = [f.get(key) for f in folds if isinstance(f.get(key), (int, float))]
+        if key and values:
+            mean = sum(values) / len(values)
+            charts.append({
+                "id": "fold_scores",
+                "title": f"交叉验证各折 {key}",
+                "description": "每折单独的得分与均值线。个别折偏低说明数据划分不均，而非模型整体不稳。",
+                "type": "echarts",
+                "option": {
+                    "grid": {"left": 56, "right": 20, "top": 24, "bottom": 40},
+                    "tooltip": {"trigger": "axis"},
+                    "xAxis": {"type": "category", "data": [f"第 {f.get('fold')} 折" for f in folds]},
+                    "yAxis": {"type": "value", "scale": True, "name": key},
+                    "series": [{
+                        "type": "bar", "data": values,
+                        "itemStyle": {"color": "#2563eb", "borderRadius": [4, 4, 0, 0]},
+                        "markLine": {
+                            "silent": True, "symbol": "none",
+                            "label": {"formatter": f"均值 {mean:.4f}"},
+                            "lineStyle": {"type": "dashed", "color": "#dc2626"},
+                            "data": [{"yAxis": mean}],
+                        },
+                    }],
+                },
+            })
+
+    if "prediction_curve" in wanted:
+        scatter = metrics.get("val_scatter") or {}
+        actual = scatter.get("actual") if isinstance(scatter, dict) else None
+        predicted = scatter.get("predicted") if isinstance(scatter, dict) else None
+        if isinstance(actual, list) and isinstance(predicted, list) and len(actual) >= 2:
+            n = min(len(actual), len(predicted), 300)
+            charts.append({
+                "id": "prediction_curve",
+                "title": "实际值 vs 预测值",
+                "description": "留出集上的逐样本对比。两条线贴合越紧越好。",
+                "type": "echarts",
+                "option": {
+                    "grid": {"left": 60, "right": 20, "top": 34, "bottom": 40},
+                    "tooltip": {"trigger": "axis"},
+                    "legend": {"top": 0},
+                    "xAxis": {"type": "category", "data": list(range(1, n + 1)), "name": "样本"},
+                    "yAxis": {"type": "value", "scale": True},
+                    "series": [
+                        _line("实际值", actual[:n], "#dc2626"),
+                        _line("预测值", predicted[:n], "#2563eb"),
+                    ],
+                },
+            })
+
+    return charts
+
+
+def placed_chart_ids(markdown: str) -> list[str]:
+    """Chart ids that survived into the finished text, in order of appearance."""
+    seen: list[str] = []
+    for match in _CHART_PLACEHOLDER.finditer(markdown or ""):
+        chart_id = match.group(1).lower()
+        if chart_id not in seen:
+            seen.append(chart_id)
+    return seen

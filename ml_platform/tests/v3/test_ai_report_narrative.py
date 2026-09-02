@@ -224,3 +224,54 @@ class TestGenerateNarrativeReport:
         out = await narrative.generate_narrative_report(context, call_model=call)
         assert out["runs_total"] == 2
         assert out["runs_reported"] == 2
+
+
+class TestBuildRunCharts:
+    HISTORY = [
+        {"epoch": 1, "train_loss": 1.0, "val_loss": 1.2, "lr": 0.001},
+        {"epoch": 2, "train_loss": 0.6, "val_loss": 0.8, "lr": 0.0005},
+    ]
+
+    def test_builds_only_the_charts_that_were_placed(self):
+        # An unplaced chart is a payload shipped to the browser for nothing.
+        run = {"metrics": {"history": self.HISTORY}}
+        ids = [c["id"] for c in narrative.build_run_charts(run, ["loss_history"])]
+        assert ids == ["loss_history"]
+
+    def test_builds_nothing_when_the_data_is_absent(self):
+        # The menu said a chart was available; if the data vanished between
+        # then and now, an empty option would render as a broken frame.
+        assert narrative.build_run_charts({"metrics": {}}, ["loss_history"]) == []
+
+    def test_loss_chart_carries_both_series(self):
+        run = {"metrics": {"history": self.HISTORY}}
+        chart = narrative.build_run_charts(run, ["loss_history"])[0]
+        assert [s["name"] for s in chart["option"]["series"]] == ["训练损失", "验证损失"]
+        assert chart["option"]["series"][0]["data"] == [1.0, 0.6]
+
+    def test_learning_rate_uses_a_log_axis(self):
+        run = {"metrics": {"history": self.HISTORY}}
+        chart = narrative.build_run_charts(run, ["lr_history"])[0]
+        assert chart["option"]["yAxis"]["type"] == "log"
+
+    def test_fold_chart_draws_a_mean_line(self):
+        run = {"metrics": {"cv_folds": [{"fold": 1, "rmse": 70}, {"fold": 2, "rmse": 80}]}}
+        chart = narrative.build_run_charts(run, ["fold_scores"])[0]
+        assert chart["option"]["series"][0]["data"] == [70, 80]
+        assert chart["option"]["series"][0]["markLine"]["data"][0]["yAxis"] == 75
+
+    def test_prediction_curve_needs_at_least_two_points(self):
+        one = {"metrics": {"val_scatter": {"actual": [1], "predicted": [1]}}}
+        two = {"metrics": {"val_scatter": {"actual": [1, 2], "predicted": [1, 2]}}}
+        assert narrative.build_run_charts(one, ["prediction_curve"]) == []
+        assert len(narrative.build_run_charts(two, ["prediction_curve"])) == 1
+
+
+class TestPlacedChartIds:
+    def test_reads_ids_in_order_without_duplicates(self):
+        md = "a\n\n{{chart:loss_history}}\n\nb\n\n{{chart:fold_scores}}\n\n{{chart:loss_history}}"
+        assert narrative.placed_chart_ids(md) == ["loss_history", "fold_scores"]
+
+    def test_returns_empty_for_text_without_charts(self):
+        assert narrative.placed_chart_ids("纯文字") == []
+        assert narrative.placed_chart_ids("") == []
