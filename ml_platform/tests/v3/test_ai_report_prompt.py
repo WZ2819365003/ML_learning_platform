@@ -101,14 +101,35 @@ class TestPrompt:
         assert "reference_frames" in user
         assert "readiness" in user
 
-    def test_asks_for_a_verdict_first_and_drops_the_chapter_skeleton(self):
+    def test_briefs_with_a_worked_example_rather_than_a_structure(self):
+        # Two revisions of prescribed shape — a 三章 skeleton, then a numbered
+        # requirement list — both produced padding: sections written to be
+        # filled rather than because there was something to say.
         user = build_ai_report_messages(REGRESSION_CTX)[-1]["content"]
-        assert "结论先行" in user
-        # The old prompt pasted a literal skeleton for the model to fill; the
-        # words still appear, but only in the instruction not to use them.
+        assert "===== 范本开始 =====" in user
         assert "## 第一章 结论" not in user
         assert "#### 1.1.1" not in user
-        assert "章节按内容出现" in user
+
+    def test_the_example_is_marked_as_another_task_and_not_to_be_copied(self):
+        # An exemplar full of concrete numbers invites copying them in as facts.
+        user = build_ai_report_messages(REGRESSION_CTX)[-1]["content"]
+        assert "其他任务" in user
+        assert "一个都不要照抄" in user
+
+    def test_asks_for_a_verdict_and_the_dataset_only(self):
+        # Per-model detail belongs to the sub-reports; repeated here it was the
+        # bulk of the length, and it contradicted them as often as not.
+        user = build_ai_report_messages(REGRESSION_CTX)[-1]["content"]
+        assert "## 结论" in user
+        assert "## 数据集概况" in user
+        assert "不要写建议" in user
+
+    def test_still_demands_a_reference_frame_and_the_selection_caveat(self):
+        # The guards that are about correctness rather than shape survive the
+        # move to an exemplar.
+        user = build_ai_report_messages(REGRESSION_CTX)[-1]["content"]
+        assert "参照系" in user
+        assert "选择分" in user
 
     def test_no_longer_asks_the_model_to_invent_a_score(self):
         user = build_ai_report_messages(REGRESSION_CTX)[-1]["content"]

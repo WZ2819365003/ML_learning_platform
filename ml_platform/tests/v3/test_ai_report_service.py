@@ -228,8 +228,8 @@ async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, m
     assert "总分：xx/100" not in prompt_text
 
     # What it asks for instead.
-    assert "结论先行" in prompt_text
-    assert "章节按内容出现" in prompt_text
+    assert "===== 范本开始 =====" in prompt_text
+    assert "## 数据集概况" in prompt_text
     assert "参照系" in prompt_text
     assert "多数类基线" in prompt_text
     assert "选择分" in prompt_text          # selection vs final-test separation

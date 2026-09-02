@@ -225,92 +225,6 @@ class TestBuildRunCharts:
 
 
 
-class TestSplitRunSections:
-    """The sub-report shape is fixed in code, not negotiated with the model."""
-
-    def test_splits_on_the_two_headings(self):
-        out = narrative.split_run_sections("训练过程\n收敛于第 30 轮。\n训练结果\nRMSE 约为均值的 0.8%。")
-        assert out["process"] == "收敛于第 30 轮。"
-        assert out["result"] == "RMSE 约为均值的 0.8%。"
-
-    def test_tolerates_markdown_and_bold_headings(self):
-        # 豆包 dresses headings inconsistently across calls; all of these are
-        # the same heading and must not end up as body text.
-        for heading in ("## 训练结果", "**训练结果**", "训练结果：", "### **训练结果**"):
-            out = narrative.split_run_sections(f"训练过程\na\n{heading}\nb")
-            assert out["result"] == "b", heading
-            assert "训练结果" not in out["process"], heading
-
-    def test_text_before_any_heading_is_kept_not_dropped(self):
-        out = narrative.split_run_sections("开场白。\n训练结果\nb")
-        assert "开场白。" in out["process"]
-
-
-class TestBuildRunSections:
-    def _charts(self, *ids):
-        return [{"id": i, "option": {"series": []}, "title": i} for i in ids]
-
-    def test_each_chart_lands_in_its_own_section(self):
-        out = narrative.build_run_sections(
-            "训练过程\na\n训练结果\nb",
-            self._charts("loss_history", "fold_scores", "prediction_curve"),
-        )
-        assert [s["key"] for s in out] == ["process", "result"]
-        assert [c["id"] for c in out[0]["charts"]] == ["loss_history", "fold_scores"]
-        assert [c["id"] for c in out[1]["charts"]] == ["prediction_curve"]
-
-    def test_sections_keep_their_fixed_order(self):
-        # Even if the model writes 训练结果 first, the reader sees process first.
-        out = narrative.build_run_sections("训练结果\nb\n训练过程\na", [])
-        assert [s["title"] for s in out] == ["训练过程", "训练结果"]
-
-    def test_an_empty_section_is_dropped_rather_than_rendered_bare(self):
-        out = narrative.build_run_sections("训练过程\n只写了这一段。", [])
-        assert [s["key"] for s in out] == ["process"]
-
-    def test_a_chart_without_an_option_is_not_offered(self):
-        # build_run_charts returns nothing for absent data; an empty frame reads
-        # as a broken chart rather than an absent one.
-        out = narrative.build_run_sections(
-            "训练过程\na", [{"id": "loss_history", "option": None}],
-        )
-        assert out[0]["charts"] == []
-
-
-class TestRunPromptAsksForInterpretationOnly:
-    def test_forbids_advice_and_a_third_section(self):
-        user = narrative.build_run_messages({"model_type": "xgboost"}, {})[1]["content"]
-        assert "不要给任何建议" in user
-        assert "不要写第三段" in user
-
-    def test_never_mentions_charts_to_the_model(self):
-        # Placement is a code decision now; mentioning figures only tempted the
-        # model to shape the argument around them.
-        user = narrative.build_run_messages({"model_type": "xgboost"}, {})[1]["content"]
-        assert "不要提到任何图表" in user
-
-
-class TestStrayHeadingsAreDropped:
-    """The sub-report's shape is fixed; the model's own titles are not part of it."""
-
-    def test_drops_the_report_title_the_model_adds_unasked(self):
-        # 豆包 opens most sub-reports with "# AI 建模报告", which rendered as a
-        # second report title inside the page's own report.
-        out = narrative.split_run_sections("# AI 建模报告\n\n训练过程\n正文。")
-        assert "AI 建模报告" not in out["process"]
-        assert "正文。" in out["process"]
-
-    def test_drops_a_stray_heading_between_sections(self):
-        out = narrative.split_run_sections("训练过程\na\n## 小结\nb\n训练结果\nc")
-        assert "小结" not in out["process"]
-        assert "b" in out["process"]
-
-    def test_keeps_a_hash_that_is_not_a_heading(self):
-        # "#1" and the like are ordinary text, not markdown headings.
-        out = narrative.split_run_sections("训练过程\n排名 #1 的模型。")
-        assert "#1" in out["process"]
-
-
 class TestChartAxesHaveRoomToRender:
     """ECharts clips what does not fit the grid inset; it never widens it."""
 
@@ -346,3 +260,85 @@ class TestChartAxesHaveRoomToRender:
         assert len(charts) == 4
         for chart in charts:
             assert chart["option"]["grid"]["left"] >= 80, chart["id"]
+
+
+class TestExemplarDrivenPrompts:
+    """The brief is a worked example, not a rule list.
+
+    Two revisions of prescribed structure produced padding — sections written
+    to be filled rather than because there was something to say. The exemplar
+    carries length, depth and register instead.
+    """
+
+    def _user(self):
+        return narrative.build_run_messages({"model_type": "xgboost"}, {})[1]["content"]
+
+    def test_the_sub_report_brief_contains_a_worked_example(self):
+        user = self._user()
+        assert "===== 范本开始 =====" in user
+        assert "## 训练过程" in user and "## 训练结果" in user
+
+    def test_the_example_is_marked_as_another_task_and_not_to_be_copied(self):
+        # An exemplar full of concrete numbers is an invitation to copy them
+        # into the report as facts.
+        user = self._user()
+        assert "其他任务" in user
+        assert "一个都不要照抄" in user
+
+    def test_it_still_demands_a_reference_frame_for_every_metric(self):
+        # The one guard that is about correctness rather than shape.
+        assert "参照系" in self._user()
+
+    def test_the_first_pass_never_mentions_figures(self):
+        # Told about charts, the model bends the argument toward what can be
+        # drawn; placement runs afterwards, on finished text.
+        assert "不要提到任何图表" in self._user()
+
+
+class TestChartPlacementSeesRenderedCharts:
+    def _charts(self):
+        return [{
+            "id": "loss_history", "title": "训练/验证损失",
+            "description": "逐轮损失。",
+            "option": {"series": [{"name": "训练损失"}, {"name": "验证损失"}]},
+        }]
+
+    def test_the_placement_pass_is_shown_what_was_actually_drawn(self):
+        # It used to be handed a menu of ids that *could* be built, and placed
+        # figures that then rendered as nothing.
+        described = narrative.describe_built_charts(self._charts())
+        assert described[0]["id"] == "loss_history"
+        assert described[0]["画的是"] == "训练损失、验证损失"
+
+    def test_declining_to_place_a_chart_is_an_allowed_answer(self):
+        user = narrative.build_chart_placement_messages("正文。", self._charts())[1]["content"]
+        assert "就不要插它" in user
+        assert "[]" in user
+
+    def test_paragraphs_are_numbered_from_one_for_the_model(self):
+        user = narrative.build_chart_placement_messages(
+            "第一段。\n\n第二段。", self._charts(),
+        )[1]["content"]
+        assert "[第1段]" in user and "[第2段]" in user
+
+    def test_an_empty_placement_reply_leaves_the_report_untouched(self):
+        out, dropped = narrative.apply_chart_placements("正文。", [], {"loss_history"})
+        assert out == "正文。"
+        assert dropped == []
+
+
+class TestStripLeadingTitle:
+    def test_drops_the_report_title_the_model_adds_unasked(self):
+        # 豆包 opens most sub-reports with "# AI 建模报告" however plainly it is
+        # told not to; kept, it renders as a second title inside the page's own.
+        out = narrative.strip_leading_title("# AI 建模报告\n\n## 训练过程\n正文。")
+        assert out.startswith("## 训练过程")
+
+    def test_keeps_the_section_headings(self):
+        out = narrative.strip_leading_title("## 训练过程\n正文。")
+        assert out.startswith("## 训练过程")
+
+    def test_tolerates_leading_blank_lines_and_empty_input(self):
+        assert narrative.strip_leading_title("\n\n# 标题\n正文。") == "正文。"
+        assert narrative.strip_leading_title("") == ""
+        assert narrative.strip_leading_title(None) == ""

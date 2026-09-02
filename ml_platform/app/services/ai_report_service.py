@@ -2535,48 +2535,50 @@ def build_ai_report_messages(context: dict[str, Any] | str) -> list[dict[str, st
         "上下文里的 reference_frames 与 readiness 已由后端算好，可以直接引用，不要自己重算。"
     )
 
-    # Written as a short brief plus one worked example rather than a long list of
-    # prohibitions. The previous prompt mandated a fixed 三章 skeleton, demanded
-    # "每个小节至少包含一个多自然段说明" and forbade about ten things; between
-    # padding empty sections and dodging the bans, the output came out uniform
-    # and nearly unreadable. What follows asks for the judgement and lets the
-    # structure follow whatever the task actually has.
+    # A worked exemplar plus a handful of correctness guards, rather than a
+    # structure. Two revisions of prescribed shape — first a 三章 skeleton, then
+    # a numbered requirement list — both produced padding: sections written to
+    # be filled rather than because there was something to say. What the reader
+    # wants from the overall report is two things, a verdict and an account of
+    # what the data holds, so that is what the example shows.
     user = (
-        "请根据下面的建模任务上下文，写一份中文 Markdown 报告，给两类读者看："
-        "要决定这个模型能不能用的人，以及要接手继续做的人。\n\n"
+        "请根据下面的建模任务上下文，写一份中文 Markdown 总报告。\n\n"
 
-        "## 写作要求\n\n"
-        "1. **结论先行。** 开头用「## 结论」小节，三到五句话说清三件事：这个模型能不能用、"
-        "好到什么程度、最大的风险是什么。这一段要让不懂机器学习的人也能读懂。\n"
-        "2. **指标必须带参照系。** 不要只写「RMSE = 72.47」。上下文的 reference_frames 里已经"
-        "算好了换算结果，直接引用，例如「预测平均偏离约 72.5，相当于目标列均值的 0.8%」。"
-        "分类任务要对照多数类基线：准确率 92% 在多数类占 90% 时几乎没有价值。\n"
-        "3. **章节按内容出现。** 有逐轮训练记录才写训练过程，有最终测试才谈最终结论。"
-        "没有的内容直接略过，不要写一节只为了说「暂无」。\n"
-        "4. **区分选择分和最终测试分。** 选择分是在选择集上得到的，不能当作泛化能力的证据；"
-        "如果还没做最终评估，必须说明当前结论的可信度受限。\n"
-        "5. **交代数据是什么。** 用一小段自然语言说明这份数据的构成：多少行、目标列是什么，"
-        "哪些是原始采集字段、哪些明显是特征工程构造出来的（带 lag / roll / sin / cos / "
-        "交互项这类命名的列）。抓住构成和用意讲，不要罗列全部列名。\n"
-        "6. **建议要具体到能执行**，并指明依据哪条数据。「建议调参」不算；"
-        "「rmse 跨折变异系数 18%，说明划分敏感，建议增大数据量或改用分层切分」才算。\n\n"
+        "下面是一份**其他任务**的总报告范本。请模仿它的结构、语气、详略和篇幅，"
+        "但内容一律以本次上下文为准 —— 范本里的模型名和数字都是别的任务的，一个都不要照抄。\n\n"
 
-        "## 格式\n\n"
-        "- 用 `##` 和 `###` 两级标题，不要「第一章」「1.1.1」这类编号\n"
-        "- 不要输出表格、代码块或图表：数据集概况、参数、评价指标的表格和曲线图由前端另行渲染，"
-        "你只需要在正文里解释怎么读、说明了什么\n"
-        "- 模型名保留原始标识：写 random_forest、ARIMA，不要写成随机森林、阿里玛\n"
-        "- 篇幅控制在 800-1500 字。写不满不要注水，把话说完就停\n\n"
-
-        "## 示例（示范语气和密度，不是要你照抄结构）\n\n"
-        "> ## 结论\n"
-        "> \n"
-        "> 这个模型可以进入试用，但还不能直接上生产。xgboost_regressor 在留出集上的 "
-        "RMSE 是 72.47，约为目标列均值 8897 的 0.8%，也就是典型情况下预测误差不到 1%，"
-        "对负荷预测这个量级是够用的。\n"
-        "> \n"
-        "> 主要风险是这个成绩尚未在封存测试集上验证过，目前的 72.47 来自选择阶段，"
+        "===== 范本开始 =====\n"
+        "## 结论\n\n"
+        "这个模型可以进入试用，但还不能直接上生产。本次共训练 6 个模型，"
+        "其中 gbdt_regressor 表现最好，在选择集上的 MAE 为 3.42，"
+        "约为目标列均值 214.7 的 1.6%，也就是典型情况下预测误差不到两个百分点，"
+        "对这个量级的需求预测是够用的。排在第二的 lightgbm_regressor 是 3.91，"
+        "两者差距不到 0.5，如果更看重推理速度，选后者也说得过去。\n\n"
+        "主要风险是这个成绩尚未在封存测试集上验证过。3.42 来自选择阶段，"
         "而选择阶段的数据参与过模型挑选，天然偏乐观。建议先完成最终评估再决定是否上线。\n\n"
+        "## 数据集概况\n\n"
+        "本次使用的数据集共 52560 行、28 列，目标列是 demand。"
+        "其中十来列是原始采集字段，包括时间戳、气温、湿度和几个站点侧的直接观测量，"
+        "它们构成了这份数据的事实基础。\n\n"
+        "余下的列是训练流程构造出来的特征，大致分三类："
+        "demand_lag_1、demand_lag_24 这样的滞后项，把前一时刻和前一天同一时刻的值带进来；"
+        "demand_roll_mean_168 这样的滚动统计量，描述近一周的整体水平；"
+        "以及 hour_sin、hour_cos 这类三角变换，把一天之内的周期性显式地交给模型。"
+        "这批特征是树模型能取得上述精度的主要原因 —— 原始字段本身并不包含时间上的邻近信息。\n"
+        "===== 范本结束 =====\n\n"
+
+        "几点硬要求：\n"
+        "- **指标必须带参照系**，不要裸数字。上下文的 reference_frames 里已经算好了换算结果，"
+        "直接引用。分类任务要对照多数类基线：准确率 92% 在多数类占 90% 时几乎没有价值\n"
+        "- **区分选择分和最终测试分**。选择分不能当作泛化能力的证据；"
+        "如果还没做最终评估，必须说明当前结论的可信度受限\n"
+        "- 讲数据集时抓构成和用意，说明哪些是原始采集字段、哪些是构造出来的特征，"
+        "不要罗列全部列名\n"
+        "- 上下文没有的事实一律写“暂无数据”，不要推测业务背景或数据来源\n"
+        "- 模型名保留原始标识：写 random_forest、ARIMA，不要写成随机森林、阿里玛\n"
+        "- 只写这两节，不要写建议、后续工作、给决策人员之类的段落 —— 每个模型的细节"
+        "由分报告承担，这里不要逐个展开\n"
+        "- 不要输出表格、代码块或图表；不要写一级标题\n\n"
 
         "## 建模任务上下文 JSON\n\n"
         f"{context_text}"
@@ -2837,11 +2839,6 @@ async def _generate_narrative(
             run_report["markdown"] = _preserve_model_identifiers(
                 run_report["markdown"], context,
             )
-        for section in run_report.get("sections") or []:
-            if section.get("markdown"):
-                section["markdown"] = _preserve_model_identifiers(
-                    section["markdown"], context,
-                )
     return result
 
 
