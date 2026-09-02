@@ -7,7 +7,7 @@ import {
   DatabaseOutlined, ExperimentOutlined, ThunderboltOutlined,
   CloudUploadOutlined, InboxOutlined, PlusOutlined,
   ArrowLeftOutlined, ArrowRightOutlined,
-  AppstoreOutlined, TrophyOutlined,
+  AppstoreOutlined, TrophyOutlined, FileTextOutlined,
   CodeOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -338,10 +338,20 @@ export default function ModelingWorkflow() {
   // Capped, not fixed. With both panels folded this step is a few lines, and
   // holding it open to the training tabs' height would be a screen of nothing.
   // It grows as panels are expanded and scrolls once it reaches that height.
+  const reportLink = task && (
+    <Button size="small" icon={<FileTextOutlined />}
+      onClick={() => navigate(`/v3/tasks/${task.id}`, { state: { tab: 'report' } })}>
+      查看 AI 报告
+    </Button>
+  )
+
   const deployStep = (
     <Card size="small" styles={{ body: { padding: '4px 12px 4px' } }} variant="outlined">
       {/* DeployStep reserves one shared minimum for its tab panes, so the outer
           frame just wraps them rather than imposing a second bound. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+        {reportLink}
+      </div>
       <DeployStep task={task} runs={runs} bestRunId={bestRunId} />
     </Card>
   )

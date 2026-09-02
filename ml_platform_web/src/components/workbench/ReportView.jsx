@@ -20,6 +20,7 @@ import { DownloadOutlined, PrinterOutlined, ReloadOutlined } from '@ant-design/i
 import { modelingTaskApi } from '../../services/api'
 import MarkdownReport from './MarkdownReport'
 import { AiReportReader } from './AiReportModal'
+import RunReportPanel from './RunReportPanel'
 import { pickLatestArchive, resolveReportSource } from './reportViewModel'
 
 const { Text } = Typography
@@ -160,6 +161,15 @@ export default function ReportView({ taskId, taskName, generatedAiReport = null 
       {source.kind === 'ai' ? (
         <div className="ai-report-inline">
           <AiReportReader report={source.report} taskName={taskName} className="ai-report-inline-body" />
+          {/* Per-model narratives below the overall verdict: the overall report
+              says whether to use this at all, a sub-report says how one model
+              trained and how to read its score. */}
+          <div style={{ marginTop: 16 }}>
+            <RunReportPanel
+              runReports={source.report?.run_reports || []}
+              bestRunId={source.report?.best_run_id || null}
+            />
+          </div>
         </div>
       ) : (
         <Card variant="outlined" className="report-body">

@@ -2728,6 +2728,9 @@ async def generate_ai_task_report(
         "run_reports": narrative["runs"],
         "runs_total": narrative["runs_total"],
         "runs_reported": narrative["runs_reported"],
+        # Lifted out of the context so the sub-report list can mark the winner
+        # without the frontend digging through the report's own input.
+        "best_run_id": (context.get("task") or {}).get("best_run_id"),
         **build_rich_report_payload(context, narrative["overview"]),
     }
     return await archive_ai_report(db, report, owner_username=owner_username)
