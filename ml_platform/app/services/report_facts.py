@@ -433,6 +433,11 @@ def build_run_facts(
             f"与最优模型 {best.get('model_type')}（{_fmt(best_value)}）相差 {_fmt(gap)}。"
         )}
 
+    if not folds and (best.get("metrics") or {}).get(f"cv_std_{metric}") is not None:
+        facts.setdefault("gap", {})["caveat"] = (
+            "注意口径不同：本模型的分数来自留出验证集单次结果，最优模型的来自多折交叉验证均值。"
+        )
+
     top_shap = metrics.get("top_shap_importances") or []
     if len(top_shap) >= 2:
         first, second = top_shap[0], top_shap[1]
@@ -464,7 +469,7 @@ def build_run_facts(
     if folds:
         return "run_ml", _merge(facts, _fold_facts(folds, metric))
     if history:
-        return "run_dl", _merge(facts, _history_facts(history, metric))
+        return "run_dl", _merge(facts, _history_facts(history, metric, run))
     return "run_ml", facts
 
 
@@ -527,38 +532,64 @@ def _fold_facts(folds: list[dict[str, Any]], metric: str) -> dict[str, Any]:
     }
 
 
-def _history_facts(history: list[dict[str, Any]], metric: str) -> dict[str, Any]:
-    def _series(*names):
+def _history_facts(history: list[dict[str, Any]], metric: str,
+                   run: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _series(*names) -> tuple[str, list[tuple[int, float]]]:
         for name in names:
             values = [(i + 1, r.get(name)) for i, r in enumerate(history)
                       if isinstance(r.get(name), (int, float))]
             if values:
-                return values
-        return []
+                return name, values
+        return "", []
 
-    val = _series("val_loss", "valid_loss", "val_" + metric)
-    train = _series("train_loss", "loss")
+    val_name, val = _series(f"val_{metric}", "val_loss", "valid_loss")
+    _, train = _series("train_loss", "loss")
     if not val:
         return {}
+
+    # The curve is usually the raw loss, not the objective metric — labelling
+    # it "验证 RMSE 17435.13" put a squared quantity next to an RMSE of 132.04
+    # and invited the reader to think the model was a thousand times worse than
+    # it is.
+    label = _METRIC_NAMES.get(metric, metric.upper()) if val_name.endswith(metric) else "损失"
+
     best_epoch, best_value = min(val, key=lambda p: p[1])
-    planned = len(history)
-    stopped_early = val[-1][0] < planned or best_epoch < val[-1][0]
+    ran = val[-1][0]
+    planned = _planned_epochs(run)
+    # "计划训练 38 轮，实际在第 38 轮触发早停" — planned was just len(history),
+    # so it always equalled the actual count and the sentence said nothing.
+    stopped_early = bool(planned and ran < planned)
+
     overfit = ""
     if train and len(train) > best_epoch:
         after_train = [v for e, v in train if e > best_epoch]
         after_val = [v for e, v in val if e > best_epoch]
         if after_train and after_val and after_train[-1] < after_train[0] and after_val[-1] > after_val[0]:
             overfit = "训练损失在此之后继续下降而验证损失回升，两条线分开的位置即过拟合起点。"
+
     return {
         "train": {
-            "planned_epochs": planned,
-            "actual_epochs": val[-1][0],
-            "stop_reason": "触发早停" if stopped_early else "训练结束",
-            "metric": metric.upper(),
+            "plan_note": (f"计划训练 {planned} 轮，" if planned else ""),
+            "actual_epochs": ran,
+            "stop_reason": ("触发早停" if stopped_early else "训练结束"),
+            "metric": label,
             "best_epoch": best_epoch,
             "best_value": _fmt(best_value),
-            "patience_used": val[-1][0] - best_epoch,
+            "patience_used": ran - best_epoch,
             "overfit_note": overfit,
-            "verdict_sentence": "",
+            "verdict_sentence": (
+                f"训练在第 {ran} 轮结束，最优验证{label}出现在第 {best_epoch} 轮。"
+            ),
         },
     }
+
+
+def _planned_epochs(run: dict[str, Any] | None) -> int | None:
+    """The configured epoch budget, which is not the number of rows in history."""
+    params = ((run or {}).get("params") or {})
+    for source in (params.get("hyperparameters") or {}, params):
+        for key in ("epochs", "max_epochs", "n_epochs", "num_epochs"):
+            value = source.get(key)
+            if isinstance(value, int) and value > 0:
+                return value
+    return None

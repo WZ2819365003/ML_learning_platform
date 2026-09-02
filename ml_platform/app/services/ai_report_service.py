@@ -2680,9 +2680,10 @@ async def _generate_narrative(
     # computed facts and read as written; the lead-sentence bolding welded a
     # section heading to the sentence under it.
     def _post(markdown: str) -> str:
-        markdown = _preserve_model_identifiers(markdown, context)
-        markdown = _highlight_report_lead_sentences(markdown)
-        return _separate_repeated_bold_leads(markdown)
+        # No lead-sentence bolding: every paragraph now opens with a computed
+        # sentence, so bolding the first one of each bolds most of the report.
+        # The headings and tables carry the hierarchy instead.
+        return _preserve_model_identifiers(markdown, context)
 
     result["overview"] = _post(result["overview"])
     for run_report in result["runs"]:  # noqa: B007 — identifiers only

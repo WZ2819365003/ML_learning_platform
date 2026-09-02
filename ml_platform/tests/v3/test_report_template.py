@@ -220,3 +220,51 @@ class TestChartDefects:
             {"epoch": 3, "train_loss": 140.0, "val_loss": 150.0},
         ]}}
         assert self._chart("loss_history", run)["option"]["yAxis"]["type"] == "log"
+
+
+class TestDeepLearningTrainingFacts:
+    def _hist(self, n=38, best=28):
+        # A loss curve, which is what these runs actually record.
+        return [{"epoch": i + 1, "val_loss": 20000 - (i * 100 if i <= best else 50),
+                 "train_loss": 19000 - i * 120} for i in range(n)]
+
+    def test_the_curve_is_labelled_loss_not_the_objective_metric(self):
+        # It was labelled "验证 RMSE 17435.13" next to an RMSE of 132.04 — the
+        # square of one presented as the other, a thousandfold apparent error.
+        _, facts = rf.build_run_facts(
+            {"model_type": "m", "metrics": {"history": self._hist()}}, {"leaderboard": [{}]},
+        )
+        assert facts["train"]["metric"] == "损失"
+
+    def test_the_objective_metric_is_used_when_the_curve_really_is_that(self):
+        hist = [{"epoch": i, "val_rmse": 200 - i} for i in range(1, 6)]
+        ctx = {"task": {"objective_metric": "rmse"}, "leaderboard": [{}]}
+        _, facts = rf.build_run_facts({"model_type": "m", "metrics": {"history": hist}}, ctx)
+        assert facts["train"]["metric"] == "RMSE"
+
+    def test_no_epoch_plan_is_claimed_when_none_was_configured(self):
+        # planned was len(history), so it always equalled the actual count and
+        # the sentence read "计划训练 38 轮，实际在第 38 轮触发早停".
+        _, facts = rf.build_run_facts(
+            {"model_type": "m", "metrics": {"history": self._hist()}}, {"leaderboard": [{}]},
+        )
+        assert facts["train"]["plan_note"] == ""
+        assert facts["train"]["stop_reason"] == "训练结束"
+
+    def test_early_stopping_is_claimed_only_against_the_configured_budget(self):
+        run = {"model_type": "m", "params": {"hyperparameters": {"epochs": 50}},
+               "metrics": {"history": self._hist(38)}}
+        _, facts = rf.build_run_facts(run, {"leaderboard": [{}]})
+        assert facts["train"]["plan_note"] == "计划训练 50 轮，"
+        assert facts["train"]["stop_reason"] == "触发早停"
+        assert facts["train"]["actual_epochs"] == 38
+
+    def test_a_held_out_score_carries_the_comparability_caveat(self):
+        # Ranked against a champion scored by cross-validation, which is a
+        # different measurement, not a worse one.
+        best = {"model_type": "b", "objective_value": 72.0,
+                "metrics": {"cv_avg_rmse": 72.0, "cv_std_rmse": 0.9}}
+        run = {"model_type": "m", "objective_value": 132.0, "metrics": {"history": self._hist()}}
+        ctx = {"task": {"objective_metric": "rmse"}, "leaderboard": [best]}
+        _, facts = rf.build_run_facts(run, ctx, best)
+        assert "口径不同" in facts["gap"]["caveat"]
