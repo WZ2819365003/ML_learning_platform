@@ -62,7 +62,7 @@ def available_run_charts(run: dict[str, Any], task_type: str) -> list[dict[str, 
         })
         menu.append({
             "id": "lr_history",
-            "desc": "逐轮学习率变化，用于说明调度器何时降速",
+            "desc": "逐轮学习率变化，仅在学习率确有变动时出现",
         })
     if isinstance(metrics.get("cv_folds"), list) and metrics["cv_folds"]:
         menu.append({
@@ -276,11 +276,15 @@ def build_run_charts(
             },
         })
 
-    if "lr_history" in wanted and any(isinstance(r.get("lr"), (int, float)) for r in history):
+    # A constant learning rate plots as a horizontal line and says nothing —
+    # these runs are configured with scheduler "none", so the chart was a flat
+    # line captioned "调度器折半降速", describing a schedule that never ran.
+    _lrs = [r.get("lr") for r in history if isinstance(r.get("lr"), (int, float))]
+    if "lr_history" in wanted and len(set(_lrs)) > 1:
         charts.append({
             "id": "lr_history",
             "title": "学习率变化",
-            "description": "对数轴。调度器折半降速，线性轴上后续步进会挤在零附近看不见。",
+            "description": "逐轮学习率，对数轴。",
             "type": "echarts",
             "option": {
                 "grid": dict(_GRID, top=24),

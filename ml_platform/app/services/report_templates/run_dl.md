@@ -6,7 +6,7 @@
 
 ## 训练过程
 
-{{train.plan_note}}实际训练 {{train.actual_epochs}} 轮，{{train.stop_reason}}。
+{{run.arch_note}}{{train.plan_note}}实际训练 {{train.actual_epochs}} 轮，{{train.stop_reason}}。
 
 第 {{train.best_epoch}} 轮取得最优验证 {{train.metric}} {{train.best_value}}，此后 {{train.patience_used}} 轮未再刷新。{{train.overfit_note}}<<结合下面的曲线说明收敛过程与模型容量是否合适，两句>>
 

@@ -366,3 +366,57 @@ class TestChartCaptionsDoNotAssert:
         ]}}
         chart = narrative.build_run_charts(run, ["loss_history"])[0]
         assert "就是过拟合的起点" not in chart["description"]
+
+
+class TestDeepLearningConfigIsRead:
+    """The DL trainers nest their config; reading only the flat level missed it."""
+
+    def _run(self, epochs=50, patience=10, ran=38):
+        history = [{"epoch": i + 1, "val_loss": max(1.0, 30 - i), "lr": 0.001, "train_loss": 30 - i}
+                   for i in range(ran)]
+        return {
+            "run_id": "r", "rank": 2, "model_type": "lstm", "objective_value": 132.0,
+            "params": {"hyperparameters": {
+                "train_config": {"epochs": epochs, "batch_size": 32,
+                                 "early_stopping_patience": patience, "scheduler": "none"},
+                "arch_config": {"num_layers": 2, "hidden_size": 128, "dropout": 0.3},
+            }},
+            "metrics": {"history": history},
+        }
+
+    def _facts(self, run):
+        ctx = {"task": {"objective_metric": "rmse"}, "dataset": {},
+               "leaderboard": [{"run_id": "b", "model_type": "A", "objective_value": 72.0,
+                                "metrics": {"cv_avg_rmse": 72.0, "cv_std_rmse": 0.85}}],
+               "_target_stats": {"mean": 8896.59}}
+        return rf.build_run_facts(run, ctx, ctx["leaderboard"][0])[1]
+
+    def test_the_epoch_budget_comes_from_train_config(self):
+        # 38 of a configured 50 is an early stop; without the nested lookup it
+        # was reported as a completed run.
+        assert self._facts(self._run())["train"]["plan_note"] == "计划训练 50 轮，"
+
+    def test_early_stopping_names_its_patience(self):
+        assert "早停耐心 10 轮" in self._facts(self._run())["train"]["stop_reason"]
+
+    def test_the_architecture_is_stated(self):
+        note = self._facts(self._run())["run"]["arch_note"]
+        assert "2 层" in note and "128 维" in note and "批量 32" in note
+
+    def test_running_the_full_budget_is_not_an_early_stop(self):
+        facts = self._facts(self._run(epochs=38, ran=38))
+        assert "早停" not in facts["train"]["stop_reason"]
+
+
+class TestConstantLearningRateHasNoChart:
+    def test_a_flat_rate_is_not_plotted(self):
+        # These runs set scheduler "none", so the chart was a horizontal line
+        # captioned "调度器折半降速" — a schedule that never ran.
+        from app.services import ai_report_narrative as narrative
+        run = {"metrics": {"history": [{"epoch": i, "lr": 0.001} for i in range(1, 6)]}}
+        assert narrative.build_run_charts(run, ["lr_history"]) == []
+
+    def test_a_changing_rate_is_plotted(self):
+        from app.services import ai_report_narrative as narrative
+        run = {"metrics": {"history": [{"epoch": 1, "lr": 0.01}, {"epoch": 2, "lr": 0.005}]}}
+        assert len(narrative.build_run_charts(run, ["lr_history"])) == 1

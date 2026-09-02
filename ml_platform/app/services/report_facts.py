@@ -571,6 +571,7 @@ def _history_facts(history: list[dict[str, Any]], metric: str,
     best_epoch, best_value = min(val, key=lambda p: p[1])
     ran = val[-1][0]
     planned = _planned_epochs(run)
+    patience = _train_config(run).get("early_stopping_patience")
     # "计划训练 38 轮，实际在第 38 轮触发早停" — planned was just len(history),
     # so it always equalled the actual count and the sentence said nothing.
     stopped_early = bool(planned and ran < planned)
@@ -583,14 +584,18 @@ def _history_facts(history: list[dict[str, Any]], metric: str,
             overfit = "训练损失在此之后继续下降而验证损失回升，两条线分开的位置即过拟合起点。"
 
     return {
+        "run": {"arch_note": _arch_note(run)},
         "train": {
             "plan_note": (f"计划训练 {planned} 轮，" if planned else ""),
             "actual_epochs": ran,
             # With no configured epoch count there is no way to tell an early
             # stop from a completed run, and "训练结束" asserted the wrong one
             # for a run whose best epoch was ten short of its last.
-            "stop_reason": ("触发早停" if stopped_early
-                            else ("训练结束" if planned else "结束")),
+            "stop_reason": (
+                f"触发早停（早停耐心 {patience} 轮）" if stopped_early and patience
+                else "触发早停" if stopped_early
+                else "训练结束" if planned else "结束"
+            ),
             "metric": label,
             "best_epoch": best_epoch,
             "best_value": _fmt(best_value),
@@ -603,10 +608,37 @@ def _history_facts(history: list[dict[str, Any]], metric: str,
     }
 
 
+def _train_config(run: dict[str, Any] | None) -> dict[str, Any]:
+    hyper = ((run or {}).get("params") or {}).get("hyperparameters") or {}
+    return hyper.get("train_config") or {}
+
+
+def _arch_note(run: dict[str, Any] | None) -> str:
+    """What this network actually is, from the recorded architecture."""
+    hyper = ((run or {}).get("params") or {}).get("hyperparameters") or {}
+    arch = hyper.get("arch_config") or {}
+    bits: list[str] = []
+    if arch.get("num_layers"):
+        bits.append(f"{arch['num_layers']} 层")
+    if arch.get("hidden_size"):
+        bits.append(f"隐藏层 {arch['hidden_size']} 维")
+    if arch.get("hidden_layers"):
+        bits.append("隐藏层 " + "×".join(str(n) for n in arch["hidden_layers"]))
+    if arch.get("dropout"):
+        bits.append(f"dropout {arch['dropout']}")
+    batch = _train_config(run).get("batch_size")
+    if batch:
+        bits.append(f"批量 {batch}")
+    return "采用" + "、".join(bits) + "的配置，" if bits else ""
+
+
 def _planned_epochs(run: dict[str, Any] | None) -> int | None:
     """The configured epoch budget, which is not the number of rows in history."""
     params = ((run or {}).get("params") or {})
-    for source in (params.get("hyperparameters") or {}, params):
+    hyper = params.get("hyperparameters") or {}
+    # The DL trainers nest it under train_config; searching only the flat level
+    # found nothing, so a 38-of-50 early stop was reported as a completed run.
+    for source in (hyper.get("train_config") or {}, hyper, params):
         for key in ("epochs", "max_epochs", "n_epochs", "num_epochs"):
             value = source.get(key)
             if isinstance(value, int) and value > 0:
