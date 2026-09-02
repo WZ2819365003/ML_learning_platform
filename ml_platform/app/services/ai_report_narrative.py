@@ -258,7 +258,7 @@ def build_run_charts(
         charts.append({
             "id": "loss_history",
             "title": "训练/验证损失",
-            "description": "逐轮损失。训练损失下降而验证损失回升，就是过拟合的起点。",
+            "description": "逐轮训练与验证损失，对数轴。",
             "type": "echarts",
             "option": {
                 "grid": dict(_GRID),
@@ -311,7 +311,7 @@ def build_run_charts(
             charts.append({
                 "id": "fold_scores",
                 "title": f"交叉验证各折 {label}",
-                "description": "每折单独的得分与均值线。个别折偏低说明数据划分不均，而非模型整体不稳。",
+                "description": "每折单独的得分，虚线为均值。",
                 "type": "echarts",
                 "option": {
                     "grid": dict(_GRID, top=24),

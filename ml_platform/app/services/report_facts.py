@@ -87,7 +87,8 @@ def md_table(headers: list[str], rows: list[list[str]], align: list[str] | None 
     return "\n".join(out)
 
 
-def gap_verdict(gap: float | None, noise: float | None) -> dict[str, Any]:
+def gap_verdict(gap: float | None, noise: float | None,
+                noise_name: str = "交叉验证噪声") -> dict[str, Any]:
     """Is the distance between two models bigger than one model's own wobble?
 
     A leaderboard prints differences to four decimals and says nothing about
@@ -103,8 +104,8 @@ def gap_verdict(gap: float | None, noise: float | None) -> dict[str, Any]:
         "within_noise": within,
         "short": "差距不具备统计意义" if within else "差距可辨识",
         "long": (
-            "差距落在交叉验证噪声之内，当前数据不足以判定二者优劣"
-            if within else "差距超出交叉验证噪声，可以判定优劣"
+            f"差距落在{noise_name}之内，当前数据不足以判定二者优劣"
+            if within else f"差距超出{noise_name}，可以判定优劣"
         ),
     }
 
@@ -381,7 +382,14 @@ def build_run_facts(
            if isinstance(value, (int, float)) and isinstance(best_value, (int, float))
            else None)
     is_best = run.get("run_id") == best.get("run_id")
-    verdict = gap_verdict(gap, own_std or best_std)
+    # A rerun of the winning model scores identically, and comparing it to the
+    # champion produced "与最优模型 xgboost_regressor（72.4673）相差 0，相对差 0%"
+    # — the model measured against itself under another name.
+    is_duplicate = (not is_best
+                    and run.get("model_type") == best.get("model_type")
+                    and value == best_value)
+    noise_name = "交叉验证噪声" if _is_cv(run) else "最优模型的折间波动"
+    verdict = gap_verdict(gap, own_std or best_std, noise_name)
 
     headline = []
     for key in ("rmse", "mae", "r2", "accuracy", "f1"):
@@ -407,7 +415,9 @@ def build_run_facts(
             "params_note": _params_note(run),
         },
         "headline": {"sentence": (
-            (f"{_metric_label(metric, '交叉验证' if folds else '留出验证')} {_fmt(value)}，"
+            # _is_cv, not `folds`: the rank-1 run has a cross-validated mean but
+            # no per-fold detail persisted, and was labelled 留出验证 for it.
+            (f"{_metric_label(metric, '交叉验证' if _is_cv(run) else '留出验证')} {_fmt(value)}，"
              f"列第 {run.get('rank')}。") if isinstance(value, (int, float)) else ""
         )},
         "metrics": {"sentence": "，".join(headline) + "。" if headline else ""},
@@ -419,6 +429,11 @@ def build_run_facts(
 
     if is_best:
         facts["gap"] = {"sentence": "本模型即本次最优。"}
+    elif is_duplicate:
+        facts["gap"] = {"sentence": (
+            f"本次结果与排名第一的 {best.get('model_type')} 完全一致，"
+            "为同一模型的重复训练，不构成独立的对比项。"
+        )}
     elif verdict.get("known"):
         facts["gap"] = {"sentence": (
             f"与最优模型 {best.get('model_type')}（{_fmt(best_value)}）相差 {_fmt(gap)}，"
@@ -571,7 +586,11 @@ def _history_facts(history: list[dict[str, Any]], metric: str,
         "train": {
             "plan_note": (f"计划训练 {planned} 轮，" if planned else ""),
             "actual_epochs": ran,
-            "stop_reason": ("触发早停" if stopped_early else "训练结束"),
+            # With no configured epoch count there is no way to tell an early
+            # stop from a completed run, and "训练结束" asserted the wrong one
+            # for a run whose best epoch was ten short of its last.
+            "stop_reason": ("触发早停" if stopped_early
+                            else ("训练结束" if planned else "结束")),
             "metric": label,
             "best_epoch": best_epoch,
             "best_value": _fmt(best_value),

@@ -267,7 +267,10 @@ class TestDeepLearningTrainingFacts:
             {"model_type": "m", "metrics": {"history": self._hist()}}, {"leaderboard": [{}]},
         )
         assert facts["train"]["plan_note"] == ""
-        assert facts["train"]["stop_reason"] == "训练结束"
+        # Nor is a completed run claimed: without the configured budget there is
+        # no way to tell one from an early stop, and this run's best epoch sits
+        # ten short of its last — the signature of the opposite.
+        assert facts["train"]["stop_reason"] == "结束"
 
     def test_early_stopping_is_claimed_only_against_the_configured_budget(self):
         run = {"model_type": "m", "params": {"hyperparameters": {"epochs": 50}},
@@ -286,3 +289,80 @@ class TestDeepLearningTrainingFacts:
         ctx = {"task": {"objective_metric": "rmse"}, "leaderboard": [best]}
         _, facts = rf.build_run_facts(run, ctx, best)
         assert "口径不同" in facts["gap"]["caveat"]
+
+
+class TestRunFactsDoNotMisstateProvenance:
+    """Four things the sub-reports asserted that were not true.
+
+    All four were visible only by reading the rendered page: none raises, and
+    each reads as a confident statement of fact.
+    """
+
+    def _ctx(self, runs):
+        return {
+            "task": {"name": "T", "objective_metric": "rmse", "target_column": "y"},
+            "dataset": {"row_count": 9, "column_count": 2, "column_names": ["y", "x"]},
+            "leaderboard": runs,
+            "run_status_counts": {"SUCCESS": len(runs)},
+            "_target_stats": {"mean": 8896.59, "min": 1.0, "max": 2.0},
+            "_readiness": {"score": 60, "checks": []},
+        }
+
+    def _cv_run(self, run_id, rank, value, folds=True):
+        metrics = {"cv_avg_rmse": value, "cv_std_rmse": 0.85}
+        if folds:
+            metrics["cv_folds"] = [{"fold": i, "rmse": value + i * 0.1} for i in range(1, 6)]
+        return {"run_id": run_id, "rank": rank, "model_type": "A",
+                "objective_value": value, "metrics": metrics}
+
+    def test_a_cross_validated_score_is_not_called_留出验证(self):
+        # The winning run has a CV mean but no per-fold detail persisted, and
+        # the label was derived from the detail rather than from the score.
+        best = self._cv_run("r1", 1, 72.4673, folds=False)
+        _, facts = rf.build_run_facts(best, self._ctx([best]))
+        assert "交叉验证" in facts["headline"]["sentence"]
+        assert "留出验证" not in facts["headline"]["sentence"]
+
+    def test_a_rerun_of_the_winner_is_not_compared_with_itself(self):
+        # Produced "与最优模型 A（72.4673）相差 0，相对差 0%".
+        best = self._cv_run("r1", 1, 72.4673)
+        dup = self._cv_run("r2", 2, 72.4673)
+        _, facts = rf.build_run_facts(dup, self._ctx([best, dup]), best)
+        assert "重复训练" in facts["gap"]["sentence"]
+        assert "相差 0" not in facts["gap"]["sentence"]
+
+    def test_a_model_without_cross_validation_is_not_judged_against_cv_noise(self):
+        best = self._cv_run("r1", 1, 72.4673)
+        dl = {"run_id": "r9", "rank": 5, "model_type": "D", "objective_value": 132.04,
+              "metrics": {"history": [{"val_loss": 5.0}, {"val_loss": 4.0}]}}
+        _, facts = rf.build_run_facts(dl, self._ctx([best, dl]), best)
+        assert "交叉验证噪声" not in facts["gap"]["sentence"]
+
+    def test_an_unknown_epoch_plan_does_not_become_训练结束(self):
+        # best epoch ten short of the last is the signature of an early stop;
+        # calling it a completed run states the opposite of what happened.
+        history = [{"val_loss": 100 - i} for i in range(28)] + [{"val_loss": 80} for _ in range(10)]
+        dl = {"run_id": "r9", "rank": 2, "model_type": "D", "objective_value": 72.0,
+              "params": {}, "metrics": {"history": history}}
+        best = self._cv_run("r1", 1, 70.0)
+        _, facts = rf.build_run_facts(dl, self._ctx([best, dl]), best)
+        assert facts["train"]["stop_reason"] != "训练结束"
+
+
+class TestChartCaptionsDoNotAssert:
+    def test_the_fold_caption_states_no_finding(self):
+        # "个别折偏低说明数据划分不均" printed under a chart whose own verdict
+        # two lines above says no fold is an outlier.
+        from app.services import ai_report_narrative as narrative
+        run = {"metrics": {"cv_folds": [{"fold": i, "rmse": 1.0 + i} for i in range(1, 4)]}}
+        chart = narrative.build_run_charts(run, ["fold_scores"])[0]
+        assert "说明" not in chart["description"]
+
+    def test_the_loss_caption_states_no_finding(self):
+        from app.services import ai_report_narrative as narrative
+        run = {"metrics": {"history": [
+            {"epoch": 1, "train_loss": 9.0, "val_loss": 9.5},
+            {"epoch": 2, "train_loss": 4.0, "val_loss": 5.0},
+        ]}}
+        chart = narrative.build_run_charts(run, ["loss_history"])[0]
+        assert "就是过拟合的起点" not in chart["description"]
