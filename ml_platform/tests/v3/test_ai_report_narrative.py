@@ -309,3 +309,40 @@ class TestStrayHeadingsAreDropped:
         # "#1" and the like are ordinary text, not markdown headings.
         out = narrative.split_run_sections("训练过程\n排名 #1 的模型。")
         assert "#1" in out["process"]
+
+
+class TestChartAxesHaveRoomToRender:
+    """ECharts clips what does not fit the grid inset; it never widens it."""
+
+    def _loss_chart(self):
+        run = {"metrics": {"history": [
+            {"epoch": i, "train_loss": 8_000_000 - i, "val_loss": 8_100_000 - i}
+            for i in range(1, 6)
+        ]}}
+        return narrative.build_run_charts(run, ["loss_history"])[0]
+
+    def test_the_y_axis_gap_fits_a_seven_digit_loss(self):
+        # 8,000,000 is eleven characters; at the old 56px inset the axis read
+        # ",000,000" with the leading digits cut off.
+        assert self._loss_chart()["option"]["grid"]["left"] >= 80
+
+    def test_the_x_axis_name_sits_under_the_ticks_not_past_them(self):
+        # Left at the axis end it collided with the plot edge and rendered as
+        # a single letter.
+        axis = self._loss_chart()["option"]["xAxis"]
+        assert axis["nameLocation"] == "middle"
+        assert self._loss_chart()["option"]["grid"]["bottom"] > axis["nameGap"]
+
+    def test_every_chart_reserves_the_same_room(self):
+        run = {"metrics": {
+            "history": [{"epoch": 1, "train_loss": 1.0, "lr": 0.1},
+                        {"epoch": 2, "train_loss": 0.5, "lr": 0.05}],
+            "cv_folds": [{"fold": 1, "rmse": 1.0}, {"fold": 2, "rmse": 1.1}],
+            "val_scatter": {"actual": [1, 2, 3], "predicted": [1, 2, 3]},
+        }}
+        charts = narrative.build_run_charts(
+            run, ["loss_history", "lr_history", "fold_scores", "prediction_curve"],
+        )
+        assert len(charts) == 4
+        for chart in charts:
+            assert chart["option"]["grid"]["left"] >= 80, chart["id"]

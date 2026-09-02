@@ -335,6 +335,18 @@ async def generate_narrative_report(
 # Same shape as the task-level charts in ai_report_service so the existing
 # frontend reader renders them unchanged: {id, title, description, type, option}.
 
+# Loss values run to seven digits, and ECharts clips a tick label that does not
+# fit the grid inset rather than widening it — the axis read ",000,000". Options
+# leave here as plain JSON, so a JS tick formatter is not available; the space
+# has to be reserved instead.
+_GRID = {"left": 86, "right": 28, "top": 34, "bottom": 52}
+
+# An axis name defaults to the end of the axis, where it collides with the
+# plot edge and gets cut to its first letter. Centring it under the ticks is
+# what the extra bottom inset above is for.
+_X_NAME = {"nameLocation": "middle", "nameGap": 28}
+
+
 def _line(name: str, data: list[Any], color: str) -> dict[str, Any]:
     return {
         "name": name, "type": "line", "data": data, "showSymbol": False,
@@ -362,10 +374,10 @@ def build_run_charts(run: dict[str, Any], chart_ids: list[str]) -> list[dict[str
             "description": "逐轮损失。训练损失下降而验证损失回升，就是过拟合的起点。",
             "type": "echarts",
             "option": {
-                "grid": {"left": 56, "right": 20, "top": 34, "bottom": 40},
+                "grid": dict(_GRID),
                 "tooltip": {"trigger": "axis"},
                 "legend": {"top": 0},
-                "xAxis": {"type": "category", "data": epochs, "name": "Epoch"},
+                "xAxis": {"type": "category", "data": epochs, "name": "轮次", **_X_NAME},
                 "yAxis": {"type": "value", "scale": True},
                 "series": [
                     _line("训练损失", [r.get("train_loss") for r in history], "#2563eb"),
@@ -381,9 +393,10 @@ def build_run_charts(run: dict[str, Any], chart_ids: list[str]) -> list[dict[str
             "description": "对数轴。调度器折半降速，线性轴上后续步进会挤在零附近看不见。",
             "type": "echarts",
             "option": {
-                "grid": {"left": 68, "right": 20, "top": 24, "bottom": 40},
+                "grid": dict(_GRID, top=24),
                 "tooltip": {"trigger": "axis"},
-                "xAxis": {"type": "category", "data": [r.get("epoch") for r in history], "name": "Epoch"},
+                "xAxis": {"type": "category", "data": [r.get("epoch") for r in history],
+                          "name": "轮次", **_X_NAME},
                 "yAxis": {"type": "log", "name": "学习率"},
                 "series": [{
                     "name": "学习率", "type": "line", "step": "end", "showSymbol": False,
@@ -407,7 +420,7 @@ def build_run_charts(run: dict[str, Any], chart_ids: list[str]) -> list[dict[str
                 "description": "每折单独的得分与均值线。个别折偏低说明数据划分不均，而非模型整体不稳。",
                 "type": "echarts",
                 "option": {
-                    "grid": {"left": 56, "right": 20, "top": 24, "bottom": 40},
+                    "grid": dict(_GRID, top=24),
                     "tooltip": {"trigger": "axis"},
                     "xAxis": {"type": "category", "data": [f"第 {f.get('fold')} 折" for f in folds]},
                     "yAxis": {"type": "value", "scale": True, "name": key},
@@ -436,10 +449,11 @@ def build_run_charts(run: dict[str, Any], chart_ids: list[str]) -> list[dict[str
                 "description": "留出集上的逐样本对比。两条线贴合越紧越好。",
                 "type": "echarts",
                 "option": {
-                    "grid": {"left": 60, "right": 20, "top": 34, "bottom": 40},
+                    "grid": dict(_GRID),
                     "tooltip": {"trigger": "axis"},
                     "legend": {"top": 0},
-                    "xAxis": {"type": "category", "data": list(range(1, n + 1)), "name": "样本"},
+                    "xAxis": {"type": "category", "data": list(range(1, n + 1)),
+                              "name": "样本序号", **_X_NAME},
                     "yAxis": {"type": "value", "scale": True},
                     "series": [
                         _line("实际值", actual[:n], "#dc2626"),
