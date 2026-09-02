@@ -227,31 +227,29 @@ async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, m
     assert "多自然段" not in prompt_text
     assert "总分：xx/100" not in prompt_text
 
-    # What it asks for instead.
-    assert "===== 范本开始 =====" in prompt_text
-    assert "## 数据集概况" in prompt_text
-    assert "参照系" in prompt_text
-    assert "多数类基线" in prompt_text
-    assert "选择分" in prompt_text          # selection vs final-test separation
+    # The exemplar brief these lines used to check now belongs only to
+    # generate_ai_report_from_context, which still writes a report from a
+    # serialised context; test_ai_report_prompt covers it there.
 
-    # Facts computed server-side and handed over rather than left to the model.
-    assert "reference_frames" in prompt_text
-    assert "readiness" in prompt_text
+    # The task-report path no longer sends a brief. It renders the document
+    # from computed facts and asks only for the <<…>> sentences, so what the
+    # model receives is the finished report plus a numbered list of gaps.
+    assert "===== 报告 =====" in prompt_text
+    assert "只回复一个 JSON 对象" in prompt_text
+    assert "不可更改" in captured["messages"][0]["content"]
 
-    # Still enforced: the model writes prose, the frontend renders the tables
-    # and charts, and model identifiers stay untranslated.
-    assert "不要输出表格、代码块或图表" in prompt_text
-    assert "不要翻译成中文" in prompt_text
-
-    # The task's own facts still reach it.
+    # The task's own facts reach it — inside the rendered document, as text it
+    # may read but not rewrite.
     assert "客户流失预测" in prompt_text
     assert "random_forest" in prompt_text
-    assert "tenure" in prompt_text
 
     assert result["task_id"] == task_id
     assert result["model"] == "doubao-test"
-    assert "## 第三章 建议" in result["markdown"]
-    assert "**总分：82/100。**" in result["markdown"]
+    # The markdown is now rendered, not returned by the model: the stub reply
+    # above is not JSON, so no slot is filled and every sentence in the report
+    # is one the backend computed.
+    assert "## 结论" in result["markdown"]
+    assert "<<" not in result["markdown"], "no unfilled slot is printed"
     assert result["report_schema_version"] == "ai_report.rich.v1"
     assert result["archive_id"]
     assert any(item["key"] == "ai_score" for item in result["headline_metrics"])
@@ -381,7 +379,9 @@ async def test_ai_report_archive_list_and_detail(db, monkeypatch):
     assert len(archives) == 1
     assert archives[0]["id"] == generated["archive_id"]
     assert archives[0]["task_id"] == task_id
-    assert archives[0]["title"] == "AI 建模报告"
+    # Titled after the task now, not with a generic label; the archive stores
+    # whatever heading the rendered report carries.
+    assert "建模报告" in archives[0]["title"]
     assert restored["archive_id"] == generated["archive_id"]
     assert restored["task_id"] == task_id
     assert restored["report_blocks"][0]["id"] == "conclusion"

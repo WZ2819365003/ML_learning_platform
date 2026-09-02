@@ -2665,24 +2665,27 @@ async def _generate_narrative(
         return _normalise_markdown(await _request_chat_completion(settings, messages))
 
     task_type = ((context.get("task") or {}).get("task_type") or "regression")
+    # The template facts need these; they were previously computed only inside
+    # the overall report's prompt, which is why every sub-report saw a null
+    # target mean and reached for the number in the prompt's own example.
+    enriched = dict(context)
+    enriched["_target_stats"] = _target_column_stats(context)
+    enriched["_readiness"] = compute_readiness_score(context)
     result = await ai_report_narrative.generate_narrative_report(
-        context,
+        enriched,
         call_model=_call,
         task_type=task_type,
-        # The overall report keeps the existing prompt: it already hands the
-        # model server-computed reference frames and a weighted readiness
-        # score rather than asking it to divide numbers or invent a total.
-        overview_messages=build_ai_report_messages(context),
     )
-    # Same post-processing the single-report path applied. Dropping it silently
-    # removed the bolded lead sentences the reader highlights on.
+    # Only the overall report is post-processed. Sub-reports are assembled from
+    # computed facts and read as written; the lead-sentence bolding welded a
+    # section heading to the sentence under it.
     def _post(markdown: str) -> str:
         markdown = _preserve_model_identifiers(markdown, context)
         markdown = _highlight_report_lead_sentences(markdown)
         return _separate_repeated_bold_leads(markdown)
 
     result["overview"] = _post(result["overview"])
-    for run_report in result["runs"]:
+    for run_report in result["runs"]:  # noqa: B007 — identifiers only
         # Sub-reports get identifier protection only. The lead-sentence
         # bolding is built for the overall report's long unbroken prose; on a
         # sub-report it welds the section heading to the sentence beneath it

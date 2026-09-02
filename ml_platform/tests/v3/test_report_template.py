@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.services import ai_report_narrative as narrative
 from app.services import report_facts as rf
 from app.services import report_template as rt
 
@@ -171,3 +172,51 @@ class TestOverviewFactsHandleDuplicateRuns:
         ctx = self._ctx()
         ctx["leaderboard"] = [e for i, e in enumerate(ctx["leaderboard"]) if i != 1]
         assert "duplicates" not in rf.build_overview_facts(ctx)
+
+
+class TestChartDefects:
+    """Three ways a chart was drawn wrong rather than not drawn at all."""
+
+    def _folds(self):
+        # lightgbm's real r2 values: two folds sit exactly on the minimum.
+        return [{"fold": i + 1, "r2": r, "rmse": m} for i, (r, m) in enumerate(
+            [(0.9974, 72.8147), (0.9974, 71.8756), (0.9972, 73.5246),
+             (0.9972, 74.0774), (0.9974, 71.6359)])]
+
+    def _chart(self, cid, run, objective="rmse"):
+        built = narrative.build_run_charts(run, [cid], objective)
+        return built[0] if built else None
+
+    def test_the_fold_chart_plots_the_objective_metric(self):
+        # It took the first numeric key in the fold dict, which is r2 — the
+        # prose and the ranking both talk about rmse.
+        chart = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}})
+        assert "RMSE" in chart["title"].upper()
+        assert chart["option"]["series"][0]["data"][0] == 72.8147
+
+    def test_the_fold_chart_falls_back_when_the_objective_is_absent(self):
+        chart = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}}, "mape")
+        assert chart is not None
+
+    def test_the_lowest_bar_is_not_zero_pixels_high(self):
+        # scale:true puts the axis floor on the data minimum, so the two folds
+        # sitting at 0.9972 rendered as nothing at all.
+        chart = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}}, "r2")
+        axis = chart["option"]["yAxis"]
+        assert axis.get("scale") is not True
+        assert axis["min"] < 0.9972, axis
+
+    def test_identical_fold_values_still_get_a_usable_axis(self):
+        flat = [{"fold": i + 1, "rmse": 5.0} for i in range(3)]
+        axis = self._chart("fold_scores", {"metrics": {"cv_folds": flat}})["option"]["yAxis"]
+        assert axis["min"] < 5.0 < axis["max"]
+
+    def test_the_loss_chart_uses_a_log_axis(self):
+        # Epoch 1 is orders of magnitude above the rest; on a linear axis the
+        # whole curve flattens onto zero and the divergence point vanishes.
+        run = {"metrics": {"history": [
+            {"epoch": 1, "train_loss": 4.2e7, "val_loss": 4.3e7},
+            {"epoch": 2, "train_loss": 300.0, "val_loss": 320.0},
+            {"epoch": 3, "train_loss": 140.0, "val_loss": 150.0},
+        ]}}
+        assert self._chart("loss_history", run)["option"]["yAxis"]["type"] == "log"
