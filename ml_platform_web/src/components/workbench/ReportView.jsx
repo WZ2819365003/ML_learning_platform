@@ -160,16 +160,16 @@ export default function ReportView({ taskId, taskName, generatedAiReport = null 
 
       {source.kind === 'ai' ? (
         <div className="ai-report-inline">
-          <AiReportReader report={source.report} taskName={taskName} className="ai-report-inline-body" />
-          {/* Per-model narratives below the overall verdict: the overall report
-              says whether to use this at all, a sub-report says how one model
-              trained and how to read its score. */}
-          <div style={{ marginTop: 16 }}>
-            <RunReportPanel
-              runReports={source.report?.run_reports || []}
-              bestRunId={source.report?.best_run_id || null}
-            />
-          </div>
+          {/* One document, not two stacked ones: the overall report is the root
+              of the tree and each model hangs off it. */}
+          <RunReportPanel
+            runReports={source.report?.run_reports || []}
+            bestRunId={source.report?.best_run_id || null}
+            overview={(
+              <AiReportReader report={source.report} taskName={taskName}
+                className="ai-report-inline-body" />
+            )}
+          />
         </div>
       ) : (
         <Card variant="outlined" className="report-body">

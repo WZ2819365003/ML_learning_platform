@@ -185,8 +185,10 @@ async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, m
     captured = {}
 
     async def fake_request(settings, messages):
-        captured["settings"] = settings
-        captured["messages"] = messages
+        # The overview is the first call; the per-model reports follow it and
+        # would otherwise overwrite what this test is about.
+        captured.setdefault("settings", settings)
+        captured.setdefault("messages", messages)
         return (
             "# AI 建模报告\n\n"
             "## 第一章 结论\n\n"

@@ -36,7 +36,21 @@ _MAX_CONCURRENT_RUN_REPORTS = 4
 # leaderboard is ordered, so the cut keeps the ones worth reading.
 _MAX_RUN_REPORTS = 8
 
-_CHART_PLACEHOLDER = re.compile(r"\{\{\s*chart\s*:\s*([a-z0-9_]+)\s*\}\}", re.I)
+# A sub-report is always these two sections, in this order, and each section's
+# figures are fixed here. The model used to be asked, in a second call, where
+# the pictures should go; it placed them mid-argument and the result looked
+# improvised. Deciding in code costs one fewer model call per model and makes
+# every sub-report read the same way.
+_SECTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("process", "训练过程", ("loss_history", "lr_history", "fold_scores")),
+    ("result", "训练结果", ("prediction_curve",)),
+)
+
+# Matches a section heading however the model dresses it: bare, ###, or bolded.
+_HEADING = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(训练过程|训练结果)\s*(?:\*\*)?\s*[:：]?\s*$"
+)
+
 
 
 # ---------------------------------------------------------------------------
@@ -68,27 +82,6 @@ def available_run_charts(run: dict[str, Any], task_type: str) -> list[dict[str, 
             "desc": "留出集上的实际值与预测值对比曲线，用于说明预测在哪些位置偏离",
         })
     return menu
-
-
-def resolve_chart_placeholders(
-    markdown: str,
-    allowed_ids: set[str],
-) -> tuple[str, list[str]]:
-    """Keep placeholders the menu allows; drop the rest.
-
-    A hallucinated id renders as nothing rather than as an empty chart frame,
-    and is returned so the caller can log that the model invented one.
-    """
-    dropped: list[str] = []
-
-    def _sub(match: re.Match[str]) -> str:
-        chart_id = match.group(1).lower()
-        if chart_id in allowed_ids:
-            return f"{{{{chart:{chart_id}}}}}"
-        dropped.append(chart_id)
-        return ""
-
-    return _CHART_PLACEHOLDER.sub(_sub, markdown), dropped
 
 
 # ---------------------------------------------------------------------------
@@ -169,31 +162,31 @@ def build_run_messages(
     run: dict[str, Any],
     task_brief: dict[str, Any],
 ) -> list[dict[str, str]]:
-    """分报告第一遍：只写文字。
+    """分报告：只写两段解读，不写建议、不管插图。
 
-    Charts are not mentioned here at all. Asking one call to both write prose
-    and place figures makes it do neither well — placeholders end up mid
-    sentence and the argument gets shaped around what can be illustrated. The
-    placement pass runs afterwards, on finished text.
+    Charts are never mentioned: the figures are placed by code, in fixed slots
+    under each section. Advice is out of scope too — the overall report already
+    says which model to use, and a per-model recommendation only contradicted
+    it.
     """
     user = (
-        f"请为模型 {run.get('model_type')} 写一份简短的分报告，中文自然段，"
-        "**不要表格、不要代码块、不要插图、不要提到任何图表**，总长度 350 字以内。"
-        "写成两到三段，段前用这样的小标题：\n\n"
+        f"请为模型 {run.get('model_type')} 写一份解读，中文自然段，"
+        "**不要表格、不要代码块、不要插图、不要提到任何图表**，总长度 320 字以内。\n\n"
+
+        "只写以下两段，各用一行独立小标题，标题就写这四个字，不要加编号：\n\n"
 
         "训练过程\n"
         "这次训练是怎么进行的。有逐轮记录就讲收敛情况和早停位置；"
         "有交叉验证各折得分就讲波动来自哪里（是某一折异常，还是整体都在抖）。\n\n"
 
-        "结果解读\n"
+        "训练结果\n"
         "这个模型的表现怎么读。**指标必须给参照系**，不要裸数字 —— "
         "上下文里有目标列统计量，例如均值 8897 时 RMSE 72.47 应写成"
         "“约为均值的 0.8%”。如果它不是最优模型，说明和最优差在哪、差距是否重要。\n\n"
 
-        "值得注意\n"
-        "只在确实有异常时才写这一段，没有异常就整段省略。\n\n"
-
-        "模型名保留原始英文标识（random_forest 不要写成随机森林）。\n\n"
+        "只做解读，不要给任何建议、不要写“建议”“推荐”“下一步”这类内容，"
+        "也不要写第三段。模型名保留原始英文标识"
+        "（random_forest 不要写成随机森林）。\n\n"
 
         f"该 Run 的数据：\n{run}\n\n"
         f"任务背景（目标列、统计量、当前最优模型）：\n{task_brief}"
@@ -204,107 +197,47 @@ def build_run_messages(
     ]
 
 
-def build_chart_placement_messages(
+def split_run_sections(markdown: str) -> dict[str, str]:
+    """Split the model's prose on the two headings it was told to write.
+
+    Anything before the first heading is prepended to 训练过程 rather than
+    dropped — a stray lead sentence is still the model's words about training.
+    """
+    buckets: dict[str, list[str]] = {key: [] for key, _, _ in _SECTIONS}
+    by_title = {title: key for key, title, _ in _SECTIONS}
+    current = _SECTIONS[0][0]
+    for line in (markdown or "").split("\n"):
+        heading = _HEADING.match(line)
+        if heading:
+            current = by_title[heading.group(1)]
+            continue
+        buckets[current].append(line)
+    return {key: "\n".join(v).strip() for key, v in buckets.items()}
+
+
+def build_run_sections(
     markdown: str,
-    charts: list[dict[str, str]],
-) -> list[dict[str, str]]:
-    """分报告第二遍：只决定图放在哪。
+    charts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """The rendered shape: fixed sections, each with its prose and its figures.
 
-    Deliberately tiny: the model reads finished text and answers with a JSON
-    array, so this pass costs a fraction of the first one despite being a
-    second round trip.
+    A section with neither text nor charts is dropped, so a model with no
+    held-out curve does not render an empty 训练结果 heading.
     """
-    menu = "\n".join(f"  {c['id']} — {c['desc']}" for c in charts)
-    user = (
-        "下面是一份已经写好的模型分报告，以及本次可用的图表清单。"
-        "请判断每张图应该插在第几个自然段之后，只输出 JSON 数组，不要任何其它文字：\n\n"
-
-        '[{"chart": "图表id", "after_paragraph": 段落序号}]\n\n'
-
-        "规则：\n"
-        "- 段落序号从 1 开始，只数正文自然段，不数小标题行\n"
-        "- 只能使用清单里的 id；不合适就不要放，宁缺毋滥\n"
-        "- 一张图最多出现一次\n"
-        "- 图应该紧跟在解释它的那句话所在的段落之后\n"
-        "- 没有任何图适合就输出 []\n\n"
-
-        f"可用图表：\n{menu}\n\n"
-        f"报告正文：\n{markdown}"
-    )
-    return [
-        {"role": "system", "content": "你只输出 JSON，不输出解释。"},
-        {"role": "user", "content": user},
-    ]
-
-
-def apply_chart_placements(
-    markdown: str,
-    placements: Any,
-    allowed_ids: set[str],
-) -> tuple[str, list[str]]:
-    """Insert chart markers after the paragraphs the placement pass chose.
-
-    Tolerant by design: a malformed reply, an unknown id or an out-of-range
-    paragraph yields a report without that figure rather than a failed request.
-    The report is the deliverable; the illustration is not.
-    """
-    if not isinstance(placements, list):
-        return markdown, []
-
-    paragraphs = markdown.split("\n\n")
-    inserts: dict[int, list[str]] = {}
-    used: set[str] = set()
-    dropped: list[str] = []
-
-    for item in placements:
-        if not isinstance(item, dict):
+    text = split_run_sections(markdown)
+    by_id = {c["id"]: c for c in charts if c.get("option")}
+    out = []
+    for key, title, chart_ids in _SECTIONS:
+        picked = [by_id[cid] for cid in chart_ids if cid in by_id]
+        if not text.get(key) and not picked:
             continue
-        chart_id = str(item.get("chart") or "").strip().lower()
-        index = item.get("after_paragraph")
-        if chart_id not in allowed_ids or chart_id in used:
-            if chart_id:
-                dropped.append(chart_id)
-            continue
-        if not isinstance(index, int) or not (1 <= index <= len(paragraphs)):
-            dropped.append(chart_id)
-            continue
-        inserts.setdefault(index - 1, []).append(chart_id)
-        used.add(chart_id)
-
-    if not inserts:
-        return markdown, dropped
-
-    out: list[str] = []
-    for i, para in enumerate(paragraphs):
-        out.append(para)
-        for chart_id in inserts.get(i, []):
-            out.append(f"{{{{chart:{chart_id}}}}}")
-    return "\n\n".join(out), dropped
-
-
-def _parse_placements(raw: Any) -> Any:
-    """Pull the JSON array out of a placement reply.
-
-    Models wrap JSON in prose or fences however often they are told not to, and
-    a wrapped-but-correct answer should not cost the report its figures.
-    """
-    import json
-
-    if isinstance(raw, list):
-        return raw
-    text = str(raw or "").strip()
-    if not text:
-        return []
-    fenced = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
-    if fenced:
-        text = fenced.group(1).strip()
-    start, end = text.find("["), text.rfind("]")
-    if start == -1 or end <= start:
-        return []
-    try:
-        return json.loads(text[start:end + 1])
-    except ValueError:
-        return []
+        out.append({
+            "key": key,
+            "title": title,
+            "markdown": text.get(key, ""),
+            "charts": picked,
+        })
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -357,8 +290,6 @@ async def generate_narrative_report(
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_RUN_REPORTS)
 
     async def _one(run: dict[str, Any]) -> dict[str, Any]:
-        charts = available_run_charts(run, task_type)
-        allowed = {c["id"] for c in charts}
         async with semaphore:
             try:
                 markdown = await call_model(build_run_messages(run, brief))
@@ -371,35 +302,15 @@ async def generate_narrative_report(
                     "error": str(exc),
                 }
 
-            # Second pass, on finished text. Failing here loses the figures,
-            # never the report — so it is caught separately and narrowly.
-            dropped: list[str] = []
-            if charts:
-                try:
-                    raw = await call_model(build_chart_placement_messages(markdown, charts))
-                    markdown, dropped = apply_chart_placements(
-                        markdown, _parse_placements(raw), allowed,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "Chart placement failed for %s (report kept): %s",
-                        run.get("run_id"), exc,
-                    )
-
-        if dropped:
-            logger.info(
-                "Run %s: dropped chart placements %s",
-                run.get("run_id"), ", ".join(dropped),
-            )
-        placed = placed_chart_ids(markdown)
+        charts = build_run_charts(
+            run, [c["id"] for c in available_run_charts(run, task_type)],
+        )
         return {
             "run_id": run.get("run_id"),
             "model_type": run.get("model_type"),
             "markdown": markdown,
-            # Only what the text actually references: an unplaced chart is a
-            # payload shipped to the browser for nothing.
-            "charts": build_run_charts(run, placed),
-            "dropped_charts": dropped,
+            "sections": build_run_sections(markdown, charts),
+            "charts": charts,
         }
 
     run_reports = await asyncio.gather(*(_one(r) for r in runs))
@@ -532,12 +443,3 @@ def build_run_charts(run: dict[str, Any], chart_ids: list[str]) -> list[dict[str
 
     return charts
 
-
-def placed_chart_ids(markdown: str) -> list[str]:
-    """Chart ids that survived into the finished text, in order of appearance."""
-    seen: list[str] = []
-    for match in _CHART_PLACEHOLDER.finditer(markdown or ""):
-        chart_id = match.group(1).lower()
-        if chart_id not in seen:
-            seen.append(chart_id)
-    return seen

@@ -37,64 +37,6 @@ class TestAvailableRunCharts:
             c["id"] for c in narrative.available_run_charts({"metrics": {}}, "classification")}
 
 
-class TestApplyChartPlacements:
-    MD = "训练过程\n\n第一段正文。\n\n结果解读\n\n第二段正文。"
-
-    def test_inserts_a_marker_after_the_chosen_paragraph(self):
-        out, dropped = narrative.apply_chart_placements(
-            self.MD, [{"chart": "loss_history", "after_paragraph": 2}], {"loss_history"})
-        parts = out.split("\n\n")
-        assert parts[2] == "{{chart:loss_history}}"
-        assert dropped == []
-
-    def test_drops_a_chart_the_run_does_not_have(self):
-        # An empty frame reads as a broken chart rather than as the model
-        # having asked for something that does not exist.
-        out, dropped = narrative.apply_chart_placements(
-            self.MD, [{"chart": "loss_history", "after_paragraph": 1}], set())
-        assert "chart:" not in out
-        assert dropped == ["loss_history"]
-
-    def test_drops_an_out_of_range_paragraph(self):
-        out, dropped = narrative.apply_chart_placements(
-            self.MD, [{"chart": "loss_history", "after_paragraph": 99}], {"loss_history"})
-        assert "chart:" not in out
-        assert dropped == ["loss_history"]
-
-    def test_never_places_the_same_chart_twice(self):
-        out, _ = narrative.apply_chart_placements(
-            self.MD,
-            [{"chart": "loss_history", "after_paragraph": 1},
-             {"chart": "loss_history", "after_paragraph": 2}],
-            {"loss_history"})
-        assert out.count("{{chart:loss_history}}") == 1
-
-    def test_a_malformed_reply_costs_the_figures_not_the_report(self):
-        for junk in (None, "抱歉，我无法完成", {"chart": "x"}, 42):
-            out, _ = narrative.apply_chart_placements(self.MD, junk, {"loss_history"})
-            assert out == self.MD
-
-
-class TestParsePlacements:
-    def test_reads_a_bare_array(self):
-        assert narrative._parse_placements('[{"chart":"a","after_paragraph":1}]') == [
-            {"chart": "a", "after_paragraph": 1}]
-
-    def test_unwraps_a_fenced_reply(self):
-        # Models fence JSON however often they are told not to, and a
-        # wrapped-but-correct answer should not cost the report its figures.
-        assert narrative._parse_placements('```json\n[{"chart":"a","after_paragraph":1}]\n```') == [
-            {"chart": "a", "after_paragraph": 1}]
-
-    def test_finds_an_array_buried_in_prose(self):
-        assert narrative._parse_placements('好的，结果是 [{"chart":"a","after_paragraph":2}] 。') == [
-            {"chart": "a", "after_paragraph": 2}]
-
-    def test_returns_empty_for_unparseable_text(self):
-        assert narrative._parse_placements("我觉得不需要图") == []
-        assert narrative._parse_placements("") == []
-
-
 class TestSelectRuns:
     def test_reads_the_leaderboard_which_is_what_the_context_actually_has(self):
         # build_task_report_context emits `leaderboard`, never `runs`. Reading
@@ -217,10 +159,10 @@ class TestGenerateNarrativeReport:
     async def test_one_failed_run_report_does_not_sink_the_rest(self, context):
         async def call(messages):
             body = messages[1]["content"]
-            # "分报告" appears only in a run prompt; the overview embeds the
-            # whole context JSON, so matching on a model name would fire there
-            # too and take the overview down with it.
-            if "分报告" in body and "lstm" in body:
+            # A run prompt is the only one that opens "请为模型 <name> 写";
+            # the overview embeds the whole context JSON, so matching on a bare
+            # model name would fire there too and take the overview down with it.
+            if "请为模型 lstm" in body:
                 raise RuntimeError("上游超时")
             return "文本"
 
@@ -281,11 +223,68 @@ class TestBuildRunCharts:
         assert len(narrative.build_run_charts(two, ["prediction_curve"])) == 1
 
 
-class TestPlacedChartIds:
-    def test_reads_ids_in_order_without_duplicates(self):
-        md = "a\n\n{{chart:loss_history}}\n\nb\n\n{{chart:fold_scores}}\n\n{{chart:loss_history}}"
-        assert narrative.placed_chart_ids(md) == ["loss_history", "fold_scores"]
 
-    def test_returns_empty_for_text_without_charts(self):
-        assert narrative.placed_chart_ids("纯文字") == []
-        assert narrative.placed_chart_ids("") == []
+
+class TestSplitRunSections:
+    """The sub-report shape is fixed in code, not negotiated with the model."""
+
+    def test_splits_on_the_two_headings(self):
+        out = narrative.split_run_sections("训练过程\n收敛于第 30 轮。\n训练结果\nRMSE 约为均值的 0.8%。")
+        assert out["process"] == "收敛于第 30 轮。"
+        assert out["result"] == "RMSE 约为均值的 0.8%。"
+
+    def test_tolerates_markdown_and_bold_headings(self):
+        # 豆包 dresses headings inconsistently across calls; all of these are
+        # the same heading and must not end up as body text.
+        for heading in ("## 训练结果", "**训练结果**", "训练结果：", "### **训练结果**"):
+            out = narrative.split_run_sections(f"训练过程\na\n{heading}\nb")
+            assert out["result"] == "b", heading
+            assert "训练结果" not in out["process"], heading
+
+    def test_text_before_any_heading_is_kept_not_dropped(self):
+        out = narrative.split_run_sections("开场白。\n训练结果\nb")
+        assert "开场白。" in out["process"]
+
+
+class TestBuildRunSections:
+    def _charts(self, *ids):
+        return [{"id": i, "option": {"series": []}, "title": i} for i in ids]
+
+    def test_each_chart_lands_in_its_own_section(self):
+        out = narrative.build_run_sections(
+            "训练过程\na\n训练结果\nb",
+            self._charts("loss_history", "fold_scores", "prediction_curve"),
+        )
+        assert [s["key"] for s in out] == ["process", "result"]
+        assert [c["id"] for c in out[0]["charts"]] == ["loss_history", "fold_scores"]
+        assert [c["id"] for c in out[1]["charts"]] == ["prediction_curve"]
+
+    def test_sections_keep_their_fixed_order(self):
+        # Even if the model writes 训练结果 first, the reader sees process first.
+        out = narrative.build_run_sections("训练结果\nb\n训练过程\na", [])
+        assert [s["title"] for s in out] == ["训练过程", "训练结果"]
+
+    def test_an_empty_section_is_dropped_rather_than_rendered_bare(self):
+        out = narrative.build_run_sections("训练过程\n只写了这一段。", [])
+        assert [s["key"] for s in out] == ["process"]
+
+    def test_a_chart_without_an_option_is_not_offered(self):
+        # build_run_charts returns nothing for absent data; an empty frame reads
+        # as a broken chart rather than an absent one.
+        out = narrative.build_run_sections(
+            "训练过程\na", [{"id": "loss_history", "option": None}],
+        )
+        assert out[0]["charts"] == []
+
+
+class TestRunPromptAsksForInterpretationOnly:
+    def test_forbids_advice_and_a_third_section(self):
+        user = narrative.build_run_messages({"model_type": "xgboost"}, {})[1]["content"]
+        assert "不要给任何建议" in user
+        assert "不要写第三段" in user
+
+    def test_never_mentions_charts_to_the_model(self):
+        # Placement is a code decision now; mentioning figures only tempted the
+        # model to shape the argument around them.
+        user = narrative.build_run_messages({"model_type": "xgboost"}, {})[1]["content"]
+        assert "不要提到任何图表" in user

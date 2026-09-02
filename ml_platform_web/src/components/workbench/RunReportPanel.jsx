@@ -1,14 +1,15 @@
 /**
- * RunReportPanel — the per-model half of the AI report, master/detail.
+ * RunReportPanel — the whole AI report, as one document with a tree of parts.
  *
- * The overall report answers "can we use this"; a sub-report answers "how did
- * this particular model train and how do I read its score". They are different
- * documents for different moments, which is why they are no longer one.
+ * The nav is a horizontal tree across the top: 总报告 is the root, each model
+ * hangs off it. That shape says what the earlier left-rail master/detail did
+ * not — the sub-reports belong to the overall report, they are not a separate
+ * list beside it — and it leaves the full width to the content, which matters
+ * because the content is mostly charts.
  *
- * Master/detail rather than tabs or an accordion: a grid search can produce
- * dozens of runs, tabs stop fitting past about six, and an accordion makes you
- * scroll a whole report to reach the next model. Here the model list stays put
- * and switching costs one click.
+ * Sections and figures are fixed by the backend, not by the model: every
+ * sub-report is 训练过程 then 训练结果, and each chart renders in its section's
+ * grid rather than wherever a second model call decided to wedge a marker.
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { Alert, Card, Empty, Space, Tag, Typography } from 'antd'
@@ -19,41 +20,55 @@ import MarkdownReport from './MarkdownReport'
 
 const { Text } = Typography
 
-const CHART_MARKER = /\{\{\s*chart\s*:\s*([a-z0-9_]+)\s*\}\}/gi
+export const OVERVIEW = '__overview__'
 
 /**
- * Split a sub-report on its chart markers.
+ * The nav's items: 总报告 first, then one per model.
  *
- * The generator places markers on their own line between paragraphs, so the
- * text either side is complete markdown; rendering each span separately keeps
- * the chart inline without a markdown extension.
+ * Exported because the ordering and the "best" marker are the only real logic
+ * in this file; the rest is layout.
  */
-export function splitReportOnCharts(markdown = '') {
-  const segments = []
-  let cursor = 0
-  CHART_MARKER.lastIndex = 0
-  let match = CHART_MARKER.exec(markdown)
-  while (match) {
-    const before = markdown.slice(cursor, match.index).trim()
-    if (before) segments.push({ kind: 'markdown', value: before })
-    segments.push({ kind: 'chart', value: match[1].toLowerCase() })
-    cursor = match.index + match[0].length
-    match = CHART_MARKER.exec(markdown)
-  }
-  const tail = markdown.slice(cursor).trim()
-  if (tail) segments.push({ kind: 'markdown', value: tail })
-  return segments
+export function buildTreeItems(runReports = [], bestRunId = null, overviewLabel = '总报告') {
+  return [
+    { id: OVERVIEW, label: overviewLabel },
+    ...runReports.map(r => ({
+      id: r.run_id,
+      label: r.model_type,
+      best: Boolean(bestRunId) && r.run_id === bestRunId,
+      failed: Boolean(r.error),
+    })),
+  ]
 }
 
-function RunReportBody({ report }) {
-  const chartsById = useMemo(
-    () => Object.fromEntries((report?.charts || []).map(c => [c.id, c])),
-    [report],
-  )
-  const segments = useMemo(
-    () => splitReportOnCharts(report?.markdown || ''), [report],
-  )
+/**
+ * One chart spans the row; two or more sit 2-up.
+ *
+ * A lone half-width tile leaves the section ragged, which is the shape this
+ * layout exists to avoid.
+ */
+export function gridColumns(count) {
+  return count === 1 ? '1fr' : 'repeat(2, minmax(0, 1fr))'
+}
 
+function ChartGrid({ charts = [] }) {
+  if (charts.length === 0) return null
+  const columns = gridColumns(charts.length)
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: columns, gap: 12, margin: '12px 0' }}>
+      {charts.map((chart, i) => (
+        <Card key={chart.id || i} size="small" variant="outlined" title={chart.title}
+          styles={{ body: { padding: 12 } }}>
+          <EChart option={chart.option} style={{ height: 260 }} />
+          {chart.description && (
+            <Text type="secondary" style={{ fontSize: 12 }}>{chart.description}</Text>
+          )}
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+export function RunReportBody({ report }) {
   if (report?.error) {
     return (
       <Alert type="warning" showIcon
@@ -61,93 +76,80 @@ function RunReportBody({ report }) {
         description={<>其余模型和总报告不受影响。失败原因：{report.error}</>} />
     )
   }
-  if (!report?.markdown) {
+  const sections = report?.sections || []
+  if (sections.length === 0) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该模型暂无分报告" />
   }
-
   return (
     <div className="report-body">
-      {segments.map((seg, i) => {
-        if (seg.kind === 'markdown') {
-          return <MarkdownReport key={i} markdown={seg.value} />
-        }
-        const chart = chartsById[seg.value]
-        // A marker whose chart was not built renders as nothing: an empty
-        // frame would read as a broken chart rather than as an absent one.
-        if (!chart?.option) return null
-        return (
-          <Card key={i} size="small" variant="outlined" style={{ margin: '12px 0' }}
-            title={chart.title}>
-            <EChart option={chart.option} style={{ height: 300 }} />
-            {chart.description && (
-              <Text type="secondary" style={{ fontSize: 12 }}>{chart.description}</Text>
-            )}
-          </Card>
-        )
-      })}
+      {sections.map(section => (
+        <section key={section.key} style={{ marginBottom: 20 }}>
+          <div className="run-report-section-title">{section.title}</div>
+          {section.markdown && <MarkdownReport markdown={section.markdown} />}
+          <ChartGrid charts={section.charts} />
+        </section>
+      ))}
     </div>
   )
 }
 
-export default function RunReportPanel({ runReports = [], bestRunId = null }) {
-  const [activeId, setActiveId] = useState(null)
+/** 总报告 as the root, every model hanging off it. */
+function ReportTree({ items, activeId, onSelect }) {
+  const root = items[0]
+  const children = items.slice(1)
+  return (
+    <div className="report-tree">
+      <button type="button"
+        className={`report-tree-node is-root${activeId === root.id ? ' is-active' : ''}`}
+        onClick={() => onSelect(root.id)}>
+        {root.label}
+      </button>
+      {children.length > 0 && (
+        <div className="report-tree-children">
+          {children.map(item => (
+            <button key={item.id} type="button"
+              className={`report-tree-node${activeId === item.id ? ' is-active' : ''}`}
+              onClick={() => onSelect(item.id)}>
+              <Space size={4}>
+                {item.best && <TrophyOutlined style={{ color: '#f59e0b' }} />}
+                <span>{item.label}</span>
+              </Space>
+              {item.failed && <Text type="danger" style={{ fontSize: 11 }}> 失败</Text>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function RunReportPanel({
+  runReports = [], bestRunId = null, overviewLabel = '总报告', overview = null,
+}) {
+  const [activeId, setActiveId] = useState(OVERVIEW)
+
+  const items = useMemo(
+    () => buildTreeItems(runReports, bestRunId, overviewLabel),
+    [runReports, bestRunId, overviewLabel],
+  )
 
   useEffect(() => {
-    if (runReports.length === 0) { setActiveId(null); return }
-    setActiveId(prev => (
-      runReports.some(r => r.run_id === prev) ? prev : runReports[0].run_id
-    ))
-  }, [runReports])
+    // Keep the selection only while it still exists — a regenerated report can
+    // carry a different set of runs.
+    setActiveId(prev => (items.some(i => i.id === prev) ? prev : OVERVIEW))
+  }, [items])
 
   const active = runReports.find(r => r.run_id === activeId) || null
 
-  if (runReports.length === 0) {
-    return (
-      <Card size="small" title="模型分报告">
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="本次没有生成分报告（需要至少一个训练成功的 Run）" />
-      </Card>
-    )
-  }
-
   return (
-    <Card size="small" title={<Space><span>模型分报告</span>
-      <Tag color="blue" style={{ margin: 0 }}>{runReports.length} 个模型</Tag></Space>}
-      styles={{ body: { padding: 0 } }}>
-      <div style={{ display: 'flex', minHeight: 420 }}>
-        <div style={{
-          width: 210, flexShrink: 0, borderRight: '1px solid #f0f0f0',
-          padding: '8px 0', maxHeight: 620, overflowY: 'auto',
-        }}>
-          {runReports.map(r => {
-            const isActive = r.run_id === activeId
-            return (
-              <div
-                key={r.run_id}
-                onClick={() => setActiveId(r.run_id)}
-                style={{
-                  padding: '8px 14px', cursor: 'pointer',
-                  borderLeft: `3px solid ${isActive ? '#2563eb' : 'transparent'}`,
-                  background: isActive ? 'rgba(37,99,235,0.06)' : 'transparent',
-                }}
-              >
-                <Space size={6}>
-                  {r.run_id === bestRunId && <TrophyOutlined style={{ color: '#f59e0b' }} />}
-                  <Text strong={isActive} style={{ fontSize: 13 }}>{r.model_type}</Text>
-                </Space>
-                {r.error && (
-                  <div><Text type="danger" style={{ fontSize: 11 }}>生成失败</Text></div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-
-        <div style={{ flex: 1, minWidth: 0, padding: 16, maxHeight: 620, overflowY: 'auto' }}>
-          {active
-            ? <RunReportBody report={active} />
-            : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择左侧模型查看分报告" />}
-        </div>
+    <Card size="small" styles={{ body: { padding: 0 } }}
+      title={<Space><span>AI 报告</span>
+        <Tag color="blue" style={{ margin: 0 }}>{runReports.length} 个模型</Tag></Space>}>
+      <div className="report-tree-wrap">
+        <ReportTree items={items} activeId={activeId} onSelect={setActiveId} />
+      </div>
+      <div className="report-tree-content">
+        {activeId === OVERVIEW ? overview : <RunReportBody report={active} />}
       </div>
     </Card>
   )
