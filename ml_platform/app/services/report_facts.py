@@ -571,7 +571,7 @@ def _history_facts(history: list[dict[str, Any]], metric: str,
     best_epoch, best_value = min(val, key=lambda p: p[1])
     ran = val[-1][0]
     planned = _planned_epochs(run)
-    patience = _train_config(run).get("early_stopping_patience")
+    patience = _as_int(_train_config(run).get("early_stopping_patience"))
     # "计划训练 38 轮，实际在第 38 轮触发早停" — planned was just len(history),
     # so it always equalled the actual count and the sentence said nothing.
     stopped_early = bool(planned and ran < planned)
@@ -608,6 +608,30 @@ def _history_facts(history: list[dict[str, Any]], metric: str,
     }
 
 
+def _as_int(value: Any) -> int | None:
+    """Nested config arrives stringified.
+
+    _compact_value turns every leaf past depth three into str(), so the epoch
+    budget reaches here as "50" and an isinstance(int) check silently declines
+    it — which is how a 38-of-50 early stop was reported as a completed run.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_numbers(value: Any) -> list[int]:
+    """The layer widths, whether they arrive as a list or as "[256, 128]"."""
+    if isinstance(value, (list, tuple)):
+        return [n for n in (_as_int(v) for v in value) if n is not None]
+    return [int(n) for n in re.findall(r"\d+", str(value or ""))]
+
+
 def _train_config(run: dict[str, Any] | None) -> dict[str, Any]:
     hyper = ((run or {}).get("params") or {}).get("hyperparameters") or {}
     return hyper.get("train_config") or {}
@@ -618,15 +642,19 @@ def _arch_note(run: dict[str, Any] | None) -> str:
     hyper = ((run or {}).get("params") or {}).get("hyperparameters") or {}
     arch = hyper.get("arch_config") or {}
     bits: list[str] = []
-    if arch.get("num_layers"):
-        bits.append(f"{arch['num_layers']} 层")
-    if arch.get("hidden_size"):
-        bits.append(f"隐藏层 {arch['hidden_size']} 维")
-    if arch.get("hidden_layers"):
-        bits.append("隐藏层 " + "×".join(str(n) for n in arch["hidden_layers"]))
+    layers = _as_int(arch.get("num_layers"))
+    if layers:
+        bits.append(f"{layers} 层")
+    hidden = _as_int(arch.get("hidden_size"))
+    if hidden:
+        bits.append(f"隐藏层 {hidden} 维")
+    # "×".join over the *string* "[256, 128]" produced "[×2×5×6×,× ×1×2×8×]".
+    widths = _as_numbers(arch.get("hidden_layers"))
+    if widths:
+        bits.append("隐藏层 " + "×".join(str(n) for n in widths))
     if arch.get("dropout"):
         bits.append(f"dropout {arch['dropout']}")
-    batch = _train_config(run).get("batch_size")
+    batch = _as_int(_train_config(run).get("batch_size"))
     if batch:
         bits.append(f"批量 {batch}")
     return "采用" + "、".join(bits) + "的配置，" if bits else ""
@@ -640,7 +668,7 @@ def _planned_epochs(run: dict[str, Any] | None) -> int | None:
     # found nothing, so a 38-of-50 early stop was reported as a completed run.
     for source in (hyper.get("train_config") or {}, hyper, params):
         for key in ("epochs", "max_epochs", "n_epochs", "num_epochs"):
-            value = source.get(key)
-            if isinstance(value, int) and value > 0:
+            value = _as_int(source.get(key))
+            if value and value > 0:
                 return value
     return None

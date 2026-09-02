@@ -420,3 +420,48 @@ class TestConstantLearningRateHasNoChart:
         from app.services import ai_report_narrative as narrative
         run = {"metrics": {"history": [{"epoch": 1, "lr": 0.01}, {"epoch": 2, "lr": 0.005}]}}
         assert len(narrative.build_run_charts(run, ["lr_history"])) == 1
+
+
+class TestStringifiedConfigIsStillRead:
+    """Nested config reaches the report as strings, and must still be read.
+
+    _compact_value turns every leaf past depth three into str(), so the run's
+    own hyperparameters arrive as {"epochs": "50", "hidden_layers": "[256, 128]"}
+    — and an isinstance check declines all of it without a word.
+    """
+
+    def _run(self):
+        return {
+            "run_id": "r", "rank": 2, "model_type": "mlp_dl", "objective_value": 132.0,
+            "params": {"hyperparameters": {
+                "train_config": {"epochs": "50", "batch_size": "32",
+                                 "early_stopping_patience": "10"},
+                "arch_config": {"hidden_layers": "[256, 128]", "dropout": "0.3"},
+            }},
+            "metrics": {"history": [
+                {"epoch": i + 1, "val_loss": max(1.0, 30 - i), "train_loss": 30 - i}
+                for i in range(38)
+            ]},
+        }
+
+    def _facts(self):
+        ctx = {"task": {"objective_metric": "rmse"}, "dataset": {},
+               "leaderboard": [{"run_id": "b", "model_type": "A", "objective_value": 72.0,
+                                "metrics": {"cv_avg_rmse": 72.0, "cv_std_rmse": 0.85}}],
+               "_target_stats": {"mean": 8896.59}}
+        return rf.build_run_facts(self._run(), ctx, ctx["leaderboard"][0])[1]
+
+    def test_a_stringified_epoch_budget_is_read(self):
+        assert self._facts()["train"]["plan_note"] == "计划训练 50 轮，"
+
+    def test_a_stringified_patience_is_read(self):
+        assert "早停耐心 10 轮" in self._facts()["train"]["stop_reason"]
+
+    def test_layer_widths_are_not_joined_character_by_character(self):
+        # '×'.join over the string "[256, 128]" rendered "[×2×5×6×,× ×1×2×8×]".
+        note = self._facts()["run"]["arch_note"]
+        assert "隐藏层 256×128" in note
+        assert "×2×5×6" not in note
+
+    def test_the_batch_size_survives_as_a_number(self):
+        assert "批量 32" in self._facts()["run"]["arch_note"]
