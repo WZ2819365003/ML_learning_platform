@@ -798,6 +798,21 @@ body {
   overflow-y: auto;
 }
 
+.report-print-document {
+  position: fixed;
+  left: -12000px;
+  top: 0;
+  width: 1000px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.report-print-run {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 2px solid #dbe5f1;
+}
+
 @media (max-width: 767px) {
   .modeling-task-detail {
     padding: 8px !important;
@@ -898,5 +913,57 @@ body {
   .ai-report-inline .ai-report-cover-main h1 {
     font-size: 24px;
     overflow-wrap: anywhere;
+  }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .report-print-document,
+  .report-print-document * {
+    visibility: visible !important;
+  }
+
+  .report-print-document {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    color: #111827;
+    background: #fff;
+    pointer-events: auto;
+  }
+
+  .report-print-document .ai-report-reader,
+  .report-print-document .ai-report-document,
+  .report-print-document .report-body {
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .report-print-document .ai-report-cover,
+  .report-print-document .ai-report-document,
+  .report-print-document .ant-card,
+  .report-print-document .ai-report-figure {
+    box-shadow: none !important;
+  }
+
+  .report-print-document .ai-report-figure,
+  .report-print-document .ant-table-wrapper,
+  .report-print-document .report-print-run {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .report-print-document canvas {
+    max-width: 100% !important;
   }
 }

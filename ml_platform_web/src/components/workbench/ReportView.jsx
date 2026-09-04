@@ -20,8 +20,8 @@ import { DownloadOutlined, PrinterOutlined, ReloadOutlined } from '@ant-design/i
 import { modelingTaskApi } from '../../services/api'
 import MarkdownReport from './MarkdownReport'
 import { AiReportReader } from './AiReportModal'
-import RunReportPanel from './RunReportPanel'
-import { pickLatestArchive, resolveReportSource } from './reportViewModel'
+import RunReportPanel, { RunReportBody } from './RunReportPanel'
+import { buildCompleteReportMarkdown, pickLatestArchive, resolveReportSource } from './reportViewModel'
 
 const { Text } = Typography
 
@@ -100,7 +100,8 @@ export default function ReportView({ taskId, taskName, generatedAiReport = null 
   })
 
   const download = () => {
-    const blob = new Blob([source.markdown], { type: 'text/markdown;charset=utf-8' })
+    const markdown = buildCompleteReportMarkdown(source.report, source.markdown)
+    const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -135,7 +136,7 @@ export default function ReportView({ taskId, taskName, generatedAiReport = null 
   }
 
   return (
-    <div>
+    <div className="task-report-view">
       {error && (
         <Alert
           type="warning"
@@ -176,6 +177,21 @@ export default function ReportView({ taskId, taskName, generatedAiReport = null 
           <MarkdownReport markdown={source.markdown} />
         </Card>
       )}
+
+      <div className="report-print-document" aria-hidden="true">
+        {source.kind === 'ai' ? (
+          <>
+            <AiReportReader report={source.report} taskName={taskName} />
+            {(source.report?.run_reports || []).map((run) => (
+              <section className="report-print-run" key={run.run_id || run.model_type}>
+                <RunReportBody report={run} />
+              </section>
+            ))}
+          </>
+        ) : (
+          <MarkdownReport markdown={source.markdown} />
+        )}
+      </div>
     </div>
   )
 }
