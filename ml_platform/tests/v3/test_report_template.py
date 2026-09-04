@@ -237,6 +237,18 @@ class TestValidationCohorts:
         assert "极差 ，" not in rendered
         assert "（ ）" not in rendered
 
+    def test_temporal_features_warn_when_old_runs_lack_split_provenance(self):
+        ctx = self._ctx()
+        ctx["dataset"]["column_names"] = ["load", "load_lag_48", "hour_sin"]
+        warning = rf.build_overview_facts(ctx)["validation"]["risk_sentence"]
+        assert "不能证明模型对未来时段" in warning
+        assert "时间顺序" in warning
+
+    def test_time_aware_runs_name_their_actual_validation_scheme(self):
+        entry = self._ctx()["leaderboard"][0]
+        entry["metrics"]["validation_strategy"] = "time_series_expanding"
+        assert rf.validation_scheme(entry) == "时间序列交叉验证"
+
 
 class TestChartDefects:
     """Three ways a chart was drawn wrong rather than not drawn at all."""

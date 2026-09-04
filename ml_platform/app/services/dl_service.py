@@ -24,6 +24,10 @@ from app.config import get_settings
 from app.core.dl_registry import clamp_train_config, get_dl_trainer
 from app.core.logger import TrainingLogger, event_bus
 from app.core.model_artifact import fit_dl_preprocessing_artifact
+from app.core.validation_split import (
+    chronological_train_test_split,
+    is_temporal_feature_frame,
+)
 from app.models.database import (
     AsyncSession,
     Dataset,
@@ -114,10 +118,15 @@ def _outer_split(file_path: str, target_column: str, test_size: float, task_type
     df = load_dataframe(file_path)
     X, y = prepare_raw_training_frame(df, target_column)
     resolved_task_type = _detect_task_type(y, task_type)
-    stratify = _classification_stratify(y, resolved_task_type, target_column)
-    raw_X_train, raw_X_val, raw_y_train, raw_y_val = train_test_split(
-        X, y, test_size=test_size, random_state=42, stratify=stratify
-    )
+    if resolved_task_type == "regression" and is_temporal_feature_frame(X):
+        raw_X_train, raw_X_val, raw_y_train, raw_y_val = chronological_train_test_split(
+            X, y, test_size,
+        )
+    else:
+        stratify = _classification_stratify(y, resolved_task_type, target_column)
+        raw_X_train, raw_X_val, raw_y_train, raw_y_val = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=stratify
+        )
     return raw_X_train, raw_X_val, raw_y_train, raw_y_val, resolved_task_type
 
 
@@ -160,13 +169,18 @@ def _prepare_dl_data(
             and pd.Series(raw_y_train).value_counts(dropna=True).min() >= 2
             else None
         )
-        raw_X_train, raw_X_val, raw_y_train, raw_y_val = train_test_split(
-            raw_X_train,
-            raw_y_train,
-            test_size=_SELECTION_INNER_VAL_RATIO,
-            random_state=42,
-            stratify=inner_stratify,
-        )
+        if resolved_task_type == "regression" and is_temporal_feature_frame(raw_X_train):
+            raw_X_train, raw_X_val, raw_y_train, raw_y_val = chronological_train_test_split(
+                raw_X_train, raw_y_train, _SELECTION_INNER_VAL_RATIO,
+            )
+        else:
+            raw_X_train, raw_X_val, raw_y_train, raw_y_val = train_test_split(
+                raw_X_train,
+                raw_y_train,
+                test_size=_SELECTION_INNER_VAL_RATIO,
+                random_state=42,
+                stratify=inner_stratify,
+            )
 
     artifact = fit_dl_preprocessing_artifact(
         raw_X_train,
@@ -419,6 +433,11 @@ def _run_dl_sync(
         train_config=train_config,
         task_type=task_type,
         epoch_callback=epoch_callback,
+    )
+    result["validation_strategy"] = (
+        "chronological_holdout"
+        if task_type == "regression" and is_temporal_feature_frame(preprocessing_artifact.feature_names)
+        else "random_holdout"
     )
 
     # Save model (with arch metadata for future inference)

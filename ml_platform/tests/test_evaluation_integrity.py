@@ -80,6 +80,23 @@ def test_regression_cv_never_fits_validation_rows():
     assert metrics["final_test_rmse"] == metrics["rmse"]
 
 
+def test_temporal_regression_uses_expanding_window_cv():
+    trainer = RecordingRegressionTrainer()
+    trainer.configure({})
+    class TemporalArray(np.ndarray):
+        columns = ["load_lag_1"]
+
+    X_train = np.arange(8, dtype=float).reshape(-1, 1).view(TemporalArray)
+    y_train = np.arange(8, dtype=float)
+
+    metrics = trainer.train(
+        X_train, y_train, None, None, eval_metrics=["rmse"], cv_folds=2,
+    )
+
+    assert trainer.model.fit_sizes == [4, 6, 8]
+    assert metrics["validation_strategy"] == "time_series_expanding"
+
+
 def test_dataframe_training_persists_train_only_preprocessing_state():
     trainer = get_trainer("logistic_regression")
     trainer.configure({"random_state": 42})

@@ -120,6 +120,23 @@ def test_prepare_dl_data_auto_detects_string_labels_as_classification(tmp_path):
     assert artifact.class_labels == ["fault", "normal"]
 
 
+def test_prepare_dl_data_keeps_temporal_regression_holdout_in_order(tmp_path):
+    frame = pd.DataFrame({
+        "load_lag_1": np.arange(10, dtype=float),
+        "load": np.arange(100, 110, dtype=float),
+    })
+    path = tmp_path / "load.csv"
+    frame.to_csv(path, index=False)
+
+    X_train, X_val, y_train, y_val, *_ = _prepare_dl_data(
+        str(path), "load", 0.2, "regression",
+    )
+
+    assert X_train[:, 0].tolist() == list(range(8))
+    assert X_val[:, 0].tolist() == [8.0, 9.0]
+    assert y_val.tolist() == [108.0, 109.0]
+
+
 def test_dl_trainer_persists_and_loads_preprocessing_sidecar(tmp_path):
     artifact = fit_dl_preprocessing_artifact(
         pd.DataFrame({"value": [1.0, 2.0, 3.0, 4.0]}),

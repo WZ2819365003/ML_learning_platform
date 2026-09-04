@@ -82,3 +82,20 @@ def test_selection_mode_hides_outer_holdout_from_trainer():
     )
     assert standard_X is X_val
     assert standard_y is y_val
+
+
+def test_temporal_regression_keeps_latest_rows_as_holdout(tmp_path: Path):
+    dataset_path = tmp_path / "load_forecast.csv"
+    frame = pd.DataFrame({
+        "load_lag_1": np.arange(10, dtype=float),
+        "load": np.arange(100, 110, dtype=float),
+    })
+    frame.to_csv(dataset_path, index=False)
+
+    X_train, X_val, y_train, y_val = _prepare_data(
+        str(dataset_path), "load", 0.2, is_regression=True,
+    )
+
+    assert X_train["load_lag_1"].tolist() == list(range(8))
+    assert X_val["load_lag_1"].tolist() == [8.0, 9.0]
+    assert y_val.tolist() == [108.0, 109.0]

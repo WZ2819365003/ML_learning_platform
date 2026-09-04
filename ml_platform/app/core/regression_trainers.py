@@ -1,11 +1,12 @@
 """Regression trainers using KFold CV and regression metrics (MSE/RMSE/MAE/R²/MAPE)."""
 from typing import Any, Callable
 import numpy as np
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 from app.core.model_artifact import fit_tabular_artifact
 from app.core.trainer import BaseTrainer, _take_rows
+from app.core.validation_split import is_temporal_feature_frame
 
 MetricsCallback = Callable[[int, int, dict], None] | None
 
@@ -32,7 +33,12 @@ class RegressionMixin:
     ) -> dict:
         eval_metrics = eval_metrics or ["rmse", "mae", "r2"]
 
-        kf = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
+        temporal_validation = is_temporal_feature_frame(X_train)
+        kf = (
+            TimeSeriesSplit(n_splits=cv_folds)
+            if temporal_validation else
+            KFold(n_splits=cv_folds, shuffle=True, random_state=42)
+        )
         tabular_input = hasattr(X_train, "iloc")
         base_model = self.model
 
@@ -95,6 +101,9 @@ class RegressionMixin:
         })
         final_metrics.update(avg_metrics)
         final_metrics["cv_folds"] = fold_results
+        final_metrics["validation_strategy"] = (
+            "time_series_expanding" if temporal_validation else "shuffled_kfold"
+        )
         return final_metrics
 
     @staticmethod

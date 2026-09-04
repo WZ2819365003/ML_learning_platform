@@ -555,6 +555,13 @@ def _iter_column_info(columns_info: Any) -> list[tuple[str, dict[str, Any]]]:
 def _column_role(column: str, info: dict[str, Any], target_column: str | None) -> str:
     if target_column and column == target_column:
         return "目标列"
+    lowered = str(column or "").lower()
+    if lowered.endswith(("_sin", "_cos")):
+        return "周期编码特征"
+    if re.search(r"_lag_\d+$", lowered):
+        return "滞后特征"
+    if "_roll_" in lowered:
+        return "滚动统计特征"
     dtype = str(info.get("dtype") or info.get("type") or "").lower()
     unique_count = info.get("unique_count")
     if "bool" in dtype:
@@ -580,6 +587,12 @@ def _column_note(role: str, info: dict[str, Any]) -> str:
         notes.append("可直接参与建模，必要时做缩放或分箱")
     elif role == "离散数值特征":
         notes.append("需确认是编码类别还是连续数值")
+    elif role == "周期编码特征":
+        notes.append("以正弦/余弦保留周期边界的连续关系")
+    elif role == "滞后特征":
+        notes.append("引用历史时刻，验证时必须保持时间顺序")
+    elif role == "滚动统计特征":
+        notes.append("概括近期窗口，验证时必须避免未来信息进入窗口")
     elif role == "高基数字段":
         notes.append("进入模型前通常需要编码或降维")
     elif role == "类别/文本特征":

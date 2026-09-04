@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.core.validation_split import has_temporal_features
+
 # Names a feature-engineering step produces, as opposed to a column that came
 # with the data. Grouped so the dataset section can describe composition rather
 # than list 35 column names.
@@ -185,6 +187,11 @@ def _is_cv(entry: dict[str, Any]) -> bool:
 
 def validation_scheme(entry: dict[str, Any]) -> str:
     """Return the measurement cohort an entry can honestly be compared in."""
+    strategy = str((entry.get("metrics") or {}).get("validation_strategy") or "")
+    if strategy == "time_series_expanding":
+        return "时间序列交叉验证"
+    if strategy == "chronological_holdout":
+        return "时间顺序留出验证"
     if _is_cv(entry):
         return "交叉验证"
     metrics = entry.get("metrics") or {}
@@ -354,6 +361,24 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
             ),
         },
     }
+
+    if has_temporal_features(columns):
+        recorded = {
+            str((entry.get("metrics") or {}).get("validation_strategy") or "")
+            for entry in board
+        }
+        time_safe = {"time_series_expanding", "chronological_holdout"}
+        if not recorded or any(strategy not in time_safe for strategy in recorded):
+            facts["validation"] = {"risk_sentence": (
+                "该数据集包含滞后、滚动或周期时间特征，但部分历史 Run 未记录时间顺序验证策略。"
+                "这些分数只能描述既有随机切分下的表现，不能证明模型对未来时段具有同等泛化能力；"
+                "应以时间顺序留出或滚动验证的新 Run 作为选型依据。"
+            )}
+        else:
+            facts["validation"] = {"risk_sentence": (
+                "该数据集具有时间序列特征，本批 Run 已记录时间顺序留出或扩展窗口交叉验证策略，"
+                "评估按时间先后关系执行。"
+            )}
 
     if isinstance(best_value, (int, float)) and task.get("final_test_value") is None:
         facts["final_eval"] = {

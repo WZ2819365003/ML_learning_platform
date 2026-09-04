@@ -16,6 +16,10 @@ from sklearn.model_selection import train_test_split
 from app.config import get_settings
 from app.core.trainer import detect_task_type, get_trainer, list_available_models
 from app.core.logger import TrainingLogger
+from app.core.validation_split import (
+    chronological_train_test_split,
+    is_temporal_feature_frame,
+)
 from app.models.database import (
     AsyncSession,
     Dataset,
@@ -96,9 +100,14 @@ def _prepare_data(file_path: str, target_column: str, test_size: float, is_regre
                 "无法进行分层切分；请不要选择 ID/序号列，改选真实标签列。"
             )
         stratify = y
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=test_size, random_state=42, stratify=stratify
-    )
+    if is_regression and is_temporal_feature_frame(X):
+        X_train, X_val, y_train, y_val = chronological_train_test_split(
+            X, y, test_size,
+        )
+    else:
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=stratify
+        )
 
     return (
         X_train.reset_index(drop=True),
@@ -260,10 +269,15 @@ def _run_training_sync_inner(
     tl.log("INFO", "Loading and preparing data...")
     is_regression = detect_task_type(model_type) == "regression"
     X_train, X_val, y_train, y_val = _prepare_data(file_path, target_column, test_size, is_regression)
+    split_strategy = (
+        "chronological_holdout"
+        if is_regression and is_temporal_feature_frame(X_train)
+        else "random_holdout"
+    )
     tl.log("INFO", "Data prepared",
            train_samples=len(X_train), val_samples=len(X_val),
            features=X_train.shape[1], target=target_column,
-           evaluation_mode=evaluation_mode)
+           evaluation_mode=evaluation_mode, validation_strategy=split_strategy)
 
     # Translate class_weight into model-specific hyperparameter keys
     effective_hp = _apply_class_weight(hyperparameters, model_type, class_weight, y_train)
