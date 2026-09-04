@@ -683,6 +683,34 @@ body {
   }
 }
 
+@media (max-width: 767px) {
+  .app-content {
+    margin: 0 12px 12px !important;
+    min-width: 0;
+  }
+
+  .model-table-card .ant-card-body {
+    padding: 12px !important;
+  }
+
+  .log-viewer-toolbar .log-search-input {
+    width: 100% !important;
+  }
+
+  .log-level-filters {
+    width: 100%;
+    display: flex !important;
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .log-toolbar-actions {
+    width: 100%;
+    margin-left: 0 !important;
+    justify-content: flex-end;
+  }
+}
+
 /* ---------------------------------------------------------------------------
    AI report: a side rail listing 总报告 with each model nested under it, beside
    a single-column body. Vertical because a grid search can produce eight models

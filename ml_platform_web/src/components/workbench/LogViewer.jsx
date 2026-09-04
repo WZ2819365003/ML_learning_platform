@@ -186,8 +186,9 @@ export default function LogViewer({ historical, domainTaskId, isLive, streamEnab
       <div style={{
         display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center',
         padding: '6px 2px', borderBottom: '1px solid #e2e8f0', marginBottom: 6,
-      }}>
+      }} className="log-viewer-toolbar">
         <Input
+          className="log-search-input"
           size="small"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -197,7 +198,7 @@ export default function LogViewer({ historical, domainTaskId, isLive, streamEnab
           style={{ width: 200 }}
         />
 
-        <Space size={4}>
+        <Space size={4} className="log-level-filters">
           {LEVELS.map((lvl) => (
             <Checkbox
               key={lvl}
@@ -215,30 +216,30 @@ export default function LogViewer({ historical, domainTaskId, isLive, streamEnab
           ))}
         </Space>
 
-        <div style={{ flex: 1 }} />
-
-        <Tooltip title={absoluteTime ? '切换到相对时间' : '切换到绝对时间'}>
-          <Button size="small" icon={<ClockCircleOutlined />}
-            type={absoluteTime ? 'primary' : 'default'}
-            onClick={() => setAbsoluteTime((v) => !v)} />
-        </Tooltip>
-        <Tooltip title={paused ? '恢复跟随' : '暂停跟随'}>
-          <Button size="small"
-            icon={paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
-            type={paused ? 'primary' : 'default'}
-            onClick={() => setPaused(!paused)} />
-        </Tooltip>
-        <Tooltip title="跳到底部">
-          <Button size="small" icon={<VerticalAlignBottomOutlined />}
-            onClick={handleJumpToBottom} />
-        </Tooltip>
-        <Tooltip title="清空视图(不影响服务端)">
-          <Button size="small" icon={<ClearOutlined />} onClick={clear} />
-        </Tooltip>
-        <Tooltip title="下载日志">
-          <Button size="small" icon={<DownloadOutlined />} onClick={handleDownload}
-            disabled={logs.length === 0} />
-        </Tooltip>
+        <Space size={4} className="log-toolbar-actions" style={{ marginLeft: 'auto' }}>
+          <Tooltip title={absoluteTime ? '切换到相对时间' : '切换到绝对时间'}>
+            <Button size="small" icon={<ClockCircleOutlined />}
+              type={absoluteTime ? 'primary' : 'default'}
+              onClick={() => setAbsoluteTime((v) => !v)} />
+          </Tooltip>
+          <Tooltip title={paused ? '恢复跟随' : '暂停跟随'}>
+            <Button size="small"
+              icon={paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
+              type={paused ? 'primary' : 'default'}
+              onClick={() => setPaused(!paused)} />
+          </Tooltip>
+          <Tooltip title="跳到底部">
+            <Button size="small" icon={<VerticalAlignBottomOutlined />}
+              onClick={handleJumpToBottom} />
+          </Tooltip>
+          <Tooltip title="清空视图(不影响服务端)">
+            <Button size="small" icon={<ClearOutlined />} onClick={clear} />
+          </Tooltip>
+          <Tooltip title="下载日志">
+            <Button size="small" icon={<DownloadOutlined />} onClick={handleDownload}
+              disabled={logs.length === 0} />
+          </Tooltip>
+        </Space>
 
         {isLive && (
           <Tag color={connected ? 'green' : 'orange'} style={{ margin: 0 }}>

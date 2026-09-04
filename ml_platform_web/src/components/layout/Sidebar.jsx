@@ -121,7 +121,7 @@ const Sidebar = () => {
       onBreakpoint={setCollapsed}
       trigger={null}
       width={220}
-      collapsedWidth={72}
+      collapsedWidth={isMobile ? 0 : 72}
       style={{
         background: 'linear-gradient(180deg, #090f1e 0%, #0d1b38 60%, #0f2046 100%)',
         boxShadow: '4px 0 24px rgba(9, 15, 30, 0.45)',
@@ -175,7 +175,7 @@ const Sidebar = () => {
       />
 
       {/* Collapse toggle */}
-      <button
+      {(!isMobile || !collapsed) && <button
         type="button"
         aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
         onClick={() => setCollapsed(!collapsed)}
@@ -211,9 +211,32 @@ const Sidebar = () => {
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           </div>
         </Tooltip>
-      </button>
+      </button>}
     </Sider>
-    {isMobile && <div aria-hidden="true" style={{ width: 72, flex: '0 0 72px' }} />}
+    {isMobile && collapsed && (
+      <button
+        type="button"
+        aria-label="展开侧栏"
+        onClick={() => setCollapsed(false)}
+        style={{
+          position: 'fixed',
+          left: 12,
+          bottom: 16,
+          zIndex: 98,
+          width: 40,
+          height: 40,
+          padding: 0,
+          borderRadius: 10,
+          border: '1px solid rgba(148, 163, 184, 0.35)',
+          background: '#0d1b38',
+          color: '#fff',
+          boxShadow: '0 8px 24px rgba(15, 23, 42, 0.28)',
+          cursor: 'pointer',
+        }}
+      >
+        <MenuUnfoldOutlined />
+      </button>
+    )}
   </>
 }
 

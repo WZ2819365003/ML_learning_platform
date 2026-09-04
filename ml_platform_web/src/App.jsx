@@ -70,7 +70,7 @@ function AppShell() {
       <Sidebar />
       <Layout style={{ background: 'transparent' }}>
         <Header />
-        <Content style={{ margin: '0 20px 20px', padding: 0, background: 'transparent' }}>
+        <Content className="app-content" style={{ margin: '0 20px 20px', padding: 0, background: 'transparent' }}>
           <Suspense fallback={(
             <div style={{ display: 'grid', placeItems: 'center', minHeight: 320 }}>
               <Spin size="large" tip="页面加载中">

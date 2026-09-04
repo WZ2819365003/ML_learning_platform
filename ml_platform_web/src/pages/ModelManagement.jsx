@@ -8,6 +8,7 @@ import {
   Descriptions,
   Empty,
   Form,
+  Grid,
   Input,
   Modal,
   Pagination,
@@ -172,6 +173,8 @@ function TagsNotesModal({ open, asset, tagLibrary, saving, onSave, onCancel }) {
 // ── ML Tab ────────────────────────────────────────────────────────────────────
 function MLModelTab({ openDeployModal, openTagsModal }) {
   const navigate = useNavigate();
+  const screens = Grid.useBreakpoint();
+  const isNarrow = screens.md === false;
   const [models, setModels] = useState([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -297,7 +300,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
       key: 'name',
       render: (_, r) => r.name ?? <Text type="secondary">{r.task_id.slice(0, 8)}</Text>,
       width: 230,
-      fixed: 'left',
+      fixed: isNarrow ? undefined : 'left',
       ellipsis: true,
     },
     { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id, width: 190, ellipsis: true },
@@ -332,7 +335,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
       title: '操作',
       key: 'actions',
       width: 200,
-      fixed: 'right',
+      fixed: isNarrow ? undefined : 'right',
       render: (_, r) => (
         <Space size={4} onClick={(e) => e.stopPropagation()}>
           <Button size="small" icon={<EyeOutlined />} onClick={() => void openDetail(r)}>详情</Button>
@@ -361,7 +364,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
         <Button onClick={() => void loadModels(page)}>刷新</Button>
       </Space>
 
-      <Card>
+      <Card className="model-table-card">
         <Table
           rowKey="asset_id"
           dataSource={models}
@@ -514,6 +517,8 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
 // ── DL Tab ────────────────────────────────────────────────────────────────────
 function DLModelTab({ openDeployModal, openTagsModal }) {
   const navigate = useNavigate();
+  const screens = Grid.useBreakpoint();
+  const isNarrow = screens.md === false;
   const [models, setModels] = useState([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -606,7 +611,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
       key: 'name',
       render: (_, r) => r.name ?? <Text type="secondary">{r.task_id.slice(0, 8)}</Text>,
       width: 220,
-      fixed: 'left',
+      fixed: isNarrow ? undefined : 'left',
       ellipsis: true,
     },
     { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id, width: 190, ellipsis: true },
@@ -642,7 +647,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
       title: '操作',
       key: 'actions',
       width: 200,
-      fixed: 'right',
+      fixed: isNarrow ? undefined : 'right',
       render: (_, r) => (
         <Space size={4} onClick={(e) => e.stopPropagation()}>
           <Button size="small" icon={<EyeOutlined />} onClick={() => void openDetail(r)}>详情</Button>
@@ -661,7 +666,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
         <Button onClick={() => void loadModels(page)}>刷新</Button>
       </Space>
 
-      <Card>
+      <Card className="model-table-card">
         <Table
           rowKey="asset_id"
           dataSource={models}

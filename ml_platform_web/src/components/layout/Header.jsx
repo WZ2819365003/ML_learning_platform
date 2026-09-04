@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Layout, Avatar, Dropdown, Space, Badge, Typography, Tag } from 'antd'
+import { Layout, Avatar, Dropdown, Grid, Space, Badge, Typography, Tag } from 'antd'
 import { BellOutlined, UserOutlined, QuestionCircleOutlined, HomeOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { authApi, clearAuthToken, platformTasksApi, systemApi } from '../../services/api'
@@ -77,6 +77,8 @@ export function usernameLabel(payload) {
 const Header = () => {
   const location = useLocation()
   const navigate = useNavigate()
+  const screens = Grid.useBreakpoint()
+  const isMobile = screens.md === false
   const crumbs = getBreadcrumb(location.pathname)
   const [environment, setEnvironment] = useState('development')
   const [failedCount, setFailedCount] = useState(0)
@@ -119,7 +121,7 @@ const Header = () => {
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',
         borderBottom: '1px solid rgba(148, 163, 184, 0.15)',
-        padding: '0 24px',
+        padding: isMobile ? '0 12px' : '0 24px',
         height: 56,
         lineHeight: 'normal',
         display: 'flex',
@@ -187,7 +189,10 @@ const Header = () => {
         </Badge>
 
         {/* Help */}
-        <div
+        {!isMobile && <div
+          role="button"
+          aria-label="帮助"
+          tabIndex={0}
           style={{
             width: 36,
             height: 36,
@@ -204,7 +209,7 @@ const Header = () => {
           onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
         >
           <QuestionCircleOutlined />
-        </div>
+        </div>}
 
         {/* User avatar */}
         <Dropdown menu={{ items: userMenu, onClick: onUserMenuClick }} placement="bottomRight" trigger={['click']}>
@@ -221,9 +226,11 @@ const Header = () => {
                 fontSize: 13,
               }}
             />
-            <Text style={{ fontSize: 13, color: '#0f172a', fontWeight: 500 }} className="hidden md:inline">
-              {username}
-            </Text>
+            {!isMobile && (
+              <Text style={{ fontSize: 13, color: '#0f172a', fontWeight: 500 }}>
+                {username}
+              </Text>
+            )}
           </Space>
         </Dropdown>
       </Space>
