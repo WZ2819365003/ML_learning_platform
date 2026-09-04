@@ -40,6 +40,16 @@ function inferTaskType(raw, family) {
   return 'classification'
 }
 
+export function normalizeTrainConfig(raw = {}) {
+  const nested = raw?.train_config
+  const config = nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? { ...nested }
+    : {}
+  if (config.test_size == null && raw?.test_size != null) config.test_size = raw.test_size
+  if (config.epochs == null && raw?.total_epochs != null) config.epochs = raw.total_epochs
+  return config
+}
+
 function normalizeResult(raw, family, taskId) {
   const metrics = raw?.result_metrics ?? {}
   const taskType = inferTaskType(raw, family)
@@ -52,7 +62,7 @@ function normalizeResult(raw, family, taskId) {
     datasetName: raw?.dataset?.name || raw?.dataset_name || raw?.dataset_id || '-',
     targetColumn: raw?.target_column || '-',
     finishedAt: raw?.finished_at || raw?.updated_at || null,
-    trainConfig: raw?.train_config ?? {},
+    trainConfig: normalizeTrainConfig(raw),
     metrics,
   }
 }

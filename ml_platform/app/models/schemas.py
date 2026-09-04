@@ -386,6 +386,7 @@ class DLTaskResponse(BaseModel):
     progress:      float
     current_epoch: int
     total_epochs:  int
+    train_config:  dict[str, Any] | None = None
     result_metrics: dict[str, Any] | None = None
     model_path:    str | None = None
     error_message: str | None = None

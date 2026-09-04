@@ -45,6 +45,7 @@ async def dl_run_fixtures(db, tmp_path):
         progress=100.0,
         current_epoch=6,
         total_epochs=6,
+        train_config={"batch_size": 64, "test_size": 0.2},
         result_metrics={"accuracy": 0.8},
     )
     db.add(dl_task)
@@ -195,6 +196,7 @@ async def test_model_detail_supports_dl_task(dl_run_fixtures, dl_app_with_db):
     assert response.json()["task_id"] == task.id
     assert response.json()["family"] == "dl"
     assert response.json()["test_size"] == 0.2
+    assert response.json()["train_config"]["batch_size"] == 64
 
 
 async def test_unified_model_download_preserves_ml_filename(

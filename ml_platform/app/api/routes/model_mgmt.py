@@ -302,6 +302,7 @@ async def model_detail(
             "name": getattr(recovered_task, "name", None),
             "model_type": recovered_task.model_type,
             "hyperparameters": getattr(recovered_task, "hyperparameters", None),
+            "train_config": train_config,
             "target_column": recovered_task.target_column,
             "test_size": getattr(
                 recovered_task, "test_size", train_config.get("test_size", 0.2)
