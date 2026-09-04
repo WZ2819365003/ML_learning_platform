@@ -12,11 +12,36 @@ from app.services.ai_report_service import (
     build_reference_frames,
     _build_headline_metrics,
     _build_report_blocks,
+    _build_training_curves_chart,
     _compact_metrics,
     _highlight_report_lead_sentences,
     _context_for_llm,
     compute_readiness_score,
 )
+
+
+def test_history_chart_uses_one_log_loss_axis_and_excludes_learning_rate():
+    context = {
+        "task": {"task_type": "regression", "objective_metric": "rmse"},
+        "leaderboard": [{
+            "rank": 1,
+            "run_id": "dl-1",
+            "model_type": "lstm",
+            "metrics": {"history": [
+                {"epoch": 1, "train_loss": 7.7e7, "val_loss": 6.9e7, "lr": 0.001},
+                {"epoch": 2, "train_loss": 390.0, "val_loss": 410.0, "lr": 0.001},
+                {"epoch": 3, "train_loss": 180.0, "val_loss": 210.0, "lr": 0.001},
+            ]},
+        }],
+        "successful_run_examples": [],
+    }
+    chart = _build_training_curves_chart(context)
+    assert chart["title"] == "训练/验证损失曲线"
+    assert chart["option"]["yAxis"]["type"] == "log"
+    names = {series["name"] for series in chart["option"]["series"]}
+    assert any("训练损失" in name for name in names)
+    assert any("验证损失" in name for name in names)
+    assert not any("学习率" in name or "lr" in name.lower() for name in names)
 
 
 REGRESSION_CTX = {

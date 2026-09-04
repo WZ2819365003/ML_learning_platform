@@ -1058,11 +1058,21 @@ def _build_training_curves_chart(context: dict[str, Any]) -> dict[str, Any] | No
         if not points:
             continue
         label = _run_label(row)
-        for metric_key in _history_metric_keys(points):
+        # A single axis must contain one physical quantity. Mixing loss values
+        # in the tens of millions, accuracy near 1, and a constant 0.001
+        # learning rate made every useful curve look flat. The overview keeps
+        # only train/validation loss; score and LR evidence belongs in the
+        # model-specific report where each can use its own scale.
+        loss_keys = [
+            key for key in _history_metric_keys(points)
+            if "loss" in key.lower()
+        ]
+        for metric_key in loss_keys:
             data = [
                 [point["x"], point["metrics"][metric_key]]
                 for point in points
                 if metric_key in point.get("metrics", {})
+                and point["metrics"][metric_key] > 0
             ]
             if len(data) < 2:
                 continue
@@ -1071,30 +1081,29 @@ def _build_training_curves_chart(context: dict[str, Any]) -> dict[str, Any] | No
                 "type": "line",
                 "smooth": True,
                 "showSymbol": False,
-                "yAxisIndex": _metric_axis_index(metric_key),
                 "data": data,
             })
-            if len(series) >= 8:
+            if len(series) >= 6:
                 break
-        if len(series) >= 8:
+        if len(series) >= 6:
             break
     if not series:
         return _build_trial_metric_curve_chart(context)
     return {
         "id": "training_curves",
-        "title": "训练过程曲线",
-        "description": "来自 Run 记录的 history/training_history/loss_history/evals_result；没有逐轮记录的模型不会显示在图中。",
+        "title": "训练/验证损失曲线",
+        "description": (
+            "仅展示具有逐轮记录的 Run，并使用对数轴呈现训练损失与验证损失；"
+            "学习率及其他量纲不同的指标不在此图混画。"
+        ),
         "type": "echarts",
         "height": 340,
         "option": {
-            "grid": {"left": 52, "right": 56, "top": 38, "bottom": 78},
+            "grid": {"left": 76, "right": 28, "top": 38, "bottom": 78},
             "tooltip": {"trigger": "axis"},
             "legend": {"type": "scroll", "bottom": 0},
             "xAxis": {"type": "value", "name": "epoch/step"},
-            "yAxis": [
-                {"type": "value", "name": "loss"},
-                {"type": "value", "name": "score", "min": 0, "max": 1},
-            ],
+            "yAxis": {"type": "log", "name": "损失（对数轴）"},
             "series": series,
         },
     }
@@ -1366,7 +1375,10 @@ def _metric_label(metric: str | None) -> str:
         "mae": "MAE",
         "mse": "MSE",
         "r2": "R2",
+        "train_loss": "训练损失",
+        "training_loss": "训练损失",
         "val_loss": "验证损失",
+        "validation_loss": "验证损失",
         "loss": "损失",
     }
     return labels.get(key, metric or "指标")
