@@ -900,7 +900,6 @@ function UniversalModelTab() {
           <Text type="secondary">Amazon Chronos 零样本时序预测：</Text>
           <Button size="small" type="primary" onClick={() => navigate('/ts/config')}>新建预测任务</Button>
           <Button size="small" onClick={() => navigate('/ts/monitor')}>任务监控</Button>
-          <Button size="small" onClick={() => navigate('/ts/results')}>结果可视化</Button>
         </Space>
       </Card>
 
@@ -944,7 +943,7 @@ function UniversalModelTab() {
           locale={{ emptyText: <Empty description="暂无时序预测记录" /> }}
           onRow={(r) => ({
             style: r.status === 'SUCCESS' ? { cursor: 'pointer' } : {},
-            onClick: () => r.status === 'SUCCESS' && navigate(`/ts/results?id=${r.id}`),
+            onClick: () => r.status === 'SUCCESS' && navigate(`/ts/tasks/${r.id}`),
           })}
         />
       </Card>
@@ -1071,7 +1070,7 @@ export default function ModelManagement() {
           },
           {
             key: 'universal',
-            label: '通用模型',
+            label: '时序预测',
             children: <UniversalModelTab />,
           },
         ]}

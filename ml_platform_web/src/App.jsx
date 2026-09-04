@@ -100,7 +100,8 @@ function AppShell() {
 
               <Route path="/ts/config" element={<Navigate to="/ts/tasks/new" replace />} />
               <Route path="/ts/monitor" element={<TSMonitor />} />
-              <Route path="/ts/results" element={<TSResults />} />
+              {/* Retired unscoped result entry: a result always belongs to a task. */}
+              <Route path="/ts/results" element={<Navigate to="/ts/tasks" replace />} />
 
               {/* Legacy V3 pages retired — redirect into the 建模 group.
                   (/experiments/:id keeps working via ExperimentRedirect below.) */}
