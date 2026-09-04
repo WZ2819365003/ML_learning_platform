@@ -6,6 +6,7 @@ import {
   buildLossOption,
   buildMetricHistoryOption,
   buildOverfitGapOption,
+  compactChartNumber,
   crossValidationStability,
   earlyStoppingSummary,
 } from './TrainingProcessPanel'
@@ -53,12 +54,25 @@ describe('buildLossOption', () => {
     const o = buildLossOption(HISTORY)
     expect(o.series.map(s => s.name)).toEqual(['训练损失', '验证损失'])
     expect(o.series[0].data).toEqual([1.0, 0.6, 0.3])
+    expect(o.grid.containLabel).toBe(true)
   })
 
   it('returns null when no row carries a loss', () => {
     // Better an explicit placeholder than an axis with nothing on it.
     expect(buildLossOption([{ epoch: 1, val_rmse: 9 }])).toBeNull()
     expect(buildLossOption([])).toBeNull()
+  })
+})
+
+describe('compactChartNumber', () => {
+  it('uses compact Chinese units for large loss values', () => {
+    expect(compactChartNumber(1_250_000)).toBe('125万')
+    expect(compactChartNumber(-999_310.8222)).toBe('-99.9万')
+    expect(compactChartNumber(230_000_000)).toBe('2.3亿')
+  })
+
+  it('keeps ordinary metric values directly readable', () => {
+    expect(compactChartNumber(136.3386)).toBe('136.34')
   })
 })
 

@@ -22,6 +22,29 @@ const { Text } = Typography
 
 const CHART_HEIGHT = 280
 
+/** Keep large loss values readable without forcing a very wide Y-axis gutter. */
+export function compactChartNumber(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return String(value ?? '')
+  const absolute = Math.abs(number)
+  const formatUnit = (divisor, suffix) => {
+    const scaled = number / divisor
+    const precision = Math.abs(scaled) >= 100 ? 0 : Math.abs(scaled) >= 10 ? 1 : 2
+    return `${scaled.toFixed(precision).replace(/\.0+$|(?<=\.[0-9])0+$/, '')}${suffix}`
+  }
+  if (absolute >= 100_000_000) return formatUnit(100_000_000, '亿')
+  if (absolute >= 10_000) return formatUnit(10_000, '万')
+  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(number)
+}
+
+const containedGrid = (top = 32, bottom = 40) => ({
+  left: 16,
+  right: 20,
+  top,
+  bottom,
+  containLabel: true,
+})
+
 // ---------------------------------------------------------------------------
 // Pure derivations — exported for tests
 // ---------------------------------------------------------------------------
@@ -69,11 +92,11 @@ export function buildLossOption(history = []) {
   const val = history.map(r => r.val_loss ?? null)
   if (train.every(v => v == null) && val.every(v => v == null)) return null
   return {
-    grid: { left: 60, right: 20, top: 32, bottom: 40 },
+    grid: containedGrid(),
     tooltip: { trigger: 'axis' },
     legend: { top: 0, data: ['训练损失', '验证损失'] },
     xAxis: { type: 'category', data: epochs, name: 'Epoch', nameLocation: 'middle', nameGap: 24 },
-    yAxis: { type: 'value', scale: true },
+    yAxis: { type: 'value', scale: true, axisLabel: { formatter: compactChartNumber } },
     series: [
       { name: '训练损失', type: 'line', data: train, showSymbol: false, lineStyle: { color: '#2563eb', width: 1.8 }, itemStyle: { color: '#2563eb' } },
       { name: '验证损失', type: 'line', data: val, showSymbol: false, lineStyle: { color: '#dc2626', width: 1.8 }, itemStyle: { color: '#dc2626' } },
@@ -94,17 +117,20 @@ export function buildOverfitGapOption(history = []) {
   const gaps = rows.map(r => r.val_loss - r.train_loss)
   const worst = gaps.indexOf(Math.max(...gaps))
   return {
-    grid: { left: 60, right: 20, top: 26, bottom: 40 },
+    grid: containedGrid(26),
     tooltip: { trigger: 'axis', valueFormatter: v => (typeof v === 'number' ? v.toFixed(6) : v) },
     xAxis: { type: 'category', data: rows.map(r => r.epoch), name: 'Epoch', nameLocation: 'middle', nameGap: 24 },
-    yAxis: { type: 'value', name: '验证 − 训练', scale: true },
+    yAxis: {
+      type: 'value', name: '验证 − 训练', scale: true,
+      axisLabel: { formatter: compactChartNumber },
+    },
     series: [{
       type: 'line', data: gaps, showSymbol: false, smooth: true,
       areaStyle: { opacity: 0.12 }, lineStyle: { color: '#d97706', width: 1.8 },
       itemStyle: { color: '#d97706' },
       markPoint: {
         symbolSize: 40,
-        data: [{ name: '最大差距', coord: [worst, gaps[worst]], value: gaps[worst].toFixed(4) }],
+        data: [{ name: '最大差距', coord: [worst, gaps[worst]], value: compactChartNumber(gaps[worst]) }],
       },
     }],
   }
@@ -115,7 +141,7 @@ export function buildLearningRateOption(history = []) {
   const lrs = history.map(r => r.lr).filter(v => typeof v === 'number')
   if (lrs.length === 0) return null
   return {
-    grid: { left: 72, right: 20, top: 26, bottom: 40 },
+    grid: containedGrid(26),
     tooltip: { trigger: 'axis', valueFormatter: v => (typeof v === 'number' ? v.toExponential(2) : v) },
     xAxis: { type: 'category', data: history.map(r => r.epoch), name: 'Epoch', nameLocation: 'middle', nameGap: 24 },
     // Log scale: a scheduler halves the rate, so successive steps are invisible
@@ -136,11 +162,11 @@ export function buildMetricHistoryOption(history = []) {
   const keys = Object.keys(history[0] || {}).filter(k => !skip.has(k) && typeof history[0][k] === 'number')
   if (keys.length === 0) return null
   return {
-    grid: { left: 60, right: 20, top: 32, bottom: 40 },
+    grid: containedGrid(),
     tooltip: { trigger: 'axis' },
     legend: { top: 0 },
     xAxis: { type: 'category', data: history.map(r => r.epoch), name: 'Epoch', nameLocation: 'middle', nameGap: 24 },
-    yAxis: { type: 'value', scale: true },
+    yAxis: { type: 'value', scale: true, axisLabel: { formatter: compactChartNumber } },
     series: keys.map(k => ({ name: k, type: 'line', data: history.map(r => r[k] ?? null), showSymbol: false })),
   }
 }
@@ -154,10 +180,10 @@ export function buildFoldScoresOption(folds = [], metricKey = null) {
   if (values.length === 0) return null
   const mean = values.reduce((a, b) => a + b, 0) / values.length
   return {
-    grid: { left: 60, right: 20, top: 26, bottom: 40 },
+    grid: containedGrid(26),
     tooltip: { trigger: 'axis', valueFormatter: v => (typeof v === 'number' ? v.toFixed(4) : v) },
     xAxis: { type: 'category', data: folds.map(f => `第 ${f.fold} 折`) },
-    yAxis: { type: 'value', scale: true, name: key },
+    yAxis: { type: 'value', scale: true, name: key, axisLabel: { formatter: compactChartNumber } },
     series: [{
       type: 'bar', data: values, itemStyle: { color: '#2563eb', borderRadius: [4, 4, 0, 0] },
       // The mean line is what turns five bars into a statement about spread.
@@ -231,11 +257,11 @@ export default function TrainingProcessPanel({ family, taskId, taskType, metrics
     const keys = Object.keys(steps[0] || {}).filter(k => k !== 'step' && typeof steps[0][k] === 'number')
     if (keys.length === 0) return null
     return {
-      grid: { left: 60, right: 20, top: 32, bottom: 40 },
+      grid: containedGrid(),
       tooltip: { trigger: 'axis' },
       legend: { top: 0 },
       xAxis: { type: 'category', data: steps.map(s => s.step), name: '步骤', nameLocation: 'middle', nameGap: 24 },
-      yAxis: { type: 'value', scale: true },
+      yAxis: { type: 'value', scale: true, axisLabel: { formatter: compactChartNumber } },
       series: keys.map(k => ({
         name: k, type: 'line', smooth: true, showSymbol: steps.length < 30,
         data: steps.map(s => s[k]),
@@ -246,7 +272,7 @@ export default function TrainingProcessPanel({ family, taskId, taskType, metrics
   const stabilityOption = useMemo(() => {
     if (stability.length === 0) return null
     return {
-      grid: { left: 60, right: 20, top: 26, bottom: 46 },
+      grid: containedGrid(26, 46),
       tooltip: { trigger: 'axis' },
       xAxis: { type: 'category', data: stability.map(r => r.metric) },
       yAxis: { type: 'value', name: '变异系数 %', max: v => Math.max(20, v.max) },
