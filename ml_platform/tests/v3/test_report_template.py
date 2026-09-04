@@ -77,6 +77,23 @@ class TestWritingSlots:
         assert out.startswith("最优 xgboost，RMSE 72.4673。")
 
 
+class TestReportIntegrity:
+    @pytest.mark.parametrize("broken", [
+        "五折 RMSE 极差 ，为均值的。",
+        "最差折（ ）与最好折（第 2 折）之间。",
+        "采用 baseline、。",
+        "{{missing.fact}}",
+        "<<还没填>>",
+    ])
+    def test_rejects_structurally_incomplete_reports(self, broken):
+        assert rt.integrity_issues(broken)
+        with pytest.raises(ValueError, match="结构校验失败"):
+            rt.validate_integrity(broken)
+
+    def test_accepts_a_complete_report(self):
+        rt.validate_integrity("# 报告\n\n五折 RMSE 极差 2.1，变异系数 1.2%。\n\n{{chart:fold_scores}}")
+
+
 class TestParseAnswers:
     def test_reads_a_bare_object(self):
         assert rt.parse_answers('{"1": "甲"}') == {"1": "甲"}
@@ -172,6 +189,53 @@ class TestOverviewFactsHandleDuplicateRuns:
         ctx = self._ctx()
         ctx["leaderboard"] = [e for i, e in enumerate(ctx["leaderboard"]) if i != 1]
         assert "duplicates" not in rf.build_overview_facts(ctx)
+
+
+class TestValidationCohorts:
+    def _ctx(self):
+        cv = {
+            "run_id": "cv", "rank": 1, "model_type": "xgboost", "objective_value": 72.0,
+            "metrics": {"selection_cv_mean_rmse": 72.0, "cv_std_rmse": 0.8},
+        }
+        holdout = {
+            "run_id": "holdout", "rank": 2, "model_type": "lstm", "objective_value": 132.0,
+            "metrics": {"selection_val_rmse": 132.0, "history": [{"val_loss": 10.0}]},
+        }
+        return {
+            "task": {"name": "T", "objective_metric": "rmse", "target_column": "y"},
+            "dataset": {"row_count": 10, "column_count": 2, "column_names": ["y", "x"]},
+            "leaderboard": [cv, holdout],
+            "run_status_counts": {"SUCCESS": 2},
+            "_target_stats": {"mean": 1000.0, "min": 1.0, "max": 2.0},
+            "_readiness": {"score": 60, "checks": []},
+        }
+
+    def test_mixed_validation_has_no_global_winner_claim(self):
+        facts = rf.build_overview_facts(self._ctx())
+        assert "不存在可直接认定的全局最优模型" in facts["conclusion"]["sentence"]
+        assert "不形成全局排名" in facts["families"]["caveat"]
+
+    def test_table_ranks_within_each_validation_cohort(self):
+        table = rf.build_overview_facts(self._ctx())["tables"]["leaderboard"]
+        assert "验证口径" in table and "组内排名" in table
+        assert "| 交叉验证 | 1 | xgboost" in table
+        assert "| 留出验证 | 1 | lstm" in table
+
+    def test_a_holdout_run_is_not_compared_to_a_cv_run(self):
+        ctx = self._ctx()
+        _, facts = rf.build_run_facts(ctx["leaderboard"][1], ctx, ctx["leaderboard"][0])
+        assert "相差 60" not in facts["gap"]["sentence"]
+        assert "本模型即本次最优" in facts["gap"]["sentence"]
+        assert "两种口径不直接比较" in facts["gap"]["caveat"]
+
+    def test_cv_summary_without_folds_renders_no_blank_fold_sentence(self):
+        ctx = self._ctx()
+        run = ctx["leaderboard"][0]
+        name, facts = rf.build_run_facts(run, ctx, run)
+        rendered = rt.render(rt.load_template(name), facts, set())
+        assert "未保存逐折明细" in rendered
+        assert "极差 ，" not in rendered
+        assert "（ ）" not in rendered
 
 
 class TestChartDefects:

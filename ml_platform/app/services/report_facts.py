@@ -175,9 +175,31 @@ def _entry_metric(entry: dict[str, Any], key: str) -> Any:
 
 
 def _is_cv(entry: dict[str, Any]) -> bool:
-    return isinstance((entry.get("metrics") or {}).get("cv_avg_r2"), (int, float)) or isinstance(
-        (entry.get("metrics") or {}).get("cv_avg_rmse"), (int, float)
+    metrics = entry.get("metrics") or {}
+    return any(
+        isinstance(value, (int, float))
+        for key, value in metrics.items()
+        if key.startswith(("cv_avg_", "selection_cv_mean_"))
     )
+
+
+def validation_scheme(entry: dict[str, Any]) -> str:
+    """Return the measurement cohort an entry can honestly be compared in."""
+    if _is_cv(entry):
+        return "交叉验证"
+    metrics = entry.get("metrics") or {}
+    if any(key.startswith("selection_val_") for key in metrics):
+        return "留出验证"
+    if isinstance(metrics.get("history"), list) and metrics.get("history"):
+        return "留出验证"
+    return "验证结果"
+
+
+def _cohorts(board: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for entry in board:
+        grouped.setdefault(validation_scheme(entry), []).append(entry)
+    return grouped
 
 
 def _runs_summary(total: int, batches: int, counts: dict[str, Any],
@@ -201,17 +223,23 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
     if not board:
         return {"task": {"name": task.get("name") or "建模任务"}}
 
+    cohorts = _cohorts(board)
+    mixed_schemes = len(cohorts) > 1
+    # The source leaderboard is still useful for choosing which evidence to
+    # show first, but it is not a global ranking when schemes differ.
     best = board[0]
+    best_scheme = validation_scheme(best)
+    comparable_board = cohorts[best_scheme]
     best_value = _entry_metric(best, metric)
     best_std = (best.get("metrics") or {}).get(f"cv_std_{metric}")
 
     # Two runs of the same model with identical scores read as a two-horse race
     # until someone notices they are the same horse.
-    dup = [e for e in board[1:] if e.get("model_type") == best.get("model_type")
+    dup = [e for e in comparable_board[1:] if e.get("model_type") == best.get("model_type")
            and _entry_metric(e, metric) == best_value]
     # Rank order still has the duplicates in it, so board[2] is not the third
     # *model* — it was the runner-up again, reported as "落后 0.3183" from itself.
-    distinct = [best] + [e for e in board[1:] if e not in dup]
+    distinct = [best] + [e for e in comparable_board[1:] if e not in dup]
     runner = distinct[1] if len(distinct) > 1 else None
     runner_value = _entry_metric(runner, metric) if runner else None
     gap = (abs(runner_value - best_value)
@@ -223,17 +251,18 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
     other = [e for e in board if not _is_cv(e)]
 
     rows = []
-    for e in board:
-        v = _entry_metric(e, metric)
-        rows.append([
-            str(e.get("rank") or "—"),
-            str(e.get("model_type") or "—"),
-            _fmt(v),
-            _pct(v, mean) if isinstance(v, (int, float)) and mean else "—",
-            _fmt((e.get("metrics") or {}).get("cv_avg_r2")),
-            _fmt((e.get("metrics") or {}).get(f"cv_std_{metric}")),
-            "交叉验证" if _is_cv(e) else "留出验证",
-        ])
+    for scheme, entries in cohorts.items():
+        for cohort_rank, e in enumerate(entries, 1):
+            v = _entry_metric(e, metric)
+            rows.append([
+                scheme,
+                str(cohort_rank),
+                str(e.get("model_type") or "—"),
+                _fmt(v),
+                _pct(v, mean) if isinstance(v, (int, float)) and mean else "—",
+                _fmt((e.get("metrics") or {}).get("cv_avg_r2")),
+                _fmt((e.get("metrics") or {}).get(f"cv_std_{metric}")),
+            ])
 
     counts = context.get("run_status_counts") or {}
     total = sum(counts.values()) or len(board)
@@ -255,8 +284,26 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
     readiness = context.get("_readiness") or {}
     failed = [c for c in (readiness.get("checks") or []) if not c.get("passed")]
 
+    cohort_leaders = []
+    for scheme, entries in cohorts.items():
+        leader = entries[0]
+        cohort_leaders.append(
+            f"{scheme}组由 {leader.get('model_type')} 领先，"
+            f"{_metric_label(metric, scheme)} {_fmt(_entry_metric(leader, metric))}"
+        )
+
+    conclusion = (
+        "当前不存在可直接认定的全局最优模型；" + "；".join(cohort_leaders) +
+        "。两组验证设计不同，只能分别判断组内表现"
+        if mixed_schemes else
+        f"当前领先模型为 {best.get('model_type')}，{_metric_label(metric, best_scheme)} "
+        f"{_fmt(best_value)}，误差量级为目标列均值的 "
+        f"{_pct(best_value, mean) if mean else '—'}"
+    )
+
     facts: dict[str, Any] = {
         "task": {"name": task.get("name") or "建模任务"},
+        "conclusion": {"sentence": conclusion + "。"},
         "best": {
             "model": best.get("model_type"),
             "metric_label": _metric_label(metric, "交叉验证" if _is_cv(best) else "留出验证"),
@@ -280,9 +327,9 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
         },
         "tables": {
             "leaderboard": md_table(
-                ["排名", "模型", metric.upper(), "占均值", "R²", "折间标准差", "口径"],
+                ["验证口径", "组内排名", "模型", metric.upper(), "占均值", "R²", "折间标准差"],
                 rows,
-                ["---:", "---", "---:", "---:", "---:", "---:", "---"],
+                ["---", "---:", "---", "---:", "---:", "---:", "---:"],
             ),
             "fields": md_table(
                 ["类别", "列数", "字段"],
@@ -335,7 +382,7 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
     if cv_rows and other:
         facts["families"] = {"caveat": (
             "两族分数口径不同：交叉验证为多折均值，留出验证为单次结果，"
-            "二者不宜直接横向比较，表中排名仅供参考。"
+            "二者不能直接横向比较，也不形成全局排名；表中排名仅在各自口径组内成立。"
         )}
 
     if len(shap) >= 2 and isinstance(shap[0].get("mean_abs_shap"), (int, float)):
@@ -374,7 +421,13 @@ def build_run_facts(
     history = metrics.get("history") if isinstance(metrics.get("history"), list) else []
 
     value = _entry_metric(run, metric)
-    best = best or ((context.get("leaderboard") or [{}])[0])
+    requested_best = best or ((context.get("leaderboard") or [{}])[0])
+    scheme = validation_scheme(run)
+    comparable = [
+        entry for entry in (context.get("leaderboard") or [])
+        if validation_scheme(entry) == scheme
+    ]
+    best = comparable[0] if comparable else run
     best_value = _entry_metric(best, metric)
     best_std = (best.get("metrics") or {}).get(f"cv_std_{metric}")
     own_std = metrics.get(f"cv_std_{metric}")
@@ -408,6 +461,11 @@ def build_run_facts(
             + (f"（占目标列均值 {_pct(value, mean)}）" if mean else "")
         )
 
+    cohort_rank = next(
+        (index for index, entry in enumerate(comparable, 1)
+         if entry.get("run_id") == run.get("run_id")),
+        run.get("rank"),
+    )
     facts: dict[str, Any] = {
         "run": {
             "model": run.get("model_type"),
@@ -417,8 +475,8 @@ def build_run_facts(
         "headline": {"sentence": (
             # _is_cv, not `folds`: the rank-1 run has a cross-validated mean but
             # no per-fold detail persisted, and was labelled 留出验证 for it.
-            (f"{_metric_label(metric, '交叉验证' if _is_cv(run) else '留出验证')} {_fmt(value)}，"
-             f"列第 {run.get('rank')}。") if isinstance(value, (int, float)) else ""
+            (f"{_metric_label(metric, scheme)} {_fmt(value)}，"
+             f"在{scheme}组列第 {cohort_rank}。") if isinstance(value, (int, float)) else ""
         )},
         "metrics": {"sentence": "，".join(headline) + "。" if headline else ""},
         "error_shape": error_shape(
@@ -448,10 +506,21 @@ def build_run_facts(
             f"与最优模型 {best.get('model_type')}（{_fmt(best_value)}）相差 {_fmt(gap)}。"
         )}
 
-    if not folds and (best.get("metrics") or {}).get(f"cv_std_{metric}") is not None:
+    if validation_scheme(requested_best) != scheme:
         facts.setdefault("gap", {})["caveat"] = (
-            "注意口径不同：本模型的分数来自留出验证集单次结果，最优模型的来自多折交叉验证均值。"
+            f"注意口径不同：本模型采用{scheme}，而总表首行采用{validation_scheme(requested_best)}；"
+            "两种口径不直接比较，本节结论只针对同口径 Run。"
         )
+
+    if _is_cv(run) and not folds:
+        facts["validation"] = {"summary_sentence": (
+            "该 Run 记录了交叉验证汇总指标，但未保存逐折明细；"
+            "因此可以用于同口径组内排序，不能据此分析折间离群或稳定性。"
+        )}
+    elif not folds:
+        facts["validation"] = {"summary_sentence": (
+            f"该 Run 采用{scheme}，未提供可展示的逐折训练记录。"
+        )}
 
     top_shap = metrics.get("top_shap_importances") or []
     if len(top_shap) >= 2:

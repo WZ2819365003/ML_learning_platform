@@ -322,7 +322,7 @@ function ReportCover({ viewModel, report }) {
         </div>
       </div>
       <div className="ai-report-score-card">
-        <div className="ai-report-score-label"><TrophyOutlined /> AI 总分</div>
+        <div className="ai-report-score-label"><TrophyOutlined /> 评估就绪度</div>
         <div className="ai-report-score-value">{viewModel.score}</div>
         <div className="ai-report-score-note">{viewModel.taskName}</div>
       </div>

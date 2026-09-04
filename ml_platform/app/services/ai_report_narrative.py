@@ -161,6 +161,7 @@ async def generate_narrative_report(
         ),
         "overview",
     )
+    report_template.validate_integrity(overview, label="总报告")
 
     runs = select_runs_for_reports(context)
     best = (context.get("leaderboard") or [{}])[0]
@@ -183,10 +184,16 @@ async def generate_narrative_report(
         )
         async with semaphore:
             markdown = await _write(doc, str(run.get("model_type")))
+        report_template.validate_integrity(
+            markdown, label=f"Run {run.get('run_id') or run.get('model_type')} 分报告",
+        )
         placed = set(re.findall(r"\{\{chart:([a-z0-9_]+)\}\}", markdown))
         return {
             "run_id": run.get("run_id"),
             "model_type": run.get("model_type"),
+            "strategy_type": run.get("strategy_type"),
+            "trial_no": run.get("trial_no"),
+            "validation_scheme": report_facts.validation_scheme(run),
             "markdown": markdown,
             "charts": [c for c in charts if c["id"] in placed],
         }
@@ -366,4 +373,3 @@ def build_run_charts(
             })
 
     return charts
-

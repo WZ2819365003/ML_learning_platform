@@ -40,6 +40,16 @@ _IF_OPEN = re.compile(r"\{\{#if\s+([a-z0-9_.]+)\s*\}\}", re.I)
 _IF_CLOSE = re.compile(r"\{\{/if\}\}", re.I)
 _CHART = re.compile(r"^[ \t]*\{\{\s*chart\s*:\s*([a-z0-9_]+)\s*\}\}[ \t]*$\n?", re.I | re.M)
 _WRITE = re.compile(r"<<(.+?)>>", re.S)
+_DANGLING_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("未解析模板标记", re.compile(
+        r"\{\{(?!\s*chart\s*:)\s*(?:#if|/if|[a-z0-9_.]+)", re.I,
+    )),
+    ("未填写写作槽位", re.compile(r"<<.+?>>", re.S)),
+    ("空括号", re.compile(r"[（(]\s*[）)]")),
+    ("空枚举项", re.compile(r"、\s*[，。；]")),
+    ("缺失极差数值", re.compile(r"极差\s*[，。；]")),
+    ("缺失变异系数", re.compile(r"变异系数\s*[，。；]")),
+)
 
 
 def load_template(name: str) -> str:
@@ -158,6 +168,18 @@ def apply_writing(markdown: str, answers: Any) -> tuple[str, int]:
         return value.strip()
 
     return _WRITE.sub(_sub, markdown), filled
+
+
+def integrity_issues(markdown: str) -> list[str]:
+    """Find structural defects that must never reach a report archive."""
+    text = str(markdown or "")
+    return [label for label, pattern in _DANGLING_PATTERNS if pattern.search(text)]
+
+
+def validate_integrity(markdown: str, *, label: str = "report") -> None:
+    issues = integrity_issues(markdown)
+    if issues:
+        raise ValueError(f"{label} 结构校验失败：{'、'.join(issues)}")
 
 
 def parse_answers(raw: Any) -> dict[str, str]:

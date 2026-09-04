@@ -25,6 +25,7 @@ from app.services.modeling_task_service import (
     task_final_evaluation_state,
     task_leaderboard,
 )
+from app.services.report_facts import validation_scheme
 
 logger = logging.getLogger(__name__)
 
@@ -671,20 +672,27 @@ def _build_headline_metrics(context: dict[str, Any], markdown: str) -> list[dict
     final_key, final_value, final_source = _available_final_metric(context)
     best_score = _metric_value_from_entry(best)
 
+    schemes = {validation_scheme(entry) for entry in leaderboard}
+    mixed_schemes = len(schemes) > 1 and not final_best
+    best_scheme = validation_scheme(best) if best else "验证结果"
     metrics = [
         {
             "key": "ai_score",
-            "label": "AI 总分",
+            "label": "评估就绪度",
             "value": f"{score}/100" if score is not None else "—",
-            "detail": ("未达成：" + "、".join(str(u) for u in unmet if u)) if unmet
-                      else "评分细则各项均已达成",
+            "detail": (("未达成：" + "、".join(str(u) for u in unmet if u)) if unmet
+                       else "就绪度检查项均已达成") + "；不是模型质量评分",
             "tone": "success" if score is not None and score >= 80 else "warning",
         },
         {
             "key": "best_model",
-            "label": "当前最优模型",
+            "label": "参考领先模型" if mixed_schemes else "当前领先模型",
             "value": best.get("model_type") or "—",
-            "detail": "按最终测试指标判断" if final_best else (best.get("strategy_type") or "按选择阶段榜单判断"),
+            "detail": (
+                "按最终测试指标判断" if final_best else
+                (f"仅在{best_scheme}组内领先；跨口径不比较" if mixed_schemes
+                 else (best.get("strategy_type") or "按选择阶段榜单判断"))
+            ),
             "tone": "default",
         },
         {
@@ -1426,7 +1434,10 @@ def _build_metric_comparison_table(context: dict[str, Any]) -> dict[str, Any] | 
     objective = task.get("objective_metric") or "score"
     direction = task.get("objective_direction") or "max"
     rows = []
+    cohort_counts: dict[str, int] = {}
     for item in context.get("leaderboard") or []:
+        scheme = validation_scheme(item)
+        cohort_counts[scheme] = cohort_counts.get(scheme, 0) + 1
         metrics = item.get("metrics") or {}
         selection_value = item.get("selection_value") or item.get("objective_value")
         final_value = item.get("final_test_value")
@@ -1434,7 +1445,8 @@ def _build_metric_comparison_table(context: dict[str, Any]) -> dict[str, Any] | 
         if test_accuracy is None:
             test_accuracy = _metric_lookup(metrics, "final_test_accuracy", "accuracy", "test_accuracy", "val_acc")
         rows.append({
-            "rank": item.get("rank"),
+            "validation_scheme": scheme,
+            "rank": cohort_counts[scheme],
             "model_type": item.get("model_type") or "—",
             "strategy_type": item.get("strategy_type") or "—",
             "trial_no": _fmt_value(item.get("trial_no")),
@@ -1450,7 +1462,8 @@ def _build_metric_comparison_table(context: dict[str, Any]) -> dict[str, Any] | 
     if not rows:
         return None
     columns = [
-        {"key": "rank", "title": "排名"},
+        {"key": "validation_scheme", "title": "验证口径"},
+        {"key": "rank", "title": "组内排名"},
         {"key": "model_type", "title": "模型"},
         {"key": "strategy_type", "title": "策略"},
         {"key": "trial_no", "title": "Trial"},
@@ -1470,9 +1483,11 @@ def _build_metric_comparison_table(context: dict[str, Any]) -> dict[str, Any] | 
         if column["key"] not in optional_metric_keys
         or any(row.get(column["key"]) not in (None, "", "—") for row in rows)
     ]
+    task_type = str(task.get("task_type") or "").lower()
+    title = "模型评价（误差相关）" if task_type == "regression" else "模型评价（分类指标）"
     return {
         "id": "metric_comparison",
-        "title": "模型评价（准确率相关）",
+        "title": title,
         "columns": columns,
         "rows": rows,
     }
@@ -2005,6 +2020,7 @@ def _build_report_blocks(
     markdown: str,
     charts: list[dict[str, Any]],
     tables: list[dict[str, Any]],
+    task_type: str = "",
 ) -> list[dict[str, Any]]:
     """The overall report's body: the model's prose, then the real artifacts.
 
@@ -2031,6 +2047,11 @@ def _build_report_blocks(
         # now the whole document goes in, title included.
         {"type": "markdown", "id": "conclusion", "markdown": _with_title(markdown)},
     ]
+    metric_caption = (
+        "这张表按相同验证口径分别比较误差指标；交叉验证与单次留出验证不形成全局排名。"
+        if task_type == "regression" else
+        "这张表按相同验证口径分别比较分类指标，优先看最终测试，其次看选择阶段结果。"
+    )
     captions = [
         ("table", "data_profile",
          "这张表说明数据集中有哪些字段、每个字段扮演什么角色，以及是否存在缺失或编码风险。"),
@@ -2039,7 +2060,7 @@ def _build_report_blocks(
         ("chart", "training_curves",
          "这张图优先展示逐 epoch 的 loss/score 曲线；没有逐轮记录时展示 Trial 级选择指标与最终测试指标，用来判断调参过程是否稳定。"),
         ("table", "metric_comparison",
-         "这张表用来横向比较准确率等效果指标，优先看最终测试指标，其次看选择/验证阶段指标。"),
+         metric_caption),
         ("chart", "roc_curve",
          "这张图用于分类任务，观察模型区分正负样本的能力；曲线越靠近左上角，区分能力越强。"),
         ("chart", "prediction_curve",
@@ -2066,7 +2087,10 @@ def build_rich_report_payload(context: dict[str, Any] | str, markdown: str) -> d
         "charts": charts,
         "tables": tables,
         "evidence": _build_evidence(structured),
-        "report_blocks": _build_report_blocks(markdown, charts, tables),
+        "report_blocks": _build_report_blocks(
+            markdown, charts, tables,
+            str((structured.get("task") or {}).get("task_type") or "").lower(),
+        ),
     }
 
 
@@ -2303,10 +2327,10 @@ async def build_task_report_context(
             "name": dataset.name if dataset else task.dataset_name,
             "row_count": dataset.row_count if dataset else None,
             "column_count": dataset.column_count if dataset else None,
-            "columns_info": _compact_value(dataset.columns_info or {}) if dataset else {},
-            # _compact_value caps a dict at sixteen keys, so columns_info holds
-            # under half the columns of a wide dataset. The names alone are
-            # cheap and are what the report's field breakdown counts.
+            # Structured tables must remain complete. The prompt serializer can
+            # compact its own copy, but the report payload must not silently
+            # turn a 35-column dataset into a 16-row profile.
+            "columns_info": dataset.columns_info or {} if dataset else {},
             "column_names": list((dataset.columns_info or {}).keys()) if dataset else [],
         },
         "experiments": [
