@@ -2,7 +2,7 @@
 
 ## 结论
 
-{{conclusion.sentence}}{{final_eval.sentence}}评估就绪度 {{readiness.score}}/100，{{readiness.gap_note}}。<<给一句可执行的下一步，只能依据上面这段已有的事实>>
+{{conclusion.sentence}}{{final_eval.sentence}}评估就绪度 {{readiness.score}}/100，{{readiness.gap_note}}。{{#if next_step.sentence}}{{next_step.sentence}}{{/if}}
 
 {{#if validation.risk_sentence}}
 {{validation.risk_sentence}}

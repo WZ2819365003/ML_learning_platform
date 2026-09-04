@@ -243,11 +243,24 @@ class TestValidationCohorts:
         warning = rf.build_overview_facts(ctx)["validation"]["risk_sentence"]
         assert "不能证明模型对未来时段" in warning
         assert "时间顺序" in warning
+        facts = rf.build_overview_facts(ctx)
+        assert "先按时间顺序重新训练和验证" in facts["next_step"]["sentence"]
+        assert "不建议使用封存测试集" in facts["next_step"]["sentence"]
 
     def test_time_aware_runs_name_their_actual_validation_scheme(self):
         entry = self._ctx()["leaderboard"][0]
         entry["metrics"]["validation_strategy"] = "time_series_expanding"
         assert rf.validation_scheme(entry) == "时间序列交叉验证"
+
+    def test_mixed_cohort_shap_does_not_claim_a_global_best(self):
+        ctx = self._ctx()
+        ctx["leaderboard"][0]["metrics"]["top_shap_importances"] = [
+            {"feature": "load_lag_1", "mean_abs_shap": 10.0},
+            {"feature": "load_lag_2", "mean_abs_shap": 2.0},
+        ]
+        sentence = rf.build_overview_facts(ctx)["shap"]["evidence_sentence"]
+        assert sentence.startswith("交叉验证组领先模型")
+        assert "最优模型" not in sentence
 
 
 class TestChartDefects:

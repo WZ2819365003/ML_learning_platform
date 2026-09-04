@@ -226,6 +226,13 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
     metric = str(task.get("objective_metric") or "score").lower()
     stats = context.get("_target_stats") or {}
     mean = stats.get("mean")
+    final_state = task.get("final_evaluation") or {}
+    has_final_evaluation = bool(
+        task.get("final_test_value") is not None
+        or final_state.get("state") == "FINALIZED"
+        or final_state.get("final_metrics")
+        or any(entry.get("final_test_value") is not None for entry in board)
+    )
 
     if not board:
         return {"task": {"name": task.get("name") or "建模任务"}}
@@ -325,7 +332,7 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
                 _CHECK_NAMES.get(c.get("key"), c.get("label", "")) for c in failed)
                 if failed else "各项均已达成"),
             "rubric": (
-                "就绪评分满分 100，由"
+                "评估就绪度满分 100，由"
                 + "、".join(
                     _CHECK_NAMES.get(c.get("key"), c.get("label", "")) + f"（{c.get('weight')}）"
                     for c in (readiness.get("checks") or []))
@@ -362,13 +369,16 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
-    if has_temporal_features(columns):
+    temporal_features = has_temporal_features(columns)
+    temporal_provenance_missing = False
+    if temporal_features:
         recorded = {
             str((entry.get("metrics") or {}).get("validation_strategy") or "")
             for entry in board
         }
         time_safe = {"time_series_expanding", "chronological_holdout"}
         if not recorded or any(strategy not in time_safe for strategy in recorded):
+            temporal_provenance_missing = True
             facts["validation"] = {"risk_sentence": (
                 "该数据集包含滞后、滚动或周期时间特征，但部分历史 Run 未记录时间顺序验证策略。"
                 "这些分数只能描述既有随机切分下的表现，不能证明模型对未来时段具有同等泛化能力；"
@@ -380,9 +390,13 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
                 "评估按时间先后关系执行。"
             )}
 
-    if isinstance(best_value, (int, float)) and task.get("final_test_value") is None:
+    if isinstance(best_value, (int, float)) and not has_final_evaluation:
         facts["final_eval"] = {
-            "sentence": "该成绩取自模型选择阶段，封存测试集上的最终评估尚未执行，泛化能力未经确认；"
+            "sentence": (
+                "上述成绩均取自模型选择阶段，封存测试集上的最终评估尚未执行，泛化能力未经确认；"
+                if mixed_schemes else
+                "该成绩取自模型选择阶段，封存测试集上的最终评估尚未执行，泛化能力未经确认；"
+            )
         }
     else:
         facts["final_eval"] = {"sentence": ""}
@@ -410,12 +424,23 @@ def build_overview_facts(context: dict[str, Any]) -> dict[str, Any]:
             "二者不能直接横向比较，也不形成全局排名；表中排名仅在各自口径组内成立。"
         )}
 
+    if temporal_provenance_missing:
+        facts["next_step"] = {"sentence": (
+            "下一步应先按时间顺序重新训练和验证，再在同一验证口径内确认候选模型；"
+            "在此之前不建议使用封存测试集作最终选型。"
+        )}
+    elif not has_final_evaluation:
+        facts["next_step"] = {"sentence": (
+            "下一步应对同口径候选模型执行封存测试集最终评估，以确认泛化能力。"
+        )}
+
     if len(shap) >= 2 and isinstance(shap[0].get("mean_abs_shap"), (int, float)):
         top, second = shap[0], shap[1]
         ratio = (abs(top["mean_abs_shap"]) / abs(second["mean_abs_shap"])
                  if second.get("mean_abs_shap") else None)
+        leader_label = f"{best_scheme}组领先模型" if mixed_schemes else "当前领先模型"
         facts["shap"] = {"evidence_sentence": (
-            f"最优模型的 SHAP 首位为 {top.get('feature')}，平均绝对贡献 {_fmt(top['mean_abs_shap'], 1)}，"
+            f"{leader_label}的 SHAP 首位为 {top.get('feature')}，平均绝对贡献 {_fmt(top['mean_abs_shap'], 1)}，"
             + (f"是次位 {second.get('feature')}（{_fmt(second['mean_abs_shap'], 1)}）的 "
                f"{round(ratio, 1)} 倍。" if ratio else "。")
         )}
