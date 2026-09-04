@@ -51,7 +51,7 @@ function formatAbsolute(ts) {
     return d ? d.toLocaleString('zh-CN', { hour12: false, fractionalSecondDigits: 3 }) : ''
   } catch { return '' }
 }
-function formatRelative(ts, now) {
+export function formatRelative(ts, now) {
   if (!ts) return ''
   try {
     // REST-seeded entries arrive without a UTC marker; parsing them as local
@@ -59,10 +59,11 @@ function formatRelative(ts, now) {
     const d = parseServerDate(ts)
     if (!d) return ''
     const diff = now - d.getTime()
-    if (diff < 1000) return 'just now'
-    if (diff < 60_000) return `${Math.floor(diff/1000)}s ago`
-    if (diff < 3_600_000) return `${Math.floor(diff/60_000)}m ago`
-    return `${Math.floor(diff/3_600_000)}h ago`
+    if (diff < 1000) return '刚刚'
+    if (diff < 60_000) return `${Math.floor(diff/1000)} 秒前`
+    if (diff < 3_600_000) return `${Math.floor(diff/60_000)} 分钟前`
+    if (diff < 86_400_000) return `${Math.floor(diff/3_600_000)} 小时前`
+    return `${Math.floor(diff/86_400_000)} 天前`
   } catch { return '' }
 }
 
@@ -218,25 +219,28 @@ export default function LogViewer({ historical, domainTaskId, isLive, streamEnab
 
         <Space size={4} className="log-toolbar-actions" style={{ marginLeft: 'auto' }}>
           <Tooltip title={absoluteTime ? '切换到相对时间' : '切换到绝对时间'}>
-            <Button size="small" icon={<ClockCircleOutlined />}
+            <Button size="small"
+              aria-label={absoluteTime ? '切换到相对时间' : '切换到绝对时间'}
+              icon={<ClockCircleOutlined />}
               type={absoluteTime ? 'primary' : 'default'}
               onClick={() => setAbsoluteTime((v) => !v)} />
           </Tooltip>
-          <Tooltip title={paused ? '恢复跟随' : '暂停跟随'}>
+          <Tooltip title={paused ? '恢复日志跟随' : '暂停日志跟随'}>
             <Button size="small"
+              aria-label={paused ? '恢复日志跟随' : '暂停日志跟随'}
               icon={paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
               type={paused ? 'primary' : 'default'}
               onClick={() => setPaused(!paused)} />
           </Tooltip>
-          <Tooltip title="跳到底部">
-            <Button size="small" icon={<VerticalAlignBottomOutlined />}
+          <Tooltip title="跳到最新日志">
+            <Button size="small" aria-label="跳到最新日志" icon={<VerticalAlignBottomOutlined />}
               onClick={handleJumpToBottom} />
           </Tooltip>
-          <Tooltip title="清空视图(不影响服务端)">
-            <Button size="small" icon={<ClearOutlined />} onClick={clear} />
+          <Tooltip title="清空日志视图（不影响服务端）">
+            <Button size="small" aria-label="清空日志视图" icon={<ClearOutlined />} onClick={clear} />
           </Tooltip>
           <Tooltip title="下载日志">
-            <Button size="small" icon={<DownloadOutlined />} onClick={handleDownload}
+            <Button size="small" aria-label="下载日志" icon={<DownloadOutlined />} onClick={handleDownload}
               disabled={logs.length === 0} />
           </Tooltip>
         </Space>
