@@ -414,19 +414,19 @@ export default function ModelingTaskDetail() {
   )
 
   return (
-    <div style={{ padding: 16 }}>
+    <div className="modeling-task-detail" style={{ padding: 16 }}>
       {/* ── Header strip ────────────────────────────────────────────────── */}
       <Card variant="borderless" styles={{ body: { padding: '12px 16px' } }}
         style={{ marginBottom: 12, boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: 280 }}>
+        <div className="task-detail-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+          <div className="task-detail-heading" style={{ flex: 1, minWidth: 0 }}>
             <Breadcrumb style={{ fontSize: 12, marginBottom: 6 }}
               items={[
                 { title: <a onClick={() => navigate('/v3/tasks')}>建模工作台</a> },
                 { title: task.name },
               ]}
             />
-            <Space align="center" size={10}>
+            <Space align="center" size={10} wrap className="task-detail-title-row">
               <FireOutlined style={{ color: '#2563eb', fontSize: 22 }} />
               <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>{task.name}</h2>
               {renderStatus(task.status)}
@@ -439,7 +439,7 @@ export default function ModelingTaskDetail() {
               <div style={{ color: '#64748b', fontSize: 12, marginTop: 4 }}>{task.description}</div>
             )}
           </div>
-          <Space>
+          <Space wrap className="task-detail-actions">
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/v3/tasks')}>返回</Button>
             <Button icon={<ReloadOutlined />} onClick={refreshAll}>刷新</Button>
             <Button icon={<BulbOutlined />} onClick={openNewAiReport}>

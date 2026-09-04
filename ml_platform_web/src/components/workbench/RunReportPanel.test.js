@@ -20,6 +20,27 @@ describe('buildTreeItems', () => {
     expect(items.slice(1).map(i => i.label)).toEqual(['first', 'second'])
   })
 
+  it('distinguishes repeated model types by Trial and shows validation metadata', () => {
+    const items = buildTreeItems([
+      { run_id: 'a', model_type: 'xgboost', trial_no: 1, validation_scheme: '交叉验证' },
+      { run_id: 'b', model_type: 'xgboost', trial_no: 2, validation_scheme: '交叉验证' },
+    ])
+    expect(items.slice(1).map(i => i.label)).toEqual([
+      'xgboost · Trial 1', 'xgboost · Trial 2',
+    ])
+    expect(items[1].meta).toBe('交叉验证')
+  })
+
+  it('falls back to a short Run id for repeated legacy reports', () => {
+    const items = buildTreeItems([
+      { run_id: 'abcdefgh-1', model_type: 'lstm' },
+      { run_id: 'ijklmnop-2', model_type: 'lstm' },
+    ])
+    expect(items.slice(1).map(i => i.label)).toEqual([
+      'lstm · abcdefgh', 'lstm · ijklmnop',
+    ])
+  })
+
   it('marks exactly the best run', () => {
     const items = buildTreeItems(
       [{ run_id: 'a', model_type: 'x' }, { run_id: 'b', model_type: 'y' }], 'b',

@@ -765,7 +765,19 @@ body {
 
 /* Model identifiers are long and must not be truncated into ambiguity — they
    are what the reader matches against the leaderboard. */
-.report-nav-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.report-nav-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+}
+.report-nav-label small {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
+}
 
 .report-nav-item:hover { background: rgba(0, 0, 0, 0.04); color: #2563eb; }
 
@@ -784,4 +796,107 @@ body {
   padding: 18px 24px;
   max-height: 78vh;
   overflow-y: auto;
+}
+
+@media (max-width: 767px) {
+  .modeling-task-detail {
+    padding: 8px !important;
+  }
+
+  .task-detail-heading,
+  .task-detail-title-row,
+  .task-detail-actions {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .task-detail-title-row h2 {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .task-detail-actions {
+    display: flex !important;
+    gap: 6px !important;
+  }
+
+  .task-detail-actions .ant-space-item {
+    flex: 1 1 calc(50% - 6px);
+  }
+
+  .task-detail-actions .ant-btn {
+    width: 100%;
+  }
+
+  .report-actions {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 6px !important;
+  }
+
+  .report-shell {
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .report-nav {
+    width: 100%;
+    max-height: none;
+    display: flex;
+    gap: 6px;
+    padding: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  .report-nav-children {
+    display: flex;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .report-nav-children .report-nav-item::before {
+    display: none;
+  }
+
+  .report-nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: 240px;
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .report-nav-label {
+    overflow-wrap: normal;
+  }
+
+  .report-content {
+    width: 100%;
+    max-height: none;
+    padding: 12px;
+    overflow: visible;
+  }
+
+  .ai-report-inline .ant-card-head {
+    padding: 0 12px !important;
+  }
+
+  .ai-report-inline .ai-report-body,
+  .ai-report-inline .ai-report-document {
+    padding: 12px;
+  }
+
+  .ai-report-inline .ai-report-cover {
+    padding: 16px;
+  }
+
+  .ai-report-inline .ai-report-cover-main h1 {
+    font-size: 24px;
+    overflow-wrap: anywhere;
+  }
 }

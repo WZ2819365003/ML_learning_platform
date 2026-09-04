@@ -50,15 +50,31 @@ export function splitReportOnCharts(markdown = '') {
 
 /** The nav's items: 总报告 first, then one per model. */
 export function buildTreeItems(runReports = [], bestRunId = null, overviewLabel = '总报告') {
+  const modelCounts = runReports.reduce((counts, report) => {
+    const model = report.model_type || '未命名模型'
+    counts[model] = (counts[model] || 0) + 1
+    return counts
+  }, {})
   return [
     { id: OVERVIEW, label: overviewLabel },
     ...runReports.map(r => ({
       id: r.run_id,
-      label: r.model_type,
+      label: runReportLabel(r, modelCounts),
+      meta: r.validation_scheme || null,
       best: Boolean(bestRunId) && r.run_id === bestRunId,
       failed: Boolean(r.error),
     })),
   ]
+}
+
+function runReportLabel(report, modelCounts) {
+  const model = report.model_type || '未命名模型'
+  if ((modelCounts[model] || 0) <= 1) return model
+  if (report.trial_no !== undefined && report.trial_no !== null) {
+    return `${model} · Trial ${report.trial_no}`
+  }
+  const shortId = String(report.run_id || '').slice(0, 8)
+  return shortId ? `${model} · ${shortId}` : model
 }
 
 export function RunReportBody({ report }) {
@@ -123,11 +139,14 @@ export default function RunReportPanel({
 
   const active = runReports.find(r => r.run_id === activeId) || null
   const [root, ...children] = items
+  const modelCount = new Set(runReports.map(report => report.model_type).filter(Boolean)).size
 
   return (
     <Card size="small" styles={{ body: { padding: 0 } }}
       title={<Space><span>AI 报告</span>
-        <Tag color="blue" style={{ margin: 0 }}>{runReports.length} 个模型</Tag></Space>}>
+        <Tag color="blue" style={{ margin: 0 }}>
+          {runReports.length} 个 Run / {modelCount} 种模型
+        </Tag></Space>}>
       <div className="report-shell">
         <nav className="report-nav">
           <button type="button"
@@ -140,7 +159,10 @@ export default function RunReportPanel({
               <button key={item.id} type="button"
                 className={`report-nav-item${activeId === item.id ? ' is-active' : ''}`}
                 onClick={() => setActiveId(item.id)}>
-                <span className="report-nav-label">{item.label}</span>
+                <span className="report-nav-label">
+                  <span>{item.label}</span>
+                  {item.meta && <small>{item.meta}</small>}
+                </span>
                 {item.best && <TrophyOutlined style={{ color: '#f59e0b' }} />}
                 {item.failed && <Text type="danger" style={{ fontSize: 11 }}>失败</Text>}
               </button>
