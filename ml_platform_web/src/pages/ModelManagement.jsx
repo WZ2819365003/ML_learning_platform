@@ -37,7 +37,7 @@ import {
 } from '@ant-design/icons';
 import echarts from '../utils/echarts';
 import api, { dataApi, deployApi, dlApi, modelApi, timesfmApi, trainingApi } from '../services/api';
-import { formatBytes, formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
+import { formatBytes, formatDateTime, formatMetricByKey, metricLabels } from '../utils/formatters';
 import { buildResultsUrl } from '../utils/resultRoutes';
 
 const { Text, Title } = Typography;
@@ -70,7 +70,7 @@ function renderMetricCards(metrics, keys) {
         <Card size="small">
           <Text type="secondary">{metricLabels[k] ?? k}</Text>
           <Title level={4} style={{ marginTop: 4, marginBottom: 0 }}>
-            {formatMetric(metrics?.[k], { percent: k.includes('acc') || k === 'accuracy' })}
+            {formatMetricByKey(k, metrics?.[k])}
           </Title>
         </Card>
       </Col>
@@ -325,7 +325,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
         return (
           <span>
             {metricLabels[name] ?? name}:{' '}
-            <strong>{formatMetric(val, { percent: name.includes('acc') || name === 'accuracy' })}</strong>
+            <strong>{formatMetricByKey(name, val)}</strong>
           </span>
         );
       },
@@ -637,7 +637,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
         return (
           <span>
             {metricLabels[name] ?? name}:{' '}
-            <strong>{formatMetric(val, { percent: name === 'val_acc' })}</strong>
+            <strong>{formatMetricByKey(name, val)}</strong>
           </span>
         );
       },

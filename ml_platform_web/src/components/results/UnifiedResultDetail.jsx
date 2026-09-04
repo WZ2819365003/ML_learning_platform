@@ -15,7 +15,7 @@ import BacktestPanel from './BacktestPanel'
 import TrainingProcessPanel from './TrainingProcessPanel'
 import { getResultViewEntries } from './resultViewRegistry'
 import { dlApi, modelApi } from '../../services/api'
-import { formatDateTime, metricLabels } from '../../utils/formatters'
+import { formatDateTime, metricLabels, percentageMetricValue } from '../../utils/formatters'
 
 const { Text, Title } = Typography
 
@@ -69,8 +69,9 @@ function normalizeResult(raw, family, taskId) {
 
 function metricValue(key, value) {
   if (typeof value !== 'number') return { value: '-', precision: undefined }
-  if (/(^|_)(acc|accuracy|precision|recall|f1|auc)/i.test(key) && Math.abs(value) <= 1) {
-    return { value: value * 100, precision: 2, suffix: '%' }
+  const percentageValue = percentageMetricValue(key, value)
+  if (percentageValue !== null) {
+    return { value: percentageValue, precision: 2, suffix: '%' }
   }
   return { value, precision: 4 }
 }

@@ -81,6 +81,28 @@ export function formatMetric(value, { percent = false, digits = 4 } = {}) {
   return numericValue.toFixed(digits);
 }
 
+/**
+ * Return a percentage value for metrics whose unit is percent.
+ *
+ * Accuracy-like metrics and MAPE can arrive from different trainers either as
+ * a ratio (0.0118) or an already-scaled percentage (1.18). Normalising at the
+ * display boundary keeps the shared result page and model-management detail in
+ * the same unit without changing persisted training output.
+ */
+export function percentageMetricValue(key, value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return null;
+  if (!/(^|_)(acc|accuracy|precision|recall|f1|auc|mape)(_|$)/i.test(String(key))) return null;
+
+  const numericValue = Number(value);
+  return Math.abs(numericValue) <= 1 ? numericValue * 100 : numericValue;
+}
+
+export function formatMetricByKey(key, value, { digits = 4, percentageDigits = 2 } = {}) {
+  const percentageValue = percentageMetricValue(key, value);
+  if (percentageValue !== null) return `${percentageValue.toFixed(percentageDigits)}%`;
+  return formatMetric(value, { digits });
+}
+
 export function formatBytes(bytes) {
   if (!bytes && bytes !== 0) {
     return '-';

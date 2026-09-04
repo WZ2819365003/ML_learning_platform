@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseServerDate } from './formatters'
+import { formatMetricByKey, parseServerDate, percentageMetricValue } from './formatters'
 
 // The API serializes DB datetime columns without an offset ("2026-08-25
 // 12:52:01") while they hold UTC. `new Date()` reads a timezone-less string as
@@ -44,5 +44,25 @@ describe('parseServerDate', () => {
   it('passes a Date through unchanged', () => {
     const d = new Date('2026-08-25T13:24:14Z')
     expect(parseServerDate(d)).toBe(d)
+  })
+})
+
+describe('percentage metric formatting', () => {
+  it('renders ratio-form MAPE as a percentage', () => {
+    expect(percentageMetricValue('val_mape', 0.0118)).toBeCloseTo(1.18)
+    expect(formatMetricByKey('val_mape', 0.0118)).toBe('1.18%')
+  })
+
+  it('does not scale MAPE that is already expressed as percent', () => {
+    expect(formatMetricByKey('mape', 8.4)).toBe('8.40%')
+  })
+
+  it('uses the same rule for accuracy-like metrics', () => {
+    expect(formatMetricByKey('val_acc', 0.979)).toBe('97.90%')
+  })
+
+  it('keeps error metrics in their original unit', () => {
+    expect(percentageMetricValue('val_rmse', 0.75)).toBeNull()
+    expect(formatMetricByKey('val_rmse', 0.75)).toBe('0.7500')
   })
 })
