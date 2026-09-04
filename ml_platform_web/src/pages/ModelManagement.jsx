@@ -296,12 +296,17 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
       title: '任务名称',
       key: 'name',
       render: (_, r) => r.name ?? <Text type="secondary">{r.task_id.slice(0, 8)}</Text>,
+      width: 230,
+      fixed: 'left',
+      ellipsis: true,
     },
-    { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id },
-    { title: '模型', dataIndex: 'model_type', render: (v) => <Tag color="blue">{v}</Tag> },
+    { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id, width: 190, ellipsis: true },
+    { title: '模型', dataIndex: 'model_type', render: (v) => <Tag color="blue">{v}</Tag>, width: 180, ellipsis: true },
     {
       title: '标签',
       dataIndex: 'tags',
+      width: 140,
+      responsive: ['xxl'],
       render: (tags) =>
         tags?.length
           ? tags.map((t) => <Tag key={t} color="geekblue" style={{ marginBottom: 2 }}>{t}</Tag>)
@@ -310,6 +315,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
     {
       title: '主要指标',
       key: 'metric',
+      width: 180,
       render: (_, r) => {
         const { primary_metric_name: name, primary_metric_value: val } = r.metrics_summary ?? {};
         if (!name) return '—';
@@ -326,6 +332,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
       title: '操作',
       key: 'actions',
       width: 200,
+      fixed: 'right',
       render: (_, r) => (
         <Space size={4} onClick={(e) => e.stopPropagation()}>
           <Button size="small" icon={<EyeOutlined />} onClick={() => void openDetail(r)}>详情</Button>
@@ -362,6 +369,8 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
           loading={loading}
           pagination={false}
           size="middle"
+          tableLayout="fixed"
+          scroll={{ x: 1180 }}
           locale={{ emptyText: <Empty description="还没有训练完成的机器学习模型" /> }}
           rowSelection={{
             selectedRowKeys: selectedKeys,
@@ -596,13 +605,18 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
       title: '任务名称',
       key: 'name',
       render: (_, r) => r.name ?? <Text type="secondary">{r.task_id.slice(0, 8)}</Text>,
+      width: 220,
+      fixed: 'left',
+      ellipsis: true,
     },
-    { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id },
-    { title: '架构', dataIndex: 'model_type', render: (v) => <Tag color="purple">{v}</Tag> },
+    { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id, width: 190, ellipsis: true },
+    { title: '架构', dataIndex: 'model_type', render: (v) => <Tag color="purple">{v}</Tag>, width: 120, ellipsis: true },
     { title: '任务类型', dataIndex: 'task_type', width: 100 },
     {
       title: '标签',
       dataIndex: 'tags',
+      width: 140,
+      responsive: ['xxl'],
       render: (tags) =>
         tags?.length
           ? tags.map((t) => <Tag key={t} color="geekblue" style={{ marginBottom: 2 }}>{t}</Tag>)
@@ -611,6 +625,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
     {
       title: '主要指标',
       key: 'metric',
+      width: 180,
       render: (_, r) => {
         const { primary_metric_name: name, primary_metric_value: val } = r.metrics_summary ?? {};
         if (!name) return '—';
@@ -627,6 +642,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
       title: '操作',
       key: 'actions',
       width: 200,
+      fixed: 'right',
       render: (_, r) => (
         <Space size={4} onClick={(e) => e.stopPropagation()}>
           <Button size="small" icon={<EyeOutlined />} onClick={() => void openDetail(r)}>详情</Button>
@@ -653,6 +669,8 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
           loading={loading}
           pagination={false}
           size="middle"
+          tableLayout="fixed"
+          scroll={{ x: 1165 }}
           locale={{ emptyText: <Empty description="还没有训练完成的深度学习模型" /> }}
           onRow={(r) => ({
             style: { cursor: 'pointer' },
