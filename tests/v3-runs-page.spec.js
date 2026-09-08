@@ -47,7 +47,7 @@ test.describe('Commit 11 — V3 Run 诊断中心', () => {
   });
 
   test('Sidebar entry navigates to /v3/runs', async ({ page }) => {
-    await page.goto(`${WEB_BASE}/dashboard`);
+    await page.goto(`${WEB_BASE}/v3/tasks`);
     // V3 sub-menu may need to be expanded; defaultOpenKeys includes 'v3' so the
     // child link should be findable directly.
     const link = page.getByRole('link', { name: '运行诊断' });

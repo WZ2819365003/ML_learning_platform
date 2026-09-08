@@ -6,7 +6,6 @@ import Header from './components/layout/Header'
 import ErrorBoundary from './components/ErrorBoundary'
 
 const Login = lazy(() => import('./pages/Login'))
-const Dashboard = lazy(() => import('./pages/Dashboard'))
 const DataManagement = lazy(() => import('./pages/DataManagement'))
 const TrainingConfig = lazy(() => import('./pages/TrainingConfig'))
 const TrainingMonitor = lazy(() => import('./pages/TrainingMonitor'))
@@ -79,8 +78,11 @@ function AppShell() {
             </div>
           )}>
           <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-              <Route path="/dashboard" element={<Dashboard />} />
+            {/* Landing page is 建模 → 任务列表. The old 仪表盘 page read the retired
+                legacy TrainingTask tables and was removed; its path is kept only
+                as a redirect so old bookmarks still land somewhere useful. */}
+            <Route path="/" element={<Navigate to="/v3/tasks" replace />} />
+              <Route path="/dashboard" element={<Navigate to="/v3/tasks" replace />} />
               <Route path="/data" element={<DataManagement />} />
               <Route path="/training/config" element={<TrainingConfig />} />
               <Route path="/training/monitor" element={<TrainingMonitor />} />

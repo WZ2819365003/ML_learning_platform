@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import { Grid, Layout, Menu, Tooltip } from 'antd'
 import { Link, useLocation } from 'react-router-dom'
 import {
-  DashboardOutlined,
   DatabaseOutlined,
   RocketOutlined,
   SettingOutlined,
@@ -40,11 +39,6 @@ const Sidebar = () => {
 
   const menuItems = [
     {
-      key: 'dashboard',
-      icon: <DashboardOutlined />,
-      label: <Link to="/dashboard">仪表盘</Link>,
-    },
-    {
       key: 'data',
       icon: <DatabaseOutlined />,
       label: <Link to="/data">数据管理</Link>,
@@ -81,7 +75,6 @@ const Sidebar = () => {
 
   const getSelectedKey = () => {
     const path = location.pathname
-    if (path === '/dashboard') return 'dashboard'
     if (path === '/data') return 'data'
     if (path === '/training/config') return 'training-config'
     if (path === '/training/monitor') return 'training-monitor'
@@ -97,7 +90,8 @@ const Sidebar = () => {
     if (path === '/dl/results') return 'dl-results'
     if (path === '/ts/tasks/new' || path === '/ts/config') return 'ts-new'
     if (path.startsWith('/ts/tasks') || path === '/ts/monitor' || path === '/ts/results') return 'ts-list'
-    return 'dashboard'
+    // Unknown route: highlight the landing entry (建模 → 任务列表).
+    return 'modeling-tasks'
   }
 
   return <>

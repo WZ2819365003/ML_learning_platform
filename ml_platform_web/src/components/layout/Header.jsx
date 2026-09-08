@@ -10,7 +10,6 @@ const { Text } = Typography
 // Leaf page title per route. Section (first breadcrumb crumb) is derived from
 // the path prefix in getBreadcrumb() so the header stays in sync with Sidebar.
 const PAGE_TITLES = {
-  '/dashboard':        '仪表盘',
   '/data':             '数据管理',
   '/training/config':  '训练配置',
   '/training/monitor': '训练监控',

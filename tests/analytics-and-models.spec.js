@@ -22,7 +22,7 @@ const samplePayload = JSON.stringify(
 
 test.setTimeout(180000);
 
-test('dashboard, visualization, and model management use real training data', async ({ page, request }) => {
+test('visualization and model management use real training data', async ({ page, request }) => {
   await page.goto(`${BASE}/data`);
 
   await page.locator('input[type="file"]').setInputFiles(datasetPath);
@@ -61,12 +61,6 @@ test('dashboard, visualization, and model management use real training data', as
       intervals: [1000, 2000, 5000],
     }
   ).toBe('SUCCESS');
-
-  await page.goto(`${BASE}/dashboard`);
-  await expect(page.getByText('最新数据集')).toBeVisible();
-  await expect(page.getByText('predictive_maintenance.csv', { exact: false }).first()).toBeVisible({ timeout: 30000 });
-  await expect(page.getByText('最近训练任务')).toBeVisible();
-  await expect(page.getByText('random_forest', { exact: true }).first()).toBeVisible({ timeout: 30000 });
 
   await page.goto(`${BASE}/training/results?taskId=${taskId}`);
   await expect(page.getByText('结果可视化详情')).toBeVisible({ timeout: 30000 });
