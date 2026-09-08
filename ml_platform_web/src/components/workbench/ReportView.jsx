@@ -179,12 +179,15 @@ export default function ReportView({ taskId, taskName, generatedAiReport = null 
       )}
 
       <div className="report-print-document" aria-hidden="true">
+        {/* The same ReportDocument as on screen, so every figure the reader
+            saw is drawn again here; the appendix is open because a folded
+            panel prints as nothing. */}
         {source.kind === 'ai' ? (
           <>
-            <AiReportReader report={source.report} taskName={taskName} />
+            <AiReportReader report={source.report} taskName={taskName} appendixOpen />
             {(source.report?.run_reports || []).map((run) => (
               <section className="report-print-run" key={run.run_id || run.model_type}>
-                <RunReportBody report={run} />
+                <RunReportBody report={run} appendixOpen />
               </section>
             ))}
           </>

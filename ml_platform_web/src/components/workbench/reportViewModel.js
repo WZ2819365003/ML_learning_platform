@@ -26,27 +26,38 @@ export function resolveReportSource({
   }
 }
 
+const CHART_MARKER = /\{\{\s*chart\s*:\s*([a-z0-9_]+)\s*\}\}/gi
+
+/**
+ * The Markdown export: overview with its figures noted in place, the appendix
+ * tables, then every Run report. A chart marker becomes a one-line note with
+ * the figure's title and reading, since a .md file cannot carry the canvas.
+ */
 export function buildCompleteReportMarkdown(report = null, fallbackMarkdown = '') {
   if (!report) return String(fallbackMarkdown || '').trim() + '\n'
 
-  const parts = [String(report.markdown || fallbackMarkdown || '').trim()]
-  const tables = Array.isArray(report.tables) ? report.tables : []
+  const charts = Array.isArray(report.charts) ? report.charts : []
+  const placed = new Set()
+  const parts = [inlineChartNotes(report.markdown || fallbackMarkdown || '', charts, placed)]
+
+  const tables = Array.isArray(report.appendix_tables)
+    ? report.appendix_tables
+    : (Array.isArray(report.tables) ? report.tables : [])
   if (tables.length) {
-    parts.push('# 结构化数据附表')
+    parts.push('# 附录')
     tables.forEach((table) => {
       const rendered = tableToMarkdown(table)
       if (rendered) parts.push(rendered)
     })
   }
 
-  const charts = Array.isArray(report.charts) ? report.charts : []
-  if (charts.length) {
+  // Figures the prose never placed (legacy archives) still get listed.
+  const unplaced = charts.filter((chart) => !placed.has(String(chart.id || '').toLowerCase()))
+  if (unplaced.length) {
     parts.push([
       '# 图表索引',
       '',
-      ...charts.map((chart) => (
-        `- **${chart.title || chart.id || '图表'}**：${chart.description || '交互图请在在线归档中查看。'}`
-      )),
+      ...unplaced.map((chart) => `- **${chart.title || chart.id || '图表'}**：${chartNote(chart)}`),
     ].join('\n'))
   }
 
@@ -54,21 +65,26 @@ export function buildCompleteReportMarkdown(report = null, fallbackMarkdown = ''
   if (runReports.length) {
     parts.push('# Run 分报告')
     runReports.forEach((run) => {
-      const runCharts = Object.fromEntries((run.charts || []).map(chart => [chart.id, chart]))
-      const markdown = String(run.markdown || '').replace(
-        /\{\{\s*chart\s*:\s*([a-z0-9_]+)\s*\}\}/gi,
-        (_match, id) => {
-          const chart = runCharts[String(id).toLowerCase()]
-          const title = chart?.title || id
-          const description = chart?.description || '请在在线归档中查看交互图。'
-          return `> 图表：${title}。${description}`
-        },
-      ).trim()
+      const markdown = inlineChartNotes(run.markdown || '', run.charts || [], new Set())
       if (markdown) parts.push(markdown)
     })
   }
 
   return parts.filter(Boolean).join('\n\n---\n\n') + '\n'
+}
+
+function inlineChartNotes(markdown, charts, placed) {
+  const byId = Object.fromEntries((charts || []).map((chart) => [String(chart.id || '').toLowerCase(), chart]))
+  return String(markdown || '').replace(CHART_MARKER, (_match, id) => {
+    const key = String(id).toLowerCase()
+    const chart = byId[key]
+    placed.add(key)
+    return `> 图表：${chart?.title || id}。${chartNote(chart)}`
+  }).trim()
+}
+
+function chartNote(chart) {
+  return chart?.caption || chart?.description || '交互图请在在线归档中查看。'
 }
 
 function tableToMarkdown(table) {
