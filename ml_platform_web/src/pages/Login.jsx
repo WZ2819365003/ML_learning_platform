@@ -35,7 +35,7 @@ export default function Login() {
       const resp = await authApi.login(username, password)
       setAuthToken(resp.token)
       message.success('登录成功')
-      navigate('/dashboard', { replace: true })
+      navigate('/v3/tasks', { replace: true })
     } catch (err) {
       message.error(err?.response?.data?.detail || '登录失败，请稍后重试')
     } finally {

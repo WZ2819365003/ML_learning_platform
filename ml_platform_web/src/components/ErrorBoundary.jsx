@@ -15,7 +15,7 @@ const { Paragraph, Text } = Typography
  *
  * Props:
  *   - `scope`   : human-readable label shown in the fallback UI
- *   - `homeTo`  : where the 「回首页」 button navigates (default /dashboard)
+ *   - `homeTo`  : where the 「回首页」 button navigates (default /v3/tasks)
  */
 export default class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -45,7 +45,7 @@ export default class ErrorBoundary extends React.Component {
 
   render() {
     const { error, info } = this.state
-    const { children, scope, homeTo = '/dashboard' } = this.props
+    const { children, scope, homeTo = '/v3/tasks' } = this.props
 
     if (!error) return children
 

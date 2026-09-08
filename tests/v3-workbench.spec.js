@@ -118,7 +118,7 @@ test.describe('V3 Modeling Workbench', () => {
 
   test('mobile sidebar overlays content without horizontal overflow', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`${BASE}/dashboard`);
+    await page.goto(`${BASE}/v3/tasks`);
 
     await page.locator('.anticon-menu-unfold').click();
     await expect(page.getByRole('link', { name: '任务列表' }).first()).toBeVisible();
