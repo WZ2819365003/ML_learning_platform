@@ -262,14 +262,17 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
 
   const mixedTab = (
     <Form form={mixedForm} layout="vertical">
+      {/* Not an ensemble: every selected model is trained on its own and gets
+          its own run/result. Real weighted fusion lives in 模型部署 → 多模型部署
+          (ensemble_service), so point users there instead of implying it here. */}
       <Alert type="info" showIcon style={{ marginBottom: 12 }}
-        message="混合策略：同时训练机器学习 + 深度学习模型"
-        description="选择跨族模型一次性对照，或直接用「代码配置」以 Python 精确描述实验（推荐）。" />
+        message="多模型对照：机器学习 + 深度学习各训一遍，一次拿到跨族基线"
+        description="每个模型独立训练、独立出结果，互不组合，方便横向对比。这不是模型融合——若要把多个模型的预测加权合并，请在训练完成后前往「模型部署 → 多模型部署」。也可用「代码配置」以 Python 精确描述实验。" />
       <Form.Item name="models" label="参与模型（机器学习 + 深度学习）" rules={[{ required: true, message: '请至少选择一个模型' }]}>
         <Select mode="multiple" options={mixedOptions} placeholder="从机器学习 / 深度学习中多选" maxTagCount="responsive" />
       </Form.Item>
       <Space>
-        <Button type="primary" icon={<ThunderboltOutlined />} loading={submitting} onClick={submitMixed}>启动混合训练</Button>
+        <Button type="primary" icon={<ThunderboltOutlined />} loading={submitting} onClick={submitMixed}>启动多模型对照训练</Button>
         <CodeButton kind="mixed" />
       </Space>
     </Form>
@@ -286,7 +289,7 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
         items={[
           { key: 'ml', label: '机器学习', children: mlTab },
           { key: 'dl', label: '深度学习', children: dlTab },
-          { key: 'mixed', label: '混合策略', children: mixedTab },
+          { key: 'mixed', label: '多模型对照', children: mixedTab },
           { key: 'tune', label: '调参策略', children: (
             <div>
               <div style={{ marginBottom: 8, textAlign: 'right' }}>
