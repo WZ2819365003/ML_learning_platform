@@ -9,44 +9,19 @@
  *
  * Charts appear wherever the placement pass put them — the model reads the
  * finished prose and the already-rendered figures and decides which paragraph
- * each belongs after, or that a figure does not belong at all.
+ * each belongs after, or that a figure does not belong at all. Both the
+ * overview and every sub-report render through ReportDocument, so the two
+ * halves of the report share one look.
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { Alert, Card, Empty, Space, Tag, Typography } from 'antd'
 import { TrophyOutlined } from '@ant-design/icons'
 
-import EChart from '../EChart'
-import MarkdownReport from './MarkdownReport'
+import ReportDocument from './ReportDocument'
 
 const { Text } = Typography
 
 export const OVERVIEW = '__overview__'
-
-const CHART_MARKER = /\{\{\s*chart\s*:\s*([a-z0-9_]+)\s*\}\}/gi
-
-/**
- * Split a sub-report on its chart markers.
- *
- * The placement pass puts markers on their own line between paragraphs, so the
- * text either side is complete markdown; rendering each span separately keeps
- * the chart inline without needing a markdown extension.
- */
-export function splitReportOnCharts(markdown = '') {
-  const segments = []
-  let cursor = 0
-  CHART_MARKER.lastIndex = 0
-  let match = CHART_MARKER.exec(markdown)
-  while (match) {
-    const before = markdown.slice(cursor, match.index).trim()
-    if (before) segments.push({ kind: 'markdown', value: before })
-    segments.push({ kind: 'chart', value: match[1].toLowerCase() })
-    cursor = match.index + match[0].length
-    match = CHART_MARKER.exec(markdown)
-  }
-  const tail = markdown.slice(cursor).trim()
-  if (tail) segments.push({ kind: 'markdown', value: tail })
-  return segments
-}
 
 /** The nav's items: 总报告 first, then one per model. */
 export function buildTreeItems(runReports = [], bestRunId = null, overviewLabel = '总报告') {
@@ -77,15 +52,7 @@ function runReportLabel(report, modelCounts) {
   return shortId ? `${model} · ${shortId}` : model
 }
 
-export function RunReportBody({ report }) {
-  const chartsById = useMemo(
-    () => Object.fromEntries((report?.charts || []).map(c => [c.id, c])),
-    [report],
-  )
-  const segments = useMemo(
-    () => splitReportOnCharts(report?.markdown || ''), [report],
-  )
-
+export function RunReportBody({ report, appendixOpen = false }) {
   if (report?.error) {
     return (
       <Alert type="warning" showIcon
@@ -98,25 +65,13 @@ export function RunReportBody({ report }) {
   }
 
   return (
-    <div className="report-body">
-      {segments.map((seg, i) => {
-        if (seg.kind === 'markdown') {
-          return <MarkdownReport key={i} markdown={seg.value} />
-        }
-        const chart = chartsById[seg.value]
-        // A marker whose chart was not built renders as nothing: an empty frame
-        // reads as a broken chart rather than as an absent one.
-        if (!chart?.option) return null
-        return (
-          <Card key={i} size="small" variant="outlined" title={chart.title}
-            style={{ margin: '14px 0' }} styles={{ body: { padding: 12 } }}>
-            <EChart option={chart.option} style={{ height: 300 }} />
-            {chart.description && (
-              <Text type="secondary" style={{ fontSize: 12 }}>{chart.description}</Text>
-            )}
-          </Card>
-        )
-      })}
+    <div className="report-body ai-report-run">
+      <ReportDocument
+        markdown={report.markdown}
+        charts={report.charts || []}
+        appendixTables={report.appendix_tables || []}
+        appendixOpen={appendixOpen}
+      />
     </div>
   )
 }
