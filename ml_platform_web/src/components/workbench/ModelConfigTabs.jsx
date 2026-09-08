@@ -61,10 +61,18 @@ const _tsName = (task, tag) =>
   `${task?.name || 'task'}-${tag}-${new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[/\s:]/g, '')}`
 
 /**
- * 模型配置 step — 3 tabs (机器学习 / 深度学习 / 混合策略). Each configures real
- * ML/DL parameters and dispatches a baseline batch through the existing V3
- * pipeline (modelingTaskApi.createExperimentBatch), so 训练/结果/部署 are unchanged.
- * A 「代码配置」 button (Python executor) is available on every tab.
+ * 模型配置 step — 4 tabs (机器学习 / 深度学习 / 多模型对照 / 调参策略). The first
+ * three configure real ML/DL parameters and dispatch a baseline batch through
+ * the existing V3 pipeline (modelingTaskApi.createExperimentBatch), so
+ * 训练/结果/部署 are unchanged; 调参策略 embeds ExperimentBatchForm (grid /
+ * bayesian). A 「代码配置」 button (Python executor) is available on the first
+ * three tabs.
+ *
+ * 多模型对照 is the only tab whose dropdown offers both ML and DL tokens:
+ * ExperimentBatchForm builds its options from /v3/tasks/tuning-spaces, i.e.
+ * registry/tuning_spaces.yaml, which has ML models only. It is NOT a fusion —
+ * the backend trains each selected model independently; weighted fusion is
+ * 模型部署 → 多模型部署.
  */
 export default function ModelConfigTabs({ task, onSubmitted }) {
   const taskType = task?.task_type || 'classification'
@@ -154,6 +162,9 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
     })
   }
 
+  // 多模型对照 (UI name). `model_family: 'mixed'` stays: it is the backend's
+  // training_plans family label (training_plan_service._VALID_FAMILIES) and
+  // historical batches carry it; only the user-facing wording changed.
   const submitMixed = async () => {
     let v; try { v = await mixedForm.validateFields() } catch { return }
     if (!v.models?.length) { message.warning('请至少选择一个模型'); return }
@@ -336,11 +347,12 @@ config = {
     },
 }
 `,
-  mixed: `# 混合策略：机器学习 + 深度学习一次对照。
+  mixed: `# 多模型对照：机器学习 + 深度学习各训一遍，每个模型独立出结果（不做融合）。
+# model_family 仍用后端标签 "mixed"；真正的加权融合请到「模型部署 → 多模型部署」。
 ml = ["random_forest", "xgboost", "lightgbm"]
 dl = ["mlp_dl"]
 config = {
-    "name": "混合代码配置",
+    "name": "多模型对照代码配置",
     "strategy_type": "baseline",
     "model_family": "mixed",
     "selected_models": ml + dl,
