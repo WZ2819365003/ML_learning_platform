@@ -1,80 +1,49 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildReportViewModel } from './aiReportViewModel'
+import { buildMetaItems, buildReportViewModel } from './aiReportViewModel'
+import { legacyReport, overviewReport } from './__fixtures__/reportCharts.fixtures'
 
 describe('buildReportViewModel', () => {
-  it('extracts a report-reader summary from a rich AI report payload', () => {
-    const vm = buildReportViewModel({
-      archive_id: 'fb837adc-7150-4a9a-8b4a-000000000000',
-      headline_metrics: [
-        { key: 'ai_score', label: 'AI 总分', value: '95/100' },
-        { key: 'best_model', label: '最佳模型', value: 'random_forest', detail: 'grid_search' },
-      ],
-      charts: [{ id: 'training_curves' }],
-      tables: [{ id: 'data_profile' }, { id: 'metric_comparison' }],
-      markdown: [
-        '# AI 建模报告',
-        '',
-        '## 第一章 结论',
-        '',
-        '### 1.1 综合判断',
-        '',
-        '#### 1.1.1 任务结论',
-        '**总分：95/100。** 本任务整体完成质量优异。',
-        '',
-        '## 第二章 过程与评价',
-      ].join('\n'),
-    }, '复杂训练报告验证')
+  it('takes the cover from headline and meta of the contract payload', () => {
+    const vm = buildReportViewModel(overviewReport, '忽略的任务名')
 
-    expect(vm.title).toBe('AI 建模报告')
-    expect(vm.taskName).toBe('复杂训练报告验证')
-    expect(vm.score).toBe('95/100')
+    expect(vm.title).toBe('测试1-电力负荷预测 · 建模报告')
+    expect(vm.taskName).toBe('测试1-电力负荷预测')
+    expect(vm.headline).toBe('xgboost 胜出，误差不到平均负荷的 1%；但这批模型是随机切分训练的，分数偏乐观。')
+    expect(vm.metaItems).toEqual(['电力负荷预测数据.csv', '目标列 load', '7 个 Run / 5 种模型'])
+    expect(vm.generatedAt).toBe('2026-09-04T10:12:00Z')
     expect(vm.archiveLabel).toBe('fb837adc')
-    expect(vm.chartCount).toBe(1)
-    expect(vm.tableCount).toBe(2)
-    expect(vm.summary).toContain('本任务整体完成质量优异')
-    expect(vm.metrics).toEqual([
-      {
-        key: 'best_model',
-        label: '最佳模型',
-        value: 'random_forest',
-        detail: 'grid_search',
-        tone: 'default',
-      },
-    ])
   })
 
-  it('builds the table of contents from visible report blocks when present', () => {
-    const vm = buildReportViewModel({
-      markdown: [
-        '# AI 建模报告',
-        '',
-        '## 第一章 结论',
-        '',
-        '## 第二章 原始生成内容',
-      ].join('\n'),
-      report_blocks: [
-        {
-          type: 'markdown',
-          id: 'conclusion',
-          markdown: '# AI 建模报告\n\n## 第一章 结论\n\n### 1.1 综合判断\n\n**总分：90/100。** 任务完成质量较好。',
-        },
-        {
-          type: 'markdown',
-          id: 'process_chapter',
-          markdown: '## 第二章 过程与评价\n\n**本章围绕结构化证据展开。**',
-        },
-        {
-          type: 'markdown',
-          id: 'data_profile_explanation',
-          markdown: '### 2.1 数据集概况\n\n#### 2.1.1 数据输入结论\n\n**数据输入明确。** 字段画像可以支撑训练。',
-        },
-      ],
-    }, '目录验证')
+  it('has no score, metric cards or figure counts', () => {
+    const vm = buildReportViewModel(overviewReport)
+    expect(vm.score).toBeUndefined()
+    expect(vm.metrics).toBeUndefined()
+    expect(vm.chartCount).toBeUndefined()
+    expect(vm.tableCount).toBeUndefined()
+    expect(vm.summary).toBeUndefined()
+  })
 
-    expect(vm.summary).toContain('任务完成质量较好')
-    // The table of contents is gone: it duplicated the report's own side rail,
-    // and the two together squeezed the body below the width its tables need.
-    expect(vm.toc).toBeUndefined()
+  it('falls back to the first paragraph and omits the meta row for an old archive', () => {
+    const vm = buildReportViewModel(legacyReport, '旧任务')
+    expect(vm.title).toBe('AI 建模报告')
+    expect(vm.headline).toBe('总分：60/100。 当前不存在可直接认定的全局最优模型。')
+    expect(vm.metaItems).toBeNull()
+    expect(vm.archiveLabel).toBe('legacy-a')
+  })
+
+  it('builds a title from meta or the task name when the markdown has no h1', () => {
+    expect(buildReportViewModel({ markdown: '正文', meta: { task_name: '任务 A' } }).title).toBe('任务 A · 建模报告')
+    expect(buildReportViewModel({ markdown: '正文' }, '任务 B').title).toBe('任务 B · 建模报告')
+    expect(buildReportViewModel({}).headline).toBe('')
+  })
+})
+
+describe('buildMetaItems', () => {
+  it('skips facts the payload does not have rather than printing undefined', () => {
+    expect(buildMetaItems({ dataset_name: 'a.csv' })).toEqual(['a.csv'])
+    expect(buildMetaItems({ run_count: 3 })).toEqual(['3 个 Run'])
+    expect(buildMetaItems({ run_count: 0, model_count: 0 })).toEqual([])
+    expect(buildMetaItems(null)).toBeNull()
   })
 })

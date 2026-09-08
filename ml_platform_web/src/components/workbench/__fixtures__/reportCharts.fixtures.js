@@ -390,7 +390,7 @@ export const overviewReport = {
   evidence: ['leaderboard 取自 7 个 run 的最终评估。'],
 }
 
-/** A legacy archive payload: ECharts options, report_blocks, no headline/meta. */
+/** A legacy archive payload: ECharts options and `tables`, no headline/meta. */
 export const legacyReport = {
   task_id: 'legacy-task',
   archive_id: 'legacy-archive-0001',
@@ -399,6 +399,5 @@ export const legacyReport = {
   markdown: '# AI 建模报告\n\n**总分：60/100。** 当前不存在可直接认定的全局最优模型。\n\n## 第二章 过程与评价\n\n正文。',
   charts: [legacyOptionChart],
   tables: [{ id: 'data_profile', title: '数据概况', columns: [{ key: 'column', title: '列名' }], rows: [{ column: 'load' }] }],
-  report_blocks: [{ type: 'markdown', id: 'conclusion', markdown: '# AI 建模报告\n\n**总分：60/100。**' }],
   run_reports: [],
 }
