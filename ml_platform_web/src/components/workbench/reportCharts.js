@@ -38,7 +38,8 @@ export const REPORT_CHART_THEME = Object.freeze({
   // A single stacked bar at 300px is mostly empty; the exception is documented
   // here rather than sprinkled on the component.
   heights: Object.freeze({ stacked: 200 }),
-  grid: Object.freeze({ top: 20, right: 32, bottom: 32, legendTop: 40, axisNameBottom: 48 }),
+  // `top` leaves a line for marker labels, which sit upright above the plot.
+  grid: Object.freeze({ top: 28, right: 32, bottom: 32, legendTop: 44, axisNameBottom: 48 }),
   // Longest y label we will lay out on one line; anything longer wraps.
   maxLabelWidth: 200,
   labelMargin: 8,
@@ -257,10 +258,13 @@ function verticalMarkLine(items, valueKey = 'value', labelKey = 'label') {
     silent: true,
     animation: false,
     lineStyle: { color: T.colors.accent, type: 'dashed', width: 1.2 },
+    // Upright above the line; ECharts would otherwise rotate the text along it.
     label: {
       show: true,
       formatter: '{b}',
-      position: 'insideEndTop',
+      position: 'end',
+      rotate: 0,
+      distance: 4,
       color: T.colors.accent,
       fontSize: T.fontSize,
       fontFamily: T.fontFamily,
