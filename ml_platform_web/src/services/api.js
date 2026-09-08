@@ -141,9 +141,6 @@ export const modelApi = {
   listAssets(params) {
     return api.get('/models/assets', { params });
   },
-  listModels(params) {
-    return api.get('/models/list', { params });
-  },
   getModelDetail(taskId) {
     return api.get(`/models/${taskId}/detail`);
   },
