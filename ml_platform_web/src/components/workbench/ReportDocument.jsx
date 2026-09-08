@@ -53,6 +53,16 @@ export function splitReportOnCharts(markdown = '') {
   return segments
 }
 
+/**
+ * Charts the prose never placed. New reports place every figure with a
+ * marker; old archives have no markers at all, and their charts would
+ * otherwise vanish, so they follow the prose in payload order.
+ */
+export function unplacedCharts(charts = [], segments = []) {
+  const placed = new Set(segments.filter((s) => s.kind === 'chart').map((s) => s.value))
+  return (charts || []).filter((chart) => !placed.has(String(chart?.id ?? '').toLowerCase()))
+}
+
 /** Drop a leading `# title` line — the cover already shows the title. */
 export function stripLeadingTitle(markdown = '') {
   return String(markdown ?? '').replace(/^\s*#\s+[^\n]*\n+/, '')
@@ -138,6 +148,7 @@ export default function ReportDocument({
   )
   const body = stripTitle ? stripLeadingTitle(markdown) : String(markdown ?? '')
   const segments = useMemo(() => splitReportOnCharts(body), [body])
+  const trailing = useMemo(() => unplacedCharts(charts, segments), [charts, segments])
 
   return (
     <div className={`ai-report-document-body ${className}`.trim()}>
@@ -155,6 +166,7 @@ export default function ReportDocument({
         const spec = chartsById[segment.value]
         return spec ? <ReportChart key={index} spec={spec} /> : null
       })}
+      {trailing.map((spec, index) => <ReportChart key={`trailing-${spec.id || index}`} spec={spec} />)}
       <ReportAppendix tables={appendixTables || []} open={appendixOpen} />
     </div>
   )

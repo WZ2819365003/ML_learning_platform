@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { splitReportOnCharts, stripLeadingTitle } from './ReportDocument'
-import { overviewReport } from './__fixtures__/reportCharts.fixtures'
+import { splitReportOnCharts, stripLeadingTitle, unplacedCharts } from './ReportDocument'
+import { legacyReport, overviewReport } from './__fixtures__/reportCharts.fixtures'
 
 describe('splitReportOnCharts', () => {
   it('splits text around a chart marker', () => {
@@ -51,5 +51,22 @@ describe('stripLeadingTitle', () => {
     expect(stripLeadingTitle('## 结论\n\n# 不是开头的标题')).toBe('## 结论\n\n# 不是开头的标题')
     expect(stripLeadingTitle('')).toBe('')
     expect(stripLeadingTitle()).toBe('')
+  })
+})
+
+describe('unplacedCharts', () => {
+  it('is empty when the prose placed every figure', () => {
+    const segments = splitReportOnCharts(overviewReport.markdown)
+    expect(unplacedCharts(overviewReport.charts, segments)).toEqual([])
+  })
+
+  it('keeps the charts of an old archive whose markdown has no markers', () => {
+    const segments = splitReportOnCharts(legacyReport.markdown)
+    expect(unplacedCharts(legacyReport.charts, segments).map((c) => c.id)).toEqual(['training_curves'])
+  })
+
+  it('matches marker ids case-insensitively', () => {
+    const segments = splitReportOnCharts('{{chart:Leaderboard}}')
+    expect(unplacedCharts([{ id: 'LEADERBOARD' }, { id: 'other' }], segments).map((c) => c.id)).toEqual(['other'])
   })
 })
