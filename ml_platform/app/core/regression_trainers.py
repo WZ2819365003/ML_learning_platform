@@ -79,6 +79,7 @@ class RegressionMixin:
 
         # Final eval on validation set
         final_metrics = {}
+        y_val_pred = None
         if X_val is not None and len(X_val) > 0:
             y_val_pred = self.model.predict(X_val)
             final_metrics = self._compute_regression_metrics(y_val, y_val_pred, eval_metrics)
@@ -104,6 +105,11 @@ class RegressionMixin:
         final_metrics["validation_strategy"] = (
             "time_series_expanding" if temporal_validation else "shuffled_kfold"
         )
+        # Attached after the final_test_ mirror above, so it is not duplicated
+        # under a final_test_val_scatter key.
+        scatter = _validation_scatter(y_val, y_val_pred)
+        if scatter is not None:
+            final_metrics["val_scatter"] = scatter
         return final_metrics
 
     @staticmethod
@@ -131,6 +137,36 @@ class RegressionMixin:
             except Exception:
                 metrics[name] = None
         return metrics
+
+
+_SCATTER_POINTS = 500
+
+
+def _validation_scatter(y_val, y_pred) -> dict[str, Any] | None:
+    """The tail of the validation split, actual next to predicted.
+
+    The deep-learning trainer has kept this window since the predicted-vs-actual
+    chart was added; the tree models computed the same predictions and threw
+    them away, so their sub-reports had no such chart. A contiguous trailing
+    window is kept rather than a random sample so the pairs can be drawn in
+    order as well as as a scatter.
+    """
+    if y_pred is None or y_val is None:
+        return None
+    try:
+        actual = np.asarray(y_val, dtype=float).ravel()
+        predicted = np.asarray(y_pred, dtype=float).ravel()
+    except (TypeError, ValueError):
+        return None
+    n = min(len(actual), len(predicted))
+    if n == 0:
+        return None
+    start = n - min(n, _SCATTER_POINTS)
+    return {
+        "actual": [round(float(v), 6) for v in actual[start:n]],
+        "predicted": [round(float(v), 6) for v in predicted[start:n]],
+        "ordered": True,
+    }
 
 
 # ---------------------------------------------------------------------------
