@@ -267,6 +267,95 @@ export const scatterPairSpec = {
   rows: [],
 }
 
+const MATRIX_TOOLTIP_FIELDS = [
+  { key: 'actual', label: '实际' },
+  { key: 'predicted', label: '预测' },
+  { key: 'count', label: '样本数', format: 'int' },
+  { key: 'pct', label: '占该类', format: 'percent' },
+]
+
+/** Row-major counts to the contract's cells: x is the predicted class, y the actual one. */
+function matrixCells(counts) {
+  return counts.flatMap((row, y) => {
+    const total = row.reduce((sum, n) => sum + n, 0)
+    return row.map((count, x) => ({ x, y, count, pct: total ? Math.round((count / total) * 1000) / 1000 : 0 }))
+  })
+}
+
+// A churn classifier on 1100 held-out rows: it finds most of the churners but
+// misses 68 of them, which is the cell the reader is meant to land on.
+const CHURN_LABELS = ['未流失', '已流失']
+const CHURN_COUNTS = [
+  [812, 61],
+  [68, 159],
+]
+
+/** 分类分报告 · 混淆矩阵 — matrix, 2 classes, counts printed in the cells. */
+export const confusionMatrixSpec = {
+  id: 'confusion_matrix',
+  kind: 'matrix',
+  title: '混淆矩阵',
+  caption: '已流失的 227 人里漏判 68 人（30%）；未流失的误判率只有 7%，模型偏保守。',
+  labels: CHURN_LABELS,
+  cells: matrixCells(CHURN_COUNTS),
+  axis: { x: '预测', y: '实际' },
+  tooltip_fields: MATRIX_TOOLTIP_FIELDS,
+  rows: [],
+}
+
+// Four fault classes, so the cells are smaller and their counts a size down.
+const FAULT_LABELS = ['正常', '过载', '短路', '断线']
+const FAULT_COUNTS = [
+  [1840, 62, 11, 7],
+  [88, 512, 24, 6],
+  [14, 31, 268, 9],
+  [9, 5, 12, 202],
+]
+
+/** 分类分报告 · 混淆矩阵（四类）— matrix, 4 classes; the cell counts shrink. */
+export const confusionMatrix4Spec = {
+  id: 'confusion_matrix_4',
+  kind: 'matrix',
+  title: '混淆矩阵（交叉验证末折）',
+  caption: '过载被判成正常 88 次，是最大的一处混淆；断线几乎不与其它类别相混。',
+  labels: FAULT_LABELS,
+  cells: matrixCells(FAULT_COUNTS),
+  axis: { x: '预测', y: '实际' },
+  tooltip_fields: MATRIX_TOOLTIP_FIELDS,
+  rows: [],
+}
+
+// A steep ROC (AUC 0.94) sampled at 21 thresholds. The FPR values are floats
+// on purpose: the lines renderer used to assume an integer epoch axis.
+const ROC_FPR = [
+  0, 0.008, 0.021, 0.037, 0.058, 0.084, 0.115, 0.152, 0.196, 0.248, 0.309,
+  0.381, 0.464, 0.558, 0.663, 0.775, 0.881, 0.947, 0.982, 0.996, 1,
+]
+const ROC_ROWS = ROC_FPR.map((fpr, i) => ({
+  threshold: Math.round((1 - i / (ROC_FPR.length - 1)) * 1000) / 1000,
+  fpr,
+  tpr: fpr === 0 ? 0 : Math.round(fpr ** (1 / 16) * 10000) / 10000,
+}))
+
+/** 分类分报告 · ROC 曲线 — lines with a float x axis and a chance diagonal. */
+export const rocCurveSpec = {
+  id: 'roc_curve',
+  kind: 'lines',
+  title: 'ROC 曲线',
+  caption: 'AUC 0.94，曲线整体贴着左上角；灰色虚线是随机猜测的水平。',
+  unit: '真正率 (TPR)',
+  x_label: '假正率 (FPR)',
+  x: ROC_FPR,
+  series: [{ name: 'ROC', values: ROC_ROWS.map((r) => r.tpr) }],
+  reference_diagonal: true,
+  tooltip_fields: [
+    { key: 'threshold', label: '阈值', format: '.3f' },
+    { key: 'fpr', label: '假正率', format: '.3f' },
+    { key: 'tpr', label: '真正率', format: '.3f' },
+  ],
+  rows: ROC_ROWS,
+}
+
 /** Every fixture, keyed by kind, for table-driven tests. */
 export const specsByKind = {
   hbar: leaderboardSpec,
@@ -275,10 +364,12 @@ export const specsByKind = {
   stacked: fieldCompositionSpec,
   lines: lossHistorySpec,
   scatter_pair: scatterPairSpec,
+  matrix: confusionMatrixSpec,
 }
 
 export const allSpecs = [
   leaderboardSpec, foldDotsSpec, targetHistSpec, fieldCompositionSpec, shapBarsSpec, lossHistorySpec, scatterPairSpec,
+  confusionMatrixSpec, confusionMatrix4Spec, rocCurveSpec,
 ]
 
 /** A legacy archive chart: a ready ECharts option, no `kind`. */
