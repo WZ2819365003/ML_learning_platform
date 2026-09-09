@@ -183,6 +183,11 @@ def _compact_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
             # point count, so nothing is saved by cutting it to 120 here.
             limit = _SCATTER_POINTS if key == "val_scatter" else 120
             compact[key] = _compact_curve_value(metrics[key], limit=limit)
+    # Travels with val_scatter. Alphabetical order puts it past the sixteen-key
+    # cap above, and without it a cross-validation fold is captioned as a
+    # hold-out — the chart claims an evaluation that never happened.
+    if "val_scatter_source" in metrics:
+        compact["val_scatter_source"] = metrics["val_scatter_source"]
     if isinstance(shap, dict) and shap:
         top = sorted(
             shap.items(),
@@ -824,7 +829,8 @@ def _build_meta(context: dict[str, Any]) -> dict[str, Any]:
         "task_type": task.get("task_type"),
         "objective_metric": task.get("objective_metric"),
         "run_count": sum(int(v) for v in counts.values()) if counts else len(board),
-        "model_count": len({e.get("model_type") for e in board if e.get("model_type")}),
+        "model_count": (len(context.get("model_types") or [])
+                        or len({e.get("model_type") for e in board if e.get("model_type")})),
     }
 
 
@@ -1118,6 +1124,13 @@ async def build_task_report_context(
             }
             for exp in experiments
         ],
+        # Over every run, not the top-k leaderboard: with eighteen runs the
+        # deep-learning models rank past the cut, and the cover said
+        # "18 个 Run / 3 种模型" for a task that trained five.
+        "model_types": sorted({
+            str(_model_name_from_params(run.params) or "")
+            for run in runs
+        } - {""}),
         "run_status_counts": status_counts,
         "leaderboard": [_serialize_leaderboard_entry(entry) for entry in leaderboard],
         "successful_run_examples": [

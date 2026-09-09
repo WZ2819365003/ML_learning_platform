@@ -295,3 +295,38 @@ class TestLeadSentenceBoldingRespectsDecimals:
         out = _highlight_report_lead_sentences("A 是 0.81%，B 是 1.6%，都可以。第二句。")
         assert "0.81%" in out and "1.6%" in out
         assert "**A 是 0.81%，B 是 1.6%，都可以。**" in out
+
+
+class TestScatterSourceSurvivesCompaction:
+    def test_the_source_flag_is_kept_past_the_key_cap(self):
+        # Sixteen scalar keys sorted alphabetically leave "val_scatter_source"
+        # on the far side of the cap; without it the fold window is captioned
+        # as a hold-out.
+        metrics = {f"a_metric_{i:02d}": float(i) for i in range(20)}
+        metrics["val_scatter"] = {"actual": [1.0, 2.0], "predicted": [1.0, 2.0]}
+        metrics["val_scatter_source"] = "cv_last_fold"
+        out = _compact_metrics(metrics)
+        assert out["val_scatter_source"] == "cv_last_fold"
+        assert "val_scatter" in out
+
+
+class TestCoverModelCountCountsEveryRun:
+    def test_model_count_is_not_limited_to_the_top_k_leaderboard(self):
+        # The leaderboard handed to the report is capped at top_k; the models
+        # ranked past the cap are still models this task trained.
+        from app.services.ai_report_service import _build_meta
+        ctx = {
+            "task": {"name": "T", "task_type": "regression", "objective_metric": "rmse",
+                     "target_column": "y", "dataset_name": "d.csv"},
+            "dataset": {"name": "d.csv"},
+            "leaderboard": [{"model_type": m} for m in ("a", "b", "c")],
+            "model_types": ["a", "b", "c", "d", "e"],
+            "run_status_counts": {"SUCCESS": 18},
+        }
+        assert _build_meta(ctx)["model_count"] == 5
+
+    def test_falls_back_to_the_leaderboard_for_older_contexts(self):
+        from app.services.ai_report_service import _build_meta
+        ctx = {"task": {}, "dataset": {}, "leaderboard": [{"model_type": m} for m in ("a", "b")],
+               "run_status_counts": {"SUCCESS": 2}}
+        assert _build_meta(ctx)["model_count"] == 2
