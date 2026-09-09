@@ -1,6 +1,14 @@
-"""AI-assisted task report generation."""
+"""AI-assisted task report generation.
+
+The end-to-end checks here run the real pipeline against a seeded task and
+assert the payload contract the page consumes: `markdown` with {{chart:id}}
+markers, `charts` as semantic specs, `headline`, `meta`, `appendix_tables`,
+`run_reports` — and none of the retired `report_blocks` / `tables` /
+`headline_metrics`.
+"""
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -17,8 +25,16 @@ from app.models.database import (
     PlatformExperiment,
     get_db,
 )
-from app.services import ai_report_service
+from app.services import ai_report_service, report_charts
 from app.services.modeling_task_service import set_task_final_evaluation_state
+
+_CONTRACT_KEYS = {
+    "task_id", "archive_id", "archived_at", "generated_at", "model", "source",
+    "markdown", "run_reports", "runs_total", "runs_reported", "best_run_id",
+    "report_schema_version", "headline", "meta", "charts", "appendix_tables", "evidence",
+}
+_RETIRED_KEYS = ("report_blocks", "tables", "headline_metrics")
+_CHART_KINDS = {"hbar", "dots", "hist", "stacked", "lines", "scatter_pair"}
 
 
 def _settings(**overrides):
@@ -168,6 +184,13 @@ async def _seed_task(db):
     return task.id
 
 
+def _assert_spec(chart: dict) -> None:
+    assert chart["kind"] in _CHART_KINDS, chart["id"]
+    assert chart["title"] and chart["caption"], chart["id"]
+    assert chart["tooltip_fields"] and chart["rows"], chart["id"]
+    assert report_charts.renderer_leaks(chart) == [], chart["id"]
+
+
 async def test_generate_ai_report_requires_configured_key(db):
     with pytest.raises(HTTPException) as exc:
         await ai_report_service.generate_ai_task_report(
@@ -180,7 +203,7 @@ async def test_generate_ai_report_requires_configured_key(db):
     assert "ARK_API_KEY" in str(exc.value.detail)
 
 
-async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, monkeypatch):
+async def test_generate_ai_report_renders_facts_and_asks_only_for_the_gaps(db, monkeypatch):
     task_id = await _seed_task(db)
     captured = {}
 
@@ -192,20 +215,9 @@ async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, m
         return (
             "# AI 建模报告\n\n"
             "## 第一章 结论\n\n"
-            "### 1.1 综合判断\n\n"
-            "#### 1.1.1 任务结论\n\n"
             "总分：82/100。本任务可以进入小流量验证。\n\n"
-            "#### 1.1.2 主要依据\n\n"
-            "最终测试 accuracy 是核心依据。\n\n"
-            "## 第二章 过程与评价\n\n"
-            "### 2.1 训练过程\n\n"
-            "#### 2.1.1 过程结论\n\n"
-            "训练曲线显示 loss 下降。\n\n"
             "|模型|分数|\n|---|---|\n|random_forest|0.81|\n\n"
-            "## 第三章 建议\n\n"
-            "### 3.1 后续工作\n\n"
-            "#### 3.1.1 验证建议\n\n"
-            "建议补充稳定性验证。"
+            "## 第三章 建议\n\n建议补充稳定性验证。"
         )
 
     monkeypatch.setattr(ai_report_service, "_request_chat_completion", fake_request)
@@ -227,10 +239,6 @@ async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, m
     assert "多自然段" not in prompt_text
     assert "总分：xx/100" not in prompt_text
 
-    # The exemplar brief these lines used to check now belongs only to
-    # generate_ai_report_from_context, which still writes a report from a
-    # serialised context; test_ai_report_prompt covers it there.
-
     # The task-report path no longer sends a brief. It renders the document
     # from computed facts and asks only for the <<…>> sentences, so what the
     # model receives is the finished report plus a numbered list of gaps.
@@ -245,106 +253,79 @@ async def test_generate_ai_report_prompt_asks_for_judgement_not_a_skeleton(db, m
 
     assert result["task_id"] == task_id
     assert result["model"] == "doubao-test"
-    # The markdown is now rendered, not returned by the model: the stub reply
-    # above is not JSON, so no slot is filled and every sentence in the report
-    # is one the backend computed.
-    assert "## 结论" in result["markdown"]
-    assert "<<" not in result["markdown"], "no unfilled slot is printed"
-    assert result["report_schema_version"] == "ai_report.rich.v1"
+    assert result["report_schema_version"] == "ai_report.rich.v2"
     assert result["archive_id"]
-    assert any(item["key"] == "ai_score" for item in result["headline_metrics"])
-    assert not any(chart["id"] == "feature_importance" for chart in result["charts"])
-    assert any(chart["id"] == "training_curves" for chart in result["charts"])
-    assert any(chart["id"] == "roc_curve" for chart in result["charts"])
-    assert any(chart["id"] == "prediction_curve" for chart in result["charts"])
-    assert all(chart["id"] != "leaderboard_top_runs" for chart in result["charts"])
-    assert all(chart["id"] != "run_status_distribution" for chart in result["charts"])
-    table_ids = {table["id"] for table in result["tables"]}
-    assert table_ids == {"data_profile", "parameter_settings", "metric_comparison"}
-    assert not any(table["id"] == "model_training_summary" for table in result["tables"])
-    assert not any(table["id"] == "metric_glossary" for table in result["tables"])
-    assert not any(table["id"] == "model_training_process" for table in result["tables"])
-    assert not any(table["id"] == "recommendation_plan" for table in result["tables"])
-    assert not any(table["id"] == "experiments" for table in result["tables"])
-    parameter_table = next(table for table in result["tables"] if table["id"] == "parameter_settings")
-    parameter_columns = [column["key"] for column in parameter_table["columns"]]
-    assert "key_params" in parameter_columns
-    assert any("random_forest" in row["model_type"] for row in parameter_table["rows"])
-    metric_table = next(table for table in result["tables"] if table["id"] == "metric_comparison")
-    metric_columns = [column["key"] for column in metric_table["columns"]]
-    assert "test_accuracy" in metric_columns
-    assert "test_f1" in metric_columns
-    assert "test_roc_auc" in metric_columns
-    assert "test_rmse" not in metric_columns
-    assert "test_mae" not in metric_columns
-    blocks = result["report_blocks"]
-    assert blocks[0]["type"] == "markdown"
-    assert blocks[0]["id"] == "conclusion"
-    # The six server-written chapters are gone; the body is the model's prose
-    # followed by the computed tables and charts.
-    assert not any(block["id"] == "task_scope" for block in blocks)
-    assert any(block["id"] == "data_profile_block" for block in blocks)
-    assert not any(block["id"] == "process_chapter" for block in blocks)
-    for gone in ("data_profile_explanation", "model_training_process_explanation",
-                 "effect_summary", "parameter_explanation", "ai_explanation"):
-        assert not any(block["id"] == gone for block in blocks), gone
-    # What is left is the prose and the artifacts it refers to.
-    assert {b["id"] for b in blocks} <= {
-        "conclusion", "data_profile_block", "parameter_settings_block",
-        "training_curves_block", "metric_comparison_block", "roc_curve_block",
-        "prediction_curve_block",
+
+    # The payload contract: nothing more, and none of the retired shapes.
+    assert set(result) == _CONTRACT_KEYS
+    for gone in _RETIRED_KEYS:
+        assert gone not in result, gone
+
+    # The markdown is rendered, not returned by the model: the stub reply above
+    # is not JSON, so no slot is filled, every sentence is one the backend
+    # computed, and the model's table never reaches the document.
+    markdown = result["markdown"]
+    assert markdown.startswith("# 客户流失预测 · 建模报告")
+    assert "## 结论" in markdown
+    assert "<<" not in markdown, "no unfilled slot is printed"
+    assert "|模型|分数|" not in markdown
+    assert not re.search(r"^\|", markdown, flags=re.M), "no tables in the body"
+    assert "第一章" not in markdown and "总分" not in markdown
+
+    # One cover sentence, separate from the conclusion's opening.
+    assert result["headline"].startswith("random_forest 胜出")
+    assert result["headline"] not in markdown
+
+    assert result["meta"] == {
+        "task_name": "客户流失预测",
+        "dataset_name": "churn.csv",
+        "target_column": "churn",
+        "task_type": "classification",
+        "objective_metric": "accuracy",
+        "run_count": 2,
+        "model_count": 2,
     }
-    assert any(block["type"] == "table" and block["table_id"] == "data_profile" for block in blocks)
-    assert any(block["type"] == "table" and block["table_id"] == "parameter_settings" for block in blocks)
-    assert any(block["type"] == "table" and block["table_id"] == "metric_comparison" for block in blocks)
-    assert any(block["type"] == "chart" and block["chart_id"] == "training_curves" for block in blocks)
-    assert any(block["type"] == "chart" and block["chart_id"] == "roc_curve" for block in blocks)
-    assert any(block["type"] == "chart" and block["chart_id"] == "prediction_curve" for block in blocks)
-    assert not any(block["type"] == "metric_strip" for block in blocks)
-    assert not any(block["type"] == "evidence" for block in blocks)
-    assert not any(block["id"] == "input_output_explanation" for block in blocks)
-    assert not any(block["id"] == "metric_visual_explanation" for block in blocks)
-    assert not any(block["type"] == "table" and block["table_id"] == "model_training_summary" for block in blocks)
-    assert not any(block["type"] == "table" and block["table_id"] == "model_training_process" for block in blocks)
-    assert not any(block["type"] == "table" and block["table_id"] == "metric_glossary" for block in blocks)
-    assert not any(block["type"] == "table" and block["table_id"] == "recommendation_plan" for block in blocks)
-    assert not any(block["type"] == "table" and block["table_id"] == "experiments" for block in blocks)
-    assert not any(block.get("chart_id") == "leaderboard_top_runs" for block in blocks)
-    assert not any(block.get("chart_id") == "run_status_distribution" for block in blocks)
-    assert not any(block.get("chart_id") == "feature_importance" for block in blocks)
-    report_text = "\n".join(
-        block.get("markdown", "")
-        for block in blocks
-        if block["type"] == "markdown"
-    )
-    assert "|模型|分数|" not in report_text
-    # No numbered chapters at all any more, from either source: the prompt does
-    # not ask for them and the server no longer appends its own. They were what
-    # put "第二章 过程与评价" in the table of contents of a report with no
-    # chapters, and what made the whole thing read like a filled-in template.
-    # Only headings the *server* used to append are checked here. The stub
-    # reply above still contains 第一章/第二章/第三章 of its own, and whatever the
-    # model writes passes through untouched — the point is that nothing is
-    # bolted on after it any more.
-    for scaffold in ("1.2 任务范围", "1.2.1 入参与出参", "2.2 参数设置",
-                     "2.4 模型评价", "任务目标与完成情况", "数据概况与字段解释"):
-        assert scaffold not in report_text, scaffold
-    # The report is a reading flow: text, then tables/charts, then more text.
-    block_types = [block["type"] for block in blocks[:10]]
-    # One markdown block now — the model's report, whole. It used to be five or
-    # more because the server interleaved its own chapters between the tables.
-    assert block_types.count("markdown") == 1
-    assert block_types[0] == "markdown"
-    assert "table" in block_types
-    data_profile_index = next(i for i, block in enumerate(blocks) if block.get("table_id") == "data_profile")
-    parameter_index = next(i for i, block in enumerate(blocks) if block.get("table_id") == "parameter_settings")
-    training_chart_index = next(i for i, block in enumerate(blocks) if block.get("chart_id") == "training_curves")
-    metric_table_index = next(i for i, block in enumerate(blocks) if block.get("table_id") == "metric_comparison")
-    # No trailing "suggestions" block: the prose used to be sliced apart on
-    # 第一章/第三章 headings and reassembled around the artifacts. It is kept
-    # whole now, so the artifacts simply follow it in reading order.
-    assert not any(block["id"] == "suggestions" for block in blocks)
-    assert data_profile_index < parameter_index < training_chart_index < metric_table_index
+
+    # Every marker in the document is backed by a spec, in document order, and
+    # every spec is a placed marker. This task has no folds and no target
+    # histogram, so those two figures are dropped rather than shipped empty.
+    placed = re.findall(r"\{\{chart:([a-z0-9_]+)\}\}", markdown)
+    assert placed == ["leaderboard_bars", "field_composition", "shap_bars"]
+    assert [chart["id"] for chart in result["charts"]] == placed
+    for chart in result["charts"]:
+        _assert_spec(chart)
+    leaderboard = result["charts"][0]
+    assert leaderboard["kind"] == "hbar"
+    assert leaderboard["categories"] == ["random_forest", "logistic_regression"]
+    assert leaderboard["series"][0]["values"] == [0.84, 0.79]
+    assert {f["key"] for f in leaderboard["tooltip_fields"]} >= {"accuracy", "r2", "std", "scheme"}
+
+    # The two wide tables live in the appendix, in the shape they always had.
+    assert [table["id"] for table in result["appendix_tables"]] == ["data_profile", "parameter_settings"]
+    parameter_table = result["appendix_tables"][1]
+    assert "key_params" in [column["key"] for column in parameter_table["columns"]]
+    assert any("random_forest" in row["model_type"] for row in parameter_table["rows"])
+    assert any(row["column"] == "使用时长（tenure）" for row in result["appendix_tables"][0]["rows"])
+
+    assert any("最终测试指标：final_test_accuracy = 0.8100" in line for line in result["evidence"])
+
+    # One sub-report per run, each carrying only the figures it has data for.
+    assert result["runs_total"] == 2 and result["runs_reported"] == 2
+    by_model = {r["model_type"]: r for r in result["run_reports"]}
+    assert set(by_model) == {"random_forest", "logistic_regression"}
+    for report in result["run_reports"]:
+        assert {"run_id", "model_type", "markdown", "charts"} <= set(report)
+        assert report["markdown"].startswith(f"# {report['model_type']} · 分报告")
+        assert "<<" not in report["markdown"]
+        assert not re.search(r"^\|", report["markdown"], flags=re.M)
+        assert not re.search(r"不值得|建议|应当|优先", report["markdown"])
+        for chart in report["charts"]:
+            _assert_spec(chart)
+    assert [c["id"] for c in by_model["random_forest"]["charts"]] == ["loss_history"]
+    assert by_model["random_forest"]["charts"][0]["y_log"] is True
+    assert by_model["logistic_regression"]["charts"] == []
+    assert "本模型即本次最优" in by_model["random_forest"]["markdown"]
+    assert "与最优的 random_forest" in by_model["logistic_regression"]["markdown"]
 
     archived = (
         await db.execute(
@@ -359,12 +340,7 @@ async def test_ai_report_archive_list_and_detail(db, monkeypatch):
     task_id = await _seed_task(db)
 
     async def fake_request(settings, messages):
-        return (
-            "# AI 建模报告\n\n"
-            "## 一、结论\n\n总分：82/100。random_forest 可以进入小流量验证。\n\n"
-            "## 二、解释\n\n训练曲线显示 loss 下降。\n\n"
-            "## 三、建议\n\n继续验证。"
-        )
+        return '{"1": "下一步：在封存测试集上复核 random_forest。"}'
 
     monkeypatch.setattr(ai_report_service, "_request_chat_completion", fake_request)
 
@@ -382,9 +358,17 @@ async def test_ai_report_archive_list_and_detail(db, monkeypatch):
     # Titled after the task now, not with a generic label; the archive stores
     # whatever heading the rendered report carries.
     assert "建模报告" in archives[0]["title"]
+    # The spliced sentence is in the archived document, and nothing else moved.
+    assert "下一步：在封存测试集上复核 random_forest。" in generated["markdown"]
     assert restored["archive_id"] == generated["archive_id"]
     assert restored["task_id"] == task_id
-    assert restored["report_blocks"][0]["id"] == "conclusion"
+    assert restored["markdown"] == generated["markdown"]
+    assert restored["headline"] == generated["headline"]
+    assert [c["id"] for c in restored["charts"]] == [c["id"] for c in generated["charts"]]
+    assert len(restored["run_reports"]) == 2
+    assert restored["report_schema_version"] == "ai_report.rich.v2"
+    for gone in _RETIRED_KEYS:
+        assert gone not in restored, gone
 
 
 async def test_ai_report_keeps_model_identifiers_untranslated(monkeypatch):
@@ -412,7 +396,7 @@ async def test_ai_report_keeps_model_identifiers_untranslated(monkeypatch):
     assert "ARIMA" in result["markdown"]
 
 
-def test_rich_report_uses_run_level_final_metric_when_task_final_state_is_open():
+def test_rich_report_evidence_uses_run_level_final_metric_when_task_final_state_is_open():
     context = {
         "task": {
             "name": "糖尿病预测",
@@ -458,26 +442,21 @@ def test_rich_report_uses_run_level_final_metric_when_task_final_state_is_open()
 
     payload = ai_report_service.build_rich_report_payload(
         context,
-        "# AI 建模报告\n\n## 一、结论\n\n总分：80/100。\n\n## 二、解释\n\n有 Run 级测试指标。\n\n## 三、建议\n\n继续验证。",
+        "# 糖尿病预测 · 建模报告\n\n## 结论\n\n有 Run 级测试指标。\n",
     )
 
-    final_metric = next(item for item in payload["headline_metrics"] if item["key"] == "final_test")
-    assert final_metric["value"] == "0.7597"
-    best_model = next(item for item in payload["headline_metrics"] if item["key"] == "best_model")
-    assert best_model["value"] == "random_forest"
-    report_text = "\n".join(
-        block.get("markdown", "")
-        for block in payload["report_blocks"]
-        if block["type"] == "markdown"
-    )
-    assert "尚未执行最终测试" not in report_text
-    # The sentence that repeated this in the chapter scaffold is gone. The fact
-    # itself is unchanged — it reaches the reader through the evidence list and
-    # the headline metric strip, asserted just below and above.
-    assert any("Run 级最终测试指标" in item for item in payload["evidence"])
+    # The run-level final score is a fact the evidence list states, keyed to
+    # the run it belongs to; the leaderboard order (selection score) still
+    # decides the headline.
+    assert any("Run 级最终测试指标：accuracy = 0.7597" in item for item in payload["evidence"])
+    assert any("当前最终测试最佳：random_forest" in item for item in payload["evidence"])
+    assert not any("尚未执行最终评估" in item for item in payload["evidence"])
+    assert payload["headline"].startswith("logistic_regression 胜出")
+    for gone in _RETIRED_KEYS:
+        assert gone not in payload, gone
 
 
-def test_training_chart_falls_back_to_trial_level_metrics_without_history():
+def test_payload_charts_are_the_specs_the_markdown_places():
     context = {
         "task": {
             "name": "设备故障预测",
@@ -534,19 +513,27 @@ def test_training_chart_falls_back_to_trial_level_metrics_without_history():
         "successful_run_examples": [],
     }
 
-    payload = ai_report_service.build_rich_report_payload(
-        context,
-        "# AI 建模报告\n\n## 第一章 结论\n\n总分：90/100。\n\n## 第二章 过程与评价\n\n训练过程稳定。\n\n## 第三章 建议\n\n继续验证。",
+    # No marker, no chart: a spec the page never places is payload for nothing.
+    bare = ai_report_service.build_rich_report_payload(context, "# 报告\n\n## 结论\n\n三次训练。\n")
+    assert bare["charts"] == []
+
+    placed = ai_report_service.build_rich_report_payload(
+        context, "# 报告\n\n## 结论\n\n三次训练。\n\n{{chart:leaderboard_bars}}\n",
     )
+    assert [chart["id"] for chart in placed["charts"]] == ["leaderboard_bars"]
+    chart = placed["charts"][0]
+    _assert_spec(chart)
+    assert chart["kind"] == "hbar"
+    # Three trials of one model are three bars, told apart by a suffix.
+    assert chart["categories"] == ["random_forest", "random_forest #2", "random_forest #3"]
+    assert [s["name"] for s in chart["series"]] == ["交叉验证"]
+    assert chart["series"][0]["values"] == [0.96, 0.95, 0.955]
+    # A score metric has no "1% of the target mean" line.
+    assert chart["reference_lines"] == []
+    assert "option" not in chart
 
-    chart = next(chart for chart in payload["charts"] if chart["id"] == "training_curves")
-    assert "Trial" in chart["option"]["xAxis"]["name"]
-    assert "交叉验证平均准确率" in {series["name"] for series in chart["option"]["series"]}
-    assert "最终测试准确率" in {series["name"] for series in chart["option"]["series"]}
-    assert any(block.get("chart_id") == "training_curves" for block in payload["report_blocks"])
 
-
-def test_rich_report_uses_reader_facing_field_and_metric_labels():
+def test_appendix_data_profile_uses_reader_facing_field_labels():
     context = {
         "task": {
             "name": "客户流失预测",
@@ -590,25 +577,14 @@ def test_rich_report_uses_reader_facing_field_and_metric_labels():
 
     payload = ai_report_service.build_rich_report_payload(
         context,
-        "# AI 建模报告\n\n## 第一章 结论\n\n总分：88/100。\n\n## 第三章 建议\n\n继续验证。",
+        "# 客户流失预测 · 建模报告\n\n## 结论\n\n一个模型。\n",
     )
 
-    data_table = next(table for table in payload["tables"] if table["id"] == "data_profile")
-    metric_table = next(table for table in payload["tables"] if table["id"] == "metric_comparison")
-    report_text = "\n".join(
-        block.get("markdown", "")
-        for block in payload["report_blocks"]
-        if block["type"] == "markdown"
-    )
-
+    data_table = next(table for table in payload["appendix_tables"] if table["id"] == "data_profile")
     assert any(row["column"] == "月费用（monthly_charges）" for row in data_table["rows"])
     assert any(row["column"] == "空气温度（Air temperature [K]）" for row in data_table["rows"])
     assert any(row["column"] == "是否流失（churn）" for row in data_table["rows"])
-    assert metric_table["rows"][0]["selection_metric"] == "交叉验证平均准确率（selection_cv_mean_accuracy）=0.8400"
-    # Was a sentence in the removed chapter scaffold. The number still reaches
-    # the reader from the comparison table, keyed to the model it belongs to.
-    assert metric_table["rows"][0]["model_type"] == "random_forest"
-    assert metric_table["rows"][0]["test_accuracy"] == "0.8100"
+    assert any("最终测试指标：final_test_accuracy = 0.8100" in item for item in payload["evidence"])
 
 
 def test_highlighted_lead_sentences_are_split_into_readable_paragraphs():
@@ -642,24 +618,35 @@ async def test_ai_report_route_returns_markdown_payload(
             "source": "doubao",
             "generated_at": "2026-07-26T00:00:00+00:00",
             "archived_at": "2026-07-26T00:00:00+00:00",
-            "markdown": "# AI 建模报告\n\n## 一、结论\n\n总分：80/100。",
-            "report_schema_version": "ai_report.rich.v1",
-            "headline_metrics": [{"key": "ai_score", "label": "AI 总分", "value": "80/100"}],
-            "charts": [],
-            "tables": [],
+            "markdown": "# 客户流失预测 · 建模报告\n\n## 结论\n\nrandom_forest 表现最好。\n\n{{chart:leaderboard_bars}}\n",
+            "report_schema_version": "ai_report.rich.v2",
+            "headline": "random_forest 胜出，准确率 0.84；各项验证检查已通过。",
+            "meta": {"task_name": "客户流失预测", "dataset_name": "churn.csv", "target_column": "churn",
+                     "run_count": 2, "model_count": 2},
+            "charts": [{"id": "leaderboard_bars", "kind": "hbar", "title": "两个模型的准确率",
+                        "caption": "random_forest 以 0.84 领先。", "unit": "准确率",
+                        "tooltip_fields": [{"key": "accuracy", "label": "准确率"}],
+                        "rows": [{"category": "random_forest", "accuracy": 0.84}],
+                        "categories": ["random_forest"],
+                        "series": [{"name": "交叉验证", "values": [0.84], "error": None, "color_role": "primary"}],
+                        "reference_lines": []}],
+            "appendix_tables": [],
             "evidence": [],
-            "report_blocks": [{"type": "markdown", "id": "conclusion", "markdown": "## 一、结论\n\n总分：80/100。"}],
+            "run_reports": [],
+            "runs_total": 0,
+            "runs_reported": 0,
+            "best_run_id": None,
         }
 
     async def fake_list(db, task_id, **_kwargs):
         return [{
             "id": "report-1",
             "task_id": task_id,
-            "title": "AI 建模报告",
+            "title": "客户流失预测 · 建模报告",
             "model": "doubao-test",
             "source": "doubao",
             "generated_at": "2026-07-26T00:00:00+00:00",
-            "ai_score": "80/100",
+            "ai_score": None,
         }]
 
     async def fake_get(db, task_id, report_id, **_kwargs):
@@ -685,10 +672,14 @@ async def test_ai_report_route_returns_markdown_payload(
     body = response.json()
     assert body["task_id"] == "task-1"
     assert body["source"] == "doubao"
-    assert body["markdown"].startswith("# AI 建模报告")
-    assert body["report_schema_version"] == "ai_report.rich.v1"
-    assert body["headline_metrics"][0]["label"] == "AI 总分"
-    assert body["report_blocks"][0]["id"] == "conclusion"
+    assert body["markdown"].startswith("# 客户流失预测 · 建模报告")
+    assert body["report_schema_version"] == "ai_report.rich.v2"
+    assert body["headline"].startswith("random_forest 胜出")
+    assert body["meta"]["task_name"] == "客户流失预测"
+    assert body["charts"][0]["kind"] == "hbar"
+    assert "option" not in body["charts"][0]
+    for gone in _RETIRED_KEYS:
+        assert gone not in body, gone
     assert body["archive_id"] == "report-1"
     assert list_response.status_code == 200
     assert list_response.json()["items"][0]["id"] == "report-1"

@@ -66,10 +66,15 @@ def _lookup(facts: dict[str, Any], path: str) -> Any:
 
 
 def _truthy(value: Any) -> bool:
-    # A computed 0 or 0.0 is a real fact, not an absent one; only None and the
-    # empty string/collection mean "this section has nothing to say".
+    # A computed 0 or 0.0 is a real fact, not an absent one; only None, a
+    # boolean False and the empty string/collection mean "this section has
+    # nothing to say". Treating False as present kept {{#if fields.has_groups}}
+    # open for a dataset with no constructed features, and the model was then
+    # asked what those features were solving.
     if value is None:
         return False
+    if isinstance(value, bool):
+        return value
     if isinstance(value, (str, list, tuple, dict)):
         return len(value) > 0
     return True
@@ -167,7 +172,9 @@ def apply_writing(markdown: str, answers: Any) -> tuple[str, int]:
         filled += 1
         return value.strip()
 
-    return _WRITE.sub(_sub, markdown), filled
+    # A slot that stood on its own line leaves a run of blank lines behind when
+    # it goes unanswered; fold them the way render() does.
+    return re.sub(r"\n{3,}", "\n\n", _WRITE.sub(_sub, markdown)), filled
 
 
 def integrity_issues(markdown: str) -> list[str]:
@@ -213,6 +220,7 @@ _SYSTEM = (
     "你是机器学习结果解读助手。你会看到一份已经写好的报告，其中的数字、模型名、判定"
     "全部由系统算出，不可更改。你的唯一工作是补写文中标注的空位。"
     "只依据报告里已有的事实写作，绝不引入新的数字、模型名或结论。"
+    "不写建议、不做资源或优先级判断、不评价是否值得。"
 )
 
 

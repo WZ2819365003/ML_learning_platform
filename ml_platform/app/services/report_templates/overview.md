@@ -2,36 +2,34 @@
 
 ## 结论
 
-{{conclusion.sentence}}{{final_eval.sentence}}评估就绪度 {{readiness.score}}/100，{{readiness.gap_note}}。{{#if next_step.sentence}}{{next_step.sentence}}{{/if}}
+{{conclusion.verdict}}{{conclusion.runner}}{{conclusion.others}}
 
-{{#if validation.risk_sentence}}
-{{validation.risk_sentence}}
-{{/if}}
+{{risk.sentence}}<<用一句话写下一步该做什么，以“下一步”开头；只说动作，不评价优先级或值不值得>>
 
-{{#if duplicates.note}}
-需注意{{duplicates.note}}；真正的次优模型是 {{runner_up.model}}，{{gap.verdict_short}}（见下节）。
-{{/if}}
+{{chart:leaderboard_bars}}
 
-## 模型表现
+## 模型差距
 
-{{runs.summary}}
+{{chart:fold_dots}}
 
-{{#if gap.sentence}}
-{{gap.sentence}}<<据此说明选型上还可以看哪些因素，一句>>{{#if third.sentence}} {{third.sentence}}{{/if}}
-{{/if}}
-
-{{#if families.caveat}}
-{{families.caveat}}
-{{/if}}
-
-{{tables.leaderboard}}
-
-{{readiness.rubric}}
+{{gaps.sentence}}<<除了误差，据此选型还看什么，一句>>
 
 ## 数据集
 
 {{ds.shape_sentence}}
 
-{{fields.summary_sentence}}{{shap.evidence_sentence}}<<结合下面的字段表说明这批构造特征在解决什么问题、模型为什么依赖它们，两到三句>>
+{{chart:target_hist}}
 
-{{tables.fields}}
+{{chart:field_composition}}
+
+{{#if fields.has_groups}}
+<<这批构造特征在解决什么问题，两句>>
+{{/if}}
+
+{{#if shap.lead_sentence}}
+## 特征依赖
+
+{{chart:shap_bars}}
+
+{{shap.lead_sentence}}<<这带来什么部署风险，一句>>
+{{/if}}
