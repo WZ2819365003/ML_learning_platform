@@ -60,7 +60,12 @@ export function splitReportOnCharts(markdown = '') {
  */
 export function unplacedCharts(charts = [], segments = []) {
   const placed = new Set(segments.filter((s) => s.kind === 'chart').map((s) => s.value))
-  return (charts || []).filter((chart) => !placed.has(String(chart?.id ?? '').toLowerCase()))
+  return chartSpecs(charts).filter((chart) => !placed.has(String(chart.id ?? '').toLowerCase()))
+}
+
+/** The usable entries of a payload's `charts`: objects only, a hole never throws. */
+function chartSpecs(charts) {
+  return Array.isArray(charts) ? charts.filter((chart) => chart && typeof chart === 'object') : []
 }
 
 /** Drop a leading `# title` line — the cover already shows the title. */
@@ -143,7 +148,7 @@ export default function ReportDocument({
   className = '',
 }) {
   const chartsById = useMemo(
-    () => Object.fromEntries((charts || []).map((chart) => [String(chart.id).toLowerCase(), chart])),
+    () => Object.fromEntries(chartSpecs(charts).map((chart) => [String(chart.id ?? '').toLowerCase(), chart])),
     [charts],
   )
   const body = stripTitle ? stripLeadingTitle(markdown) : String(markdown ?? '')
