@@ -295,8 +295,45 @@ function verticalMarkLine(items, valueKey = 'value', labelKey = 'label', inverte
       fontSize: T.fontSize,
       fontFamily: T.fontFamily,
     },
-    data: (items || []).map((item) => ({ xAxis: item[valueKey], name: item[labelKey] || '' })),
+    data: staggerCollidingLabels(items || [], valueKey, labelKey),
   }
+}
+
+/**
+ * Mark lines that land on nearly the same x, with their labels stacked.
+ *
+ * A zero-inflated target puts P25 and the median both at 0, and their labels
+ * printed on top of each other — "P25" and "中位数" interleaved into
+ * "P中位数25". Labels within 4% of the axis span step down a line each.
+ */
+function staggerCollidingLabels(items, valueKey, labelKey) {
+  const values = items
+    .map((item) => Number(item?.[valueKey]))
+    .filter((v) => Number.isFinite(v))
+  const span = values.length ? Math.max(...values) - Math.min(...values) : 0
+  const threshold = span > 0 ? span * 0.04 : 0
+  const ordered = items
+    .map((item, i) => ({ item, i, value: Number(item?.[valueKey]) }))
+    .sort((a, b) => (a.value - b.value) || (a.i - b.i))
+
+  const offsets = new Map()
+  let previous = null
+  let depth = 0
+  for (const entry of ordered) {
+    const collides = previous !== null
+      && Number.isFinite(entry.value)
+      && Math.abs(entry.value - previous) <= threshold
+    depth = collides ? depth + 1 : 0
+    offsets.set(entry.i, depth)
+    previous = entry.value
+  }
+
+  return items.map((item, i) => {
+    const depth = offsets.get(i) || 0
+    const point = { xAxis: item[valueKey], name: item[labelKey] || '' }
+    // Each colliding label drops one line-height below the one before it.
+    return depth ? { ...point, label: { offset: [0, depth * (T.fontSize + 4)] } } : point
+  })
 }
 
 // ── hbar ─────────────────────────────────────────────────────────────────────

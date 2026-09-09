@@ -487,3 +487,38 @@ describe('renderReportChart · hbar hover target', () => {
     }
   })
 })
+
+describe('renderReportChart · colliding mark-line labels', () => {
+  const histWith = (markers) => renderReportChart({
+    id: 't', kind: 'hist', title: 't', caption: '', labels: [],
+    bins: [{ from: 0, to: 1000, count: 9000, pct: 52 }, { from: 1000, to: 2000, count: 800, pct: 5 }],
+    markers, tooltip_fields: [{ key: 'range', label: '区间' }], rows: [],
+  })
+
+  it('stacks labels that land on nearly the same value', () => {
+    // A zero-inflated target puts P25 and the median both at 0; their labels
+    // printed on top of each other as "P中位数25".
+    const data = histWith([
+      { value: 0, label: 'P25' }, { value: 4, label: '中位数' }, { value: 748, label: '均值' },
+    ]).series[0].markLine.data
+    const byName = Object.fromEntries(data.map((d) => [d.name, d]))
+    expect(byName.P25.label).toBeUndefined()
+    expect(byName['中位数'].label.offset[1]).toBeGreaterThan(0)
+    expect(byName['均值'].label).toBeUndefined()
+  })
+
+  it('leaves well-separated markers untouched', () => {
+    const data = histWith([
+      { value: 100, label: 'P25' }, { value: 900, label: '均值' },
+    ]).series[0].markLine.data
+    expect(data.every((d) => d.label === undefined)).toBe(true)
+  })
+
+  it('keeps the input order so names still match their values', () => {
+    const data = histWith([
+      { value: 900, label: '均值' }, { value: 0, label: 'P25' }, { value: 4, label: '中位数' },
+    ]).series[0].markLine.data
+    expect(data.map((d) => d.name)).toEqual(['均值', 'P25', '中位数'])
+    expect(data.map((d) => d.xAxis)).toEqual([900, 0, 4])
+  })
+})
