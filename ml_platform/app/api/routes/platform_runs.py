@@ -5,6 +5,7 @@ Aggregates everything the frontend needs to render a single ExperimentRun
 detail drawer in one round-trip:
 
   - the run itself (params, metrics, status, rank, search_meta)
+  - the owning ModelingTask contract (target column, objective, leaderboard rank)
   - the linked PlatformTask (progress, worker, retry count, error)
   - the underlying TrainingTask + dataset summary
   - step metrics / logs (latest N entries)
@@ -32,6 +33,7 @@ from app.models.database import (
     DLTrainingTask,
     ExperimentRun,
     ExperimentRunLog,
+    ModelingTask,
     PlatformExperiment,
     PlatformTask,
     TrainingLog,
@@ -42,6 +44,12 @@ from app.models.database import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/platform/runs", tags=["V3 Run Inspector"])
+
+# The task leaderboard truncates to `top_k` *after* sorting, so to learn where an
+# arbitrary run sits we have to ask for more rows than any realistic task holds.
+# The public /leaderboard route caps at 100 because it renders a table; here we
+# only read one row out of the result, so a wide scan costs nothing visible.
+_LEADERBOARD_SCAN_LIMIT = 1000
 
 
 async def owned_run_id(
@@ -163,6 +171,69 @@ def _serialize_log(
         "message": log.message,
         "extra": log.extra or {},
         "created_at": _iso(log.created_at),
+    }
+
+
+async def _resolve_modeling_task(
+    db: AsyncSession,
+    exp: PlatformExperiment | None,
+    run_id: str,
+) -> dict[str, Any] | None:
+    """Resolve the user-facing ModelingTask that owns ``run_id``.
+
+    The drawer used to read `target_column` / dataset identity off the legacy
+    `TrainingTask` row, which is the wrong layer: the modeling *contract*
+    (target column, task type, objective) is declared once on the ModelingTask
+    and merely copied down into per-run execution records — when it is copied
+    at all.  The DL serializer never carried `target_column`, so DL runs showed
+    an empty 目标列 even though the task knew the answer all along.
+
+    Chain:  ExperimentRun.experiment_id → PlatformExperiment.modeling_task_id
+            → ModelingTask
+
+    `rank` is the run's position on that task's leaderboard.  It is *not*
+    `ExperimentRun.rank` (which ranks within a single experiment) and is not a
+    stored column anywhere — the leaderboard derives it by sorting successful
+    runs on the task's objective metric, so we reuse that one implementation
+    rather than re-deriving an ordering that could disagree with the UI.
+    """
+    if exp is None or not exp.modeling_task_id:
+        return None
+
+    mt = (
+        await db.execute(
+            select(ModelingTask).where(ModelingTask.id == exp.modeling_task_id)
+        )
+    ).scalar_one_or_none()
+    if mt is None:
+        return None
+
+    # Ownership was already enforced against the run by `owned_run_id`, so the
+    # leaderboard is called unscoped; re-filtering by owner here would only be
+    # able to turn a legitimate rank into a silent None.
+    rank: int | None = None
+    try:
+        from app.services.modeling_task_service import task_leaderboard
+
+        board = await task_leaderboard(db, mt.id, top_k=_LEADERBOARD_SCAN_LIMIT)
+        for entry in board:
+            if entry.get("run_id") == run_id:
+                rank = entry.get("rank")
+                break
+    except Exception as exc:  # pragma: no cover — rank is best-effort context
+        # A missing rank degrades to "—" in the drawer; it must never take the
+        # whole inspector down with it.
+        logger.warning("Leaderboard rank lookup failed for run %s: %s", run_id, exc)
+
+    return {
+        "id": mt.id,
+        "name": mt.name,
+        "target_column": mt.target_column,
+        "task_type": mt.task_type,
+        "objective_metric": mt.objective_metric,
+        "objective_direction": mt.objective_direction,
+        "dataset_name": mt.dataset_name,
+        "rank": rank,
     }
 
 
@@ -439,9 +510,13 @@ async def inspect_run(
         logger.warning("Run diagnosis failed for %s: %s", run_id, exc)
         diagnosis = None
 
+    # --- 8. Modeling task contract (target column / objective / leaderboard rank)
+    modeling_task_payload = await _resolve_modeling_task(db, exp, run_id)
+
     return {
         "run": _serialize_run(run),
         "experiment": experiment_payload,
+        "modeling_task": modeling_task_payload,
         "platform_task": _serialize_platform_task(platform_task) if platform_task else None,
         "training_task": training_task_payload,
         "logs": logs_payload,
