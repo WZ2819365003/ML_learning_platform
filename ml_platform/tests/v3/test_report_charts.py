@@ -305,8 +305,13 @@ class TestConfusionMatrix:
     def test_every_cell_has_a_hover_row(self, cls_ctx):
         spec = rc.confusion_matrix(cls_ctx["leaderboard"][0])
         assert len(spec["rows"]) == len(spec["cells"])
+        # pct is a number with a declared "percent" format, not a pre-formatted
+        # string: the renderer overlays the raw cell over the matching row, so a
+        # string here was clobbered and printed as 12.8900. x/y let that lookup
+        # match at all — rows carried no coordinates before.
         assert spec["rows"][1] == {"category": "流失 → 观望", "actual": "流失",
-                                   "predicted": "观望", "count": 58, "pct": "12.89%"}
+                                   "predicted": "观望", "x": 1, "y": 0,
+                                   "count": 58, "pct": 12.89}
         assert {f["key"] for f in spec["tooltip_fields"]} == {"actual", "predicted", "count", "pct"}
 
     def test_caption_reads_the_diagonal_and_the_worst_confusion(self, cls_ctx):
@@ -466,3 +471,34 @@ class TestPredVsActualNamesItsSource:
         # a true hold-out, so the default keeps their captions unchanged.
         from app.services.report_charts import pred_vs_actual
         assert "留出集末尾" in pred_vs_actual(self._run(None))["caption"]
+
+
+class TestConfusionMatrixTooltipContract:
+    """The percentage has to reach the reader as a percentage.
+
+    The renderer overlays the raw cell over any matching row, so a
+    pre-formatted string in `rows` is clobbered by the cell's number; with no
+    declared format the number printed as "82.6700".
+    """
+
+    def _spec(self):
+        from tests.v3 import report_fixture as fx
+        from app.services import report_charts as rc
+        ctx = fx.classification_context()
+        run = (ctx.get("leaderboard") or [{}])[0]
+        return {s["id"]: s for s in rc.build_run_charts(run, ctx)}["confusion_matrix"]
+
+    def test_the_share_field_declares_a_percentage_format(self):
+        field = next(f for f in self._spec()["tooltip_fields"] if f["key"] == "pct")
+        assert field["format"] == "percent"
+
+    def test_cells_carry_the_share_as_zero_to_one_hundred(self):
+        pcts = [c["pct"] for c in self._spec()["cells"]]
+        assert max(pcts) > 1, "percent format expects 0–100, not a fraction"
+        assert all(0 <= p <= 100 for p in pcts)
+
+    def test_rows_carry_the_cell_coordinates_so_the_lookup_can_match(self):
+        spec = self._spec()
+        assert all("x" in r and "y" in r for r in spec["rows"])
+        for cell in spec["cells"]:
+            assert any(r["x"] == cell["x"] and r["y"] == cell["y"] for r in spec["rows"])

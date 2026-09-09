@@ -740,13 +740,18 @@ def confusion_matrix(run: dict[str, Any]) -> dict[str, Any] | None:
             rows.append({
                 "category": f"{labels[y]} → {labels[x]}",
                 "actual": labels[y], "predicted": labels[x],
-                "count": count, "pct": f"{rf._fmt(pct, 2)}%",
+                # x/y so the renderer's cell→row lookup can match; pct stays a
+                # number here and is formatted by the field's declared format,
+                # because the renderer overlays the raw cell over the row.
+                "x": x, "y": y, "count": count, "pct": round(pct, 2),
             })
     tooltip_fields = [
         {"key": "actual", "label": "实际"},
         {"key": "predicted", "label": "预测"},
         {"key": "count", "label": "样本数", "format": "0"},
-        {"key": "pct", "label": "占该实际类"},
+        # "percent" means "already a percentage" in the renderer; cells carry
+        # 0–100. Undeclared, the value printed as 82.6700.
+        {"key": "pct", "label": "占该实际类", "format": "percent"},
     ]
     return _spec(
         "confusion_matrix", "matrix",
