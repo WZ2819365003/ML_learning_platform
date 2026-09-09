@@ -1,7 +1,7 @@
 """Two-tier report: one verdict plus one narrative per model.
 
-The chart-placeholder tests are the ones that matter. Charts stay
-backend-generated and the model only picks *where* one goes; if it could emit
+The chart-placement tests are the ones that matter. Charts stay
+backend-computed and reach the page as semantic specs; if the model could emit
 chart data it would happily draw a loss curve that never happened — an error
 that raises nothing and cannot be caught by reading the report.
 """
@@ -12,29 +12,18 @@ import pytest
 from app.services import ai_report_narrative as narrative
 
 
-class TestAvailableRunCharts:
-    def test_offers_epoch_charts_only_when_there_is_a_history(self):
-        with_history = narrative.available_run_charts(
-            {"metrics": {"history": [{"epoch": 1}]}}, "regression")
-        without = narrative.available_run_charts({"metrics": {}}, "regression")
-        assert {"loss_history", "lr_history"} <= {c["id"] for c in with_history}
-        assert {"loss_history", "lr_history"} & {c["id"] for c in without} == set()
+class TestPlacedCharts:
+    def test_reads_markers_in_document_order(self):
+        doc = "a\n\n{{chart:fold_dots}}\n\nb\n\n{{chart:leaderboard_bars}}\n"
+        assert narrative.placed_chart_ids(doc) == ["fold_dots", "leaderboard_bars"]
 
-    def test_offers_fold_scores_only_when_folds_were_persisted(self):
-        # Runs trained before cv_folds was kept must not be offered this.
-        assert "fold_scores" not in {
-            c["id"] for c in narrative.available_run_charts({"metrics": {}}, "regression")
-        }
-        assert "fold_scores" in {
-            c["id"] for c in narrative.available_run_charts(
-                {"metrics": {"cv_folds": [{"fold": 1}]}}, "regression")
-        }
+    def test_keeps_only_placed_specs_in_document_order(self):
+        specs = [{"id": "leaderboard_bars"}, {"id": "fold_dots"}, {"id": "target_hist"}]
+        doc = "{{chart:fold_dots}}\n\n{{chart:leaderboard_bars}}\n"
+        assert [c["id"] for c in narrative.keep_placed(specs, doc)] == ["fold_dots", "leaderboard_bars"]
 
-    def test_prediction_curve_is_regression_only(self):
-        assert "prediction_curve" in {
-            c["id"] for c in narrative.available_run_charts({"metrics": {}}, "regression")}
-        assert "prediction_curve" not in {
-            c["id"] for c in narrative.available_run_charts({"metrics": {}}, "classification")}
+    def test_an_unbuilt_marker_is_ignored(self):
+        assert narrative.keep_placed([], "{{chart:fold_dots}}") == []
 
 
 class TestSelectRuns:
@@ -80,10 +69,12 @@ class TestGenerateNarrativeReport:
         runs = [
             {"run_id": "a", "status": "SUCCESS", "rank": 1, "model_type": "xgboost",
              "objective_value": 72.0,
-             "metrics": {"history": [{"epoch": 1, "val_loss": 1.0}],
-                         "cv_avg_rmse": 72.0, "cv_std_rmse": 1.0}},
+             "metrics": {"cv_avg_rmse": 72.0, "cv_std_rmse": 1.0,
+                         "cv_folds": [{"fold": i, "rmse": 72.0 + (i % 2)} for i in range(1, 6)]}},
             {"run_id": "b", "status": "SUCCESS", "rank": 2, "model_type": "lstm",
-             "objective_value": 90.0, "metrics": {}},
+             "objective_value": 90.0,
+             "metrics": {"selection_val_rmse": 90.0,
+                         "history": [{"epoch": 1, "val_loss": 2.0}, {"epoch": 2, "val_loss": 1.5}]}},
         ]
         return {
             "runs": runs,
@@ -92,7 +83,6 @@ class TestGenerateNarrativeReport:
             "dataset": {"row_count": 10, "column_count": 2, "column_names": ["y", "x_lag_1"]},
             "run_status_counts": {"SUCCESS": 2},
             "_target_stats": {"mean": 100.0, "min": 1.0, "max": 2.0},
-            "_readiness": {"score": 60, "checks": []},
         }
 
     async def test_overall_report_is_generated_before_the_run_reports(self, context):
@@ -100,8 +90,8 @@ class TestGenerateNarrativeReport:
 
         async def call(messages):
             body = messages[1]["content"]
-            # Only the overall report carries a leaderboard section.
-            order.append("overview" if "## 模型表现" in body else "run")
+            # Only the overall report carries the model-gap section.
+            order.append("overview" if "## 模型差距" in body else "run")
             return "{}"
 
         await narrative.generate_narrative_report(context, call_model=call)
@@ -125,8 +115,9 @@ class TestGenerateNarrativeReport:
     async def test_concurrency_is_bounded(self):
         # Doubao is rate-limited; an unbounded gather over a grid search's worth
         # of runs would stampede it.
-        ctx = {"runs": [{"run_id": str(i), "status": "SUCCESS", "rank": i,
-                         "model_type": "m", "metrics": {}} for i in range(8)]}
+        ctx = {"runs": [{"run_id": str(i), "status": "SUCCESS", "rank": i, "model_type": "m",
+                         "objective_value": 1.0 + i,
+                         "metrics": {"history": [{"epoch": 1, "val_loss": 2.0}]}} for i in range(8)]}
         active = peak = 0
 
         async def call(messages):
@@ -143,9 +134,9 @@ class TestGenerateNarrativeReport:
     async def test_a_failed_call_costs_prose_not_the_report(self, context):
         # The document is fully rendered from computed facts before the model is
         # asked for anything, so an upstream failure loses the sentences it was
-        # going to write — never the numbers, the tables or the other models.
+        # going to write — never the numbers, the figures or the other models.
         async def call(messages):
-            if "lstm" in messages[1]["content"]:
+            if "lstm · 分报告" in messages[1]["content"]:
                 raise RuntimeError("上游超时")
             return '{"1": "补写的句子。"}'
 
@@ -163,6 +154,22 @@ class TestGenerateNarrativeReport:
         # The reply is spliced into its slot; everything else is what the
         # backend rendered. This is the whole point of the JSON round trip.
         assert "xgboost" in out["overview"]
+        assert "xgboost 表现最好" in out["overview"]
+
+    async def test_charts_are_specs_placed_by_marker(self, context):
+        async def call(messages):
+            return "{}"
+
+        out = await narrative.generate_narrative_report(context, call_model=call)
+        placed = narrative.placed_chart_ids(out["overview"])
+        assert [c["id"] for c in out["overview_charts"]] == placed
+        assert "leaderboard_bars" in placed and "fold_dots" in placed
+        by_model = {r["model_type"]: r for r in out["runs"]}
+        assert [c["id"] for c in by_model["xgboost"]["charts"]] == ["fold_scores"]
+        assert [c["id"] for c in by_model["lstm"]["charts"]] == ["loss_history"]
+        for report in out["runs"]:
+            for chart in report["charts"]:
+                assert "kind" in chart and "option" not in chart
 
     async def test_reports_how_many_runs_were_covered(self, context):
         async def call(messages):
@@ -171,48 +178,3 @@ class TestGenerateNarrativeReport:
         out = await narrative.generate_narrative_report(context, call_model=call)
         assert out["runs_total"] == 2
         assert out["runs_reported"] == 2
-
-
-class TestBuildRunCharts:
-    HISTORY = [
-        {"epoch": 1, "train_loss": 1.0, "val_loss": 1.2, "lr": 0.001},
-        {"epoch": 2, "train_loss": 0.6, "val_loss": 0.8, "lr": 0.0005},
-    ]
-
-    def test_builds_only_the_charts_that_were_placed(self):
-        # An unplaced chart is a payload shipped to the browser for nothing.
-        run = {"metrics": {"history": self.HISTORY}}
-        ids = [c["id"] for c in narrative.build_run_charts(run, ["loss_history"])]
-        assert ids == ["loss_history"]
-
-    def test_builds_nothing_when_the_data_is_absent(self):
-        # The menu said a chart was available; if the data vanished between
-        # then and now, an empty option would render as a broken frame.
-        assert narrative.build_run_charts({"metrics": {}}, ["loss_history"]) == []
-
-    def test_loss_chart_carries_both_series(self):
-        run = {"metrics": {"history": self.HISTORY}}
-        chart = narrative.build_run_charts(run, ["loss_history"])[0]
-        assert [s["name"] for s in chart["option"]["series"]] == ["训练损失", "验证损失"]
-        assert chart["option"]["series"][0]["data"] == [1.0, 0.6]
-
-    def test_learning_rate_uses_a_log_axis(self):
-        run = {"metrics": {"history": self.HISTORY}}
-        chart = narrative.build_run_charts(run, ["lr_history"])[0]
-        assert chart["option"]["yAxis"]["type"] == "log"
-
-    def test_fold_chart_draws_a_mean_line(self):
-        run = {"metrics": {"cv_folds": [{"fold": 1, "rmse": 70}, {"fold": 2, "rmse": 80}]}}
-        chart = narrative.build_run_charts(run, ["fold_scores"])[0]
-        assert chart["option"]["series"][0]["data"] == [70, 80]
-        assert chart["option"]["series"][0]["markLine"]["data"][0]["yAxis"] == 75
-
-    def test_prediction_curve_needs_at_least_two_points(self):
-        one = {"metrics": {"val_scatter": {"actual": [1], "predicted": [1]}}}
-        two = {"metrics": {"val_scatter": {"actual": [1, 2], "predicted": [1, 2]}}}
-        assert narrative.build_run_charts(one, ["prediction_curve"]) == []
-        assert len(narrative.build_run_charts(two, ["prediction_curve"])) == 1
-
-
-
-

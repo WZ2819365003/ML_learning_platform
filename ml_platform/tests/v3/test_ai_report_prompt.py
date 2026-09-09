@@ -10,38 +10,11 @@ import pytest
 from app.services.ai_report_service import (
     build_ai_report_messages,
     build_reference_frames,
-    _build_headline_metrics,
-    _build_report_blocks,
-    _build_training_curves_chart,
     _compact_metrics,
     _highlight_report_lead_sentences,
     _context_for_llm,
     compute_readiness_score,
 )
-
-
-def test_history_chart_uses_one_log_loss_axis_and_excludes_learning_rate():
-    context = {
-        "task": {"task_type": "regression", "objective_metric": "rmse"},
-        "leaderboard": [{
-            "rank": 1,
-            "run_id": "dl-1",
-            "model_type": "lstm",
-            "metrics": {"history": [
-                {"epoch": 1, "train_loss": 7.7e7, "val_loss": 6.9e7, "lr": 0.001},
-                {"epoch": 2, "train_loss": 390.0, "val_loss": 410.0, "lr": 0.001},
-                {"epoch": 3, "train_loss": 180.0, "val_loss": 210.0, "lr": 0.001},
-            ]},
-        }],
-        "successful_run_examples": [],
-    }
-    chart = _build_training_curves_chart(context)
-    assert chart["title"] == "训练/验证损失曲线"
-    assert chart["option"]["yAxis"]["type"] == "log"
-    names = {series["name"] for series in chart["option"]["series"]}
-    assert any("训练损失" in name for name in names)
-    assert any("验证损失" in name for name in names)
-    assert not any("学习率" in name or "lr" in name.lower() for name in names)
 
 
 REGRESSION_CTX = {
@@ -214,27 +187,6 @@ class TestReadinessReadsTheRealContext:
                     if c["key"] == "final_evaluation")["passed"] is False
 
 
-class TestHeadlineScore:
-    def test_ai_score_card_shows_the_computed_score(self):
-        # The card read "—" on every report: it called the legacy regex scrape
-        # of "总分：xx/100" that the prompt no longer asks the model to write.
-        metrics = _build_headline_metrics(
-            {
-                "task": {},
-                "run_status_counts": {"SUCCESS": 7},
-                "leaderboard": [
-                    {"run_id": "a", "rank": 1,
-                     "metrics": {"cv_avg_rmse": 72.0, "cv_std_rmse": 0.85}},
-                ],
-                "successful_run_examples": [{"run_id": "a", "status": "SUCCESS"}],
-            },
-            "# 报告\n正文里没有任何总分字样。",
-        )
-        card = next(m for m in metrics if m["key"] == "ai_score")
-        assert card["value"] == "60/100"
-        assert "最终评估" in card["detail"] or "封存" in card["detail"]
-
-
 class TestCurveMetricsSurviveCompaction:
     """Chart data must survive the trip that shrinks the prompt.
 
@@ -254,12 +206,17 @@ class TestCurveMetricsSurviveCompaction:
         out = _compact_metrics(self._metrics())
         assert "val_scatter" in out
 
-    def test_parallel_series_keep_enough_points_to_plot(self):
+    def test_parallel_series_keep_the_whole_validation_tail(self):
         out = _compact_metrics(self._metrics())
         actual = out["val_scatter"]["actual"]
-        # The generic path cut these to twelve, which is not a curve.
-        assert len(actual) == 120
+        # The generic path cut these to twelve, which is not a curve; the
+        # trainers store a 500-point tail and the chart wants all of it.
+        assert len(actual) == 500
         assert len(out["val_scatter"]["predicted"]) == len(actual)
+
+    def test_a_longer_tail_is_still_capped(self):
+        out = _compact_metrics(self._metrics(n=700))
+        assert len(out["val_scatter"]["actual"]) == 500
 
     def test_a_short_series_is_left_alone(self):
         out = _compact_metrics(
@@ -338,53 +295,3 @@ class TestLeadSentenceBoldingRespectsDecimals:
         out = _highlight_report_lead_sentences("A 是 0.81%，B 是 1.6%，都可以。第二句。")
         assert "0.81%" in out and "1.6%" in out
         assert "**A 是 0.81%，B 是 1.6%，都可以。**" in out
-
-
-class TestReportBlocksCarryNoChapterScaffold:
-    """The overall report is prose plus artifacts, not a filled-in template.
-
-    Six server-written chapters used to be appended after the model's prose —
-    任务范围, 过程与评价, 数据集概况, 参数说明, 训练过程, 效果小结. They were
-    written when the report was one long document; now the overall report gives
-    the verdict and the dataset and a sub-report per model covers the rest, so
-    they said everything a third time. Their headings also leaked into the table
-    of contents, which listed "第二章 过程与评价" for a report with no chapters.
-    """
-
-    def _blocks(self, markdown="## 结论\n\n可以用。\n\n## 数据集概况\n\n八万行。"):
-        return _build_report_blocks(
-            markdown,
-            [{"id": "training_curves"}],
-            [{"id": "data_profile"}],
-        )
-
-    def test_the_models_prose_is_kept_whole(self):
-        # It used to be sliced on 第一章/第三章 headings the prompt no longer
-        # asks for, so the fallback quietly kept everything anyway.
-        body = self._blocks()[0]["markdown"]
-        assert "## 结论" in body and "## 数据集概况" in body
-
-    def test_no_chapter_boilerplate_is_appended(self):
-        joined = " ".join(b.get("markdown", "") for b in self._blocks())
-        for phrase in ("第二章", "1.2 任务范围", "过程与评价"):
-            assert phrase not in joined, phrase
-
-    def test_real_tables_and_charts_survive(self):
-        # They are computed from data and are the only place some facts appear.
-        ids = [b["id"] for b in self._blocks()]
-        assert "data_profile_block" in ids
-        assert "training_curves_block" in ids
-
-    def test_the_title_is_not_doubled(self):
-        # The body used to be a slice of the prose, so prepending a title was
-        # safe; the whole document goes in now, title included.
-        body = _build_report_blocks("# AI 建模报告\n\n## 结论\n\n可以用。", [], [])[0]["markdown"]
-        assert body.count("# AI 建模报告") == 1
-
-    def test_a_body_without_a_title_still_gets_one(self):
-        body = _build_report_blocks("## 结论\n\n可以用。", [], [])[0]["markdown"]
-        assert body.startswith("# AI 建模报告")
-
-    def test_an_artifact_that_was_not_built_is_not_referenced(self):
-        ids = [b["id"] for b in _build_report_blocks("正文。", [], [])]
-        assert ids == ["conclusion"]

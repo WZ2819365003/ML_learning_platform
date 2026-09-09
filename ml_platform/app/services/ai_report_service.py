@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -31,7 +30,10 @@ logger = logging.getLogger(__name__)
 
 _TOP_RUNS = 8
 _MAX_CONTEXT_CHARS = 12000
-_REPORT_SCHEMA_VERSION = "ai_report.rich.v1"
+_SCATTER_POINTS = 500
+# v2: charts are semantic specs, the prose carries {{chart:id}} markers, and
+# report_blocks / tables / headline_metrics are gone (see build_rich_report_payload).
+_REPORT_SCHEMA_VERSION = "ai_report.rich.v2"
 
 
 def _utc_iso() -> str:
@@ -176,7 +178,11 @@ def _compact_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
             break
     for key in _CURVE_METRIC_KEYS:
         if key in metrics:
-            compact[key] = _compact_curve_value(metrics[key])
+            # The trainers keep a 500-point validation tail; the predicted-vs-
+            # actual chart wants all of it, and the prompt only ever sees a
+            # point count, so nothing is saved by cutting it to 120 here.
+            limit = _SCATTER_POINTS if key == "val_scatter" else 120
+            compact[key] = _compact_curve_value(metrics[key], limit=limit)
     if isinstance(shap, dict) and shap:
         top = sorted(
             shap.items(),
@@ -489,26 +495,6 @@ def _available_final_metric(context: dict[str, Any]) -> tuple[str | None, Any, s
     return None, None, None
 
 
-def _top_shap_items(context: dict[str, Any]) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    for entry in context.get("leaderboard") or []:
-        metrics = entry.get("metrics") or {}
-        candidates.extend(metrics.get("top_shap_importances") or [])
-    for entry in context.get("successful_run_examples") or []:
-        metrics = entry.get("metrics") or {}
-        candidates.extend(metrics.get("top_shap_importances") or [])
-    seen: set[str] = set()
-    unique: list[dict[str, Any]] = []
-    for item in candidates:
-        feature = str(item.get("feature") or "").strip()
-        value = _round_number(item.get("mean_abs_shap"))
-        if not feature or value is None or feature in seen:
-            continue
-        seen.add(feature)
-        unique.append({"feature": feature, "mean_abs_shap": value})
-    return sorted(unique, key=lambda item: abs(item["mean_abs_shap"]), reverse=True)[:8]
-
-
 def _percentage_text(value: Any) -> str:
     if not isinstance(value, (int, float)):
         return "—"
@@ -665,644 +651,6 @@ def _readable_field_name(column: str, *, role: str | None = None) -> str:
     return f"{label}（{raw}）" if label and label != raw else raw
 
 
-def _build_headline_metrics(context: dict[str, Any], markdown: str) -> list[dict[str, Any]]:
-    task = context.get("task") or {}
-    dataset = context.get("dataset") or {}
-    counts = context.get("run_status_counts") or {}
-    leaderboard = context.get("leaderboard") or []
-    final_best = _best_run_level_final(context)
-    best = final_best or (leaderboard[0] if leaderboard else {})
-    # The score is computed from the rubric, not scraped back out of the prose.
-    # _build_headline_metrics kept calling the legacy scrape long after the
-    # prompt stopped asking for "总分：xx/100", so the card always read "—".
-    try:
-        readiness = compute_readiness_score(context)
-    except Exception as exc:  # noqa: BLE001 — a report without a score beats no report
-        logger.warning("Readiness scoring failed: %s", exc)
-        readiness = {"score": _extract_ai_score(markdown), "checks": []}
-    score = readiness.get("score")
-    unmet = [c.get("label") for c in readiness.get("checks") or [] if not c.get("passed")]
-    final_key, final_value, final_source = _available_final_metric(context)
-    best_score = _metric_value_from_entry(best)
-
-    schemes = {validation_scheme(entry) for entry in leaderboard}
-    mixed_schemes = len(schemes) > 1 and not final_best
-    best_scheme = validation_scheme(best) if best else "验证结果"
-    metrics = [
-        {
-            "key": "ai_score",
-            "label": "评估就绪度",
-            "value": f"{score}/100" if score is not None else "—",
-            "detail": (("未达成：" + "、".join(str(u) for u in unmet if u)) if unmet
-                       else "就绪度检查项均已达成") + "；不是模型质量评分",
-            "tone": "success" if score is not None and score >= 80 else "warning",
-        },
-        {
-            "key": "best_model",
-            "label": "参考领先模型" if mixed_schemes else "当前领先模型",
-            "value": best.get("model_type") or "—",
-            "detail": (
-                "按最终测试指标判断" if final_best else
-                (f"仅在{best_scheme}组内领先；跨口径不比较" if mixed_schemes
-                 else (best.get("strategy_type") or "按选择阶段榜单判断"))
-            ),
-            "tone": "default",
-        },
-        {
-            "key": "selection_score",
-            "label": f"选择阶段 {task.get('objective_metric') or 'score'}",
-            "value": _fmt_value(best_score),
-            "detail": best.get("selection_metric_key") or "候选模型排序指标",
-            "tone": "processing",
-        },
-        {
-            "key": "final_test",
-            "label": "最终测试",
-            "value": _fmt_value(final_value),
-            "detail": (
-                f"Run 级 {final_key}"
-                if final_source == "run_level" and final_key
-                else final_key or "尚未执行最终评估"
-            ),
-            "tone": "success" if final_value is not None else "warning",
-        },
-        {
-            "key": "run_count",
-            "label": "Run 概况",
-            "value": str(sum(int(v) for v in counts.values())) if counts else "0",
-            "detail": f"成功 {counts.get('SUCCESS', 0)} / 失败 {counts.get('FAILED', 0)}",
-            "tone": "default",
-        },
-        {
-            "key": "dataset_size",
-            "label": "数据规模",
-            "value": _fmt_value(dataset.get("row_count")),
-            "detail": f"{_fmt_value(dataset.get('column_count'))} 列 · {dataset.get('name') or '未绑定数据集'}",
-            "tone": "default",
-        },
-    ]
-    return metrics
-
-
-def _leaderboard_chart(context: dict[str, Any]) -> dict[str, Any] | None:
-    task = context.get("task") or {}
-    entries = []
-    for item in context.get("leaderboard") or []:
-        value = _metric_value_from_entry(item)
-        if value is None:
-            continue
-        label = item.get("model_type") or item.get("run_id") or "run"
-        if item.get("trial_no"):
-            label = f"{label}#{item['trial_no']}"
-        entries.append({"label": str(label), "value": value})
-    if not entries:
-        return None
-    return {
-        "id": "leaderboard_top_runs",
-        "title": "候选模型排行榜",
-        "description": "按任务目标指标展示 Top Run，指标来自模型选择阶段。",
-        "type": "echarts",
-        "height": 300,
-        "option": {
-            "grid": {"left": 56, "right": 18, "top": 28, "bottom": 72},
-            "tooltip": {"trigger": "axis"},
-            "xAxis": {
-                "type": "category",
-                "data": [item["label"] for item in entries],
-                "axisLabel": {"rotate": 24, "fontSize": 11},
-            },
-            "yAxis": {"type": "value", "name": task.get("objective_metric") or "score"},
-            "series": [
-                {
-                    "type": "bar",
-                    "data": [item["value"] for item in entries],
-                    "itemStyle": {"color": "#2563eb", "borderRadius": [4, 4, 0, 0]},
-                    "label": {"show": True, "position": "top"},
-                }
-            ],
-        },
-    }
-
-
-def _feature_importance_chart(context: dict[str, Any]) -> dict[str, Any] | None:
-    items = _top_shap_items(context)
-    if not items:
-        return None
-    ordered = list(reversed(items))
-    return {
-        "id": "feature_importance",
-        "title": "关键特征重要性",
-        "description": "来自 SHAP 或服务端回退解释的平均绝对重要性。",
-        "type": "echarts",
-        "height": 320,
-        "option": {
-            "grid": {"left": 132, "right": 22, "top": 24, "bottom": 32},
-            "tooltip": {"trigger": "axis"},
-            "xAxis": {"type": "value", "name": "mean |SHAP|"},
-            "yAxis": {
-                "type": "category",
-                "data": [item["feature"] for item in ordered],
-                "axisLabel": {"fontSize": 11},
-            },
-            "series": [
-                {
-                    "type": "bar",
-                    "data": [item["mean_abs_shap"] for item in ordered],
-                    "itemStyle": {"color": "#10b981", "borderRadius": [0, 4, 4, 0]},
-                    "label": {"show": True, "position": "right"},
-                }
-            ],
-        },
-    }
-
-
-def _numeric(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        number = float(value)
-    elif isinstance(value, str):
-        try:
-            number = float(value.strip())
-        except ValueError:
-            return None
-    else:
-        return None
-    if not math.isfinite(number):
-        return None
-    return round(number, 6)
-
-
-def _numeric_sequence(value: Any, *, limit: int = 160) -> list[float]:
-    if not isinstance(value, (list, tuple)):
-        return []
-    numbers: list[float] = []
-    for item in list(value)[:limit]:
-        number = _numeric(item)
-        if number is None:
-            return []
-        numbers.append(number)
-    return numbers
-
-
-def _history_from_evals_result(evals_result: dict[str, Any]) -> list[dict[str, Any]]:
-    series_by_key: dict[str, list[float]] = {}
-    for dataset_name, metrics in list(evals_result.items())[:4]:
-        if not isinstance(metrics, dict):
-            continue
-        for metric_name, values in list(metrics.items())[:6]:
-            sequence = _numeric_sequence(values, limit=120)
-            if sequence:
-                series_by_key[f"{dataset_name}_{metric_name}"] = sequence
-    if not series_by_key:
-        return []
-    length = max(len(values) for values in series_by_key.values())
-    rows: list[dict[str, Any]] = []
-    for index in range(length):
-        row: dict[str, Any] = {"epoch": index + 1}
-        for key, values in series_by_key.items():
-            if index < len(values):
-                row[key] = values[index]
-        rows.append(row)
-    return rows
-
-
-def _history_points(metrics: dict[str, Any]) -> list[dict[str, Any]]:
-    history: Any = None
-    for key in ("history", "training_history", "loss_history"):
-        if metrics.get(key):
-            history = metrics[key]
-            break
-    if history is None and isinstance(metrics.get("evals_result"), dict):
-        history = _history_from_evals_result(metrics["evals_result"])
-
-    if isinstance(history, dict):
-        history = _history_from_evals_result(history)
-
-    points: list[dict[str, Any]] = []
-    if isinstance(history, (list, tuple)):
-        for index, item in enumerate(list(history)[:120], start=1):
-            if isinstance(item, dict):
-                x_value = (
-                    item.get("epoch")
-                    or item.get("step")
-                    or item.get("iteration")
-                    or item.get("round")
-                    or index
-                )
-                point_metrics = {}
-                for key, value in item.items():
-                    if key in {"epoch", "step", "iteration", "round"}:
-                        continue
-                    number = _numeric(value)
-                    if number is not None:
-                        point_metrics[str(key)] = number
-                if point_metrics:
-                    points.append({"x": _numeric(x_value) or index, "metrics": point_metrics})
-            else:
-                number = _numeric(item)
-                if number is not None:
-                    points.append({"x": index, "metrics": {"loss": number}})
-    return points
-
-
-def _history_metric_keys(points: list[dict[str, Any]]) -> list[str]:
-    seen: set[str] = set()
-    for point in points:
-        metrics = point.get("metrics") or {}
-        for key in metrics:
-            seen.add(str(key))
-    preferred = [
-        "train_loss",
-        "training_loss",
-        "val_loss",
-        "validation_loss",
-        "loss",
-        "train_accuracy",
-        "validation_accuracy",
-        "val_acc",
-        "accuracy",
-        "val_f1_macro",
-        "f1",
-        "roc_auc",
-        "auc",
-    ]
-    ordered = [key for key in preferred if key in seen]
-    ordered.extend(sorted(seen - set(ordered)))
-    return ordered[:3]
-
-
-def _run_label(row: dict[str, Any]) -> str:
-    model = row.get("model_type") or row.get("run_id") or "run"
-    trial = row.get("trial_no")
-    return f"{model}#{trial}" if trial is not None else str(model)
-
-
-def _metric_axis_index(metric_key: str) -> int:
-    key = metric_key.lower()
-    if any(token in key for token in ("loss", "rmse", "mae", "mse", "error")):
-        return 0
-    return 1
-
-
-def _strategy_sort_order(strategy_type: Any) -> int:
-    order = {"baseline": 0, "grid_search": 1, "bayesian_search": 2}
-    return order.get(str(strategy_type or ""), 9)
-
-
-def _trial_point_label(row: dict[str, Any], index: int) -> str:
-    strategy = row.get("strategy_type") or "run"
-    trial = row.get("trial_no")
-    model = row.get("model_type") or "model"
-    if trial is not None:
-        return f"{strategy}#{trial}"
-    return f"{strategy}-{model}-{index + 1}"
-
-
-def _run_metric_value(row: dict[str, Any], metric_key: str) -> float | None:
-    metrics = row.get("metrics") or {}
-    value = None
-    if metric_key == row.get("selection_metric_key"):
-        value = row.get("selection_value")
-        if value is None:
-            value = row.get("objective_value")
-    elif metric_key == row.get("final_test_metric_key"):
-        value = row.get("final_test_value")
-    if value is None and isinstance(metrics, dict):
-        value = metrics.get(metric_key)
-    return _numeric(value)
-
-
-def _trial_metric_candidates(context: dict[str, Any]) -> list[str]:
-    task = context.get("task") or {}
-    objective = str(task.get("objective_metric") or "accuracy")
-    candidates = [
-        f"selection_cv_mean_{objective}",
-        f"final_test_{objective}",
-        "selection_cv_mean_f1",
-        "final_test_f1",
-        "selection_cv_mean_roc_auc",
-        "final_test_roc_auc",
-    ]
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for key in candidates:
-        if key not in seen:
-            ordered.append(key)
-            seen.add(key)
-    return ordered
-
-
-def _build_trial_metric_curve_chart(context: dict[str, Any]) -> dict[str, Any] | None:
-    rows = [
-        row
-        for row in _merge_run_context(context)
-        if (row.get("status") in (None, "SUCCESS")) and row.get("run_id")
-    ]
-    if len(rows) < 2:
-        return None
-    rows = sorted(
-        rows,
-        key=lambda row: (
-            _strategy_sort_order(row.get("strategy_type")),
-            str(row.get("strategy_type") or ""),
-            _numeric(row.get("trial_no")) if _numeric(row.get("trial_no")) is not None else 9999,
-            str(row.get("model_type") or ""),
-            str(row.get("run_id") or ""),
-        ),
-    )[:_TOP_RUNS]
-    labels = [_trial_point_label(row, index) for index, row in enumerate(rows)]
-
-    series: list[dict[str, Any]] = []
-    for metric_key in _trial_metric_candidates(context):
-        data = []
-        numeric_points = 0
-        for label, row in zip(labels, rows):
-            value = _run_metric_value(row, metric_key)
-            if value is not None:
-                numeric_points += 1
-            data.append([label, value])
-        if numeric_points < 2:
-            continue
-        series.append({
-            "name": _metric_label(metric_key),
-            "type": "line",
-            "smooth": True,
-            "connectNulls": True,
-            "symbolSize": 6,
-            "data": data,
-        })
-        if len(series) >= 4:
-            break
-    if not series:
-        return None
-    return {
-        "id": "training_curves",
-        "title": "调参过程指标曲线",
-        "description": (
-            "当前 Run 未记录逐 epoch 的 loss/history，因此图中展示真实 Trial 级选择指标与最终测试指标，"
-            "用于观察不同策略和参数组合的过程表现。"
-        ),
-        "type": "echarts",
-        "height": 340,
-        "option": {
-            "grid": {"left": 52, "right": 24, "top": 38, "bottom": 92},
-            "tooltip": {"trigger": "axis"},
-            "legend": {"type": "scroll", "bottom": 0},
-            "xAxis": {
-                "type": "category",
-                "name": "Strategy / Trial",
-                "data": labels,
-                "axisLabel": {"rotate": 25},
-            },
-            "yAxis": {"type": "value", "name": "metric value"},
-            "series": series,
-        },
-    }
-
-
-def _build_training_curves_chart(context: dict[str, Any]) -> dict[str, Any] | None:
-    series: list[dict[str, Any]] = []
-    for row in _merge_run_context(context):
-        metrics = row.get("metrics") or {}
-        if not isinstance(metrics, dict):
-            continue
-        points = _history_points(metrics)
-        if not points:
-            continue
-        label = _run_label(row)
-        # A single axis must contain one physical quantity. Mixing loss values
-        # in the tens of millions, accuracy near 1, and a constant 0.001
-        # learning rate made every useful curve look flat. The overview keeps
-        # only train/validation loss; score and LR evidence belongs in the
-        # model-specific report where each can use its own scale.
-        loss_keys = [
-            key for key in _history_metric_keys(points)
-            if "loss" in key.lower()
-        ]
-        for metric_key in loss_keys:
-            data = [
-                [point["x"], point["metrics"][metric_key]]
-                for point in points
-                if metric_key in point.get("metrics", {})
-                and point["metrics"][metric_key] > 0
-            ]
-            if len(data) < 2:
-                continue
-            series.append({
-                "name": f"{label} {_metric_label(metric_key)}",
-                "type": "line",
-                "smooth": True,
-                "showSymbol": False,
-                "data": data,
-            })
-            if len(series) >= 6:
-                break
-        if len(series) >= 6:
-            break
-    if not series:
-        return _build_trial_metric_curve_chart(context)
-    return {
-        "id": "training_curves",
-        "title": "训练/验证损失曲线",
-        "description": (
-            "仅展示具有逐轮记录的 Run，并使用对数轴呈现训练损失与验证损失；"
-            "学习率及其他量纲不同的指标不在此图混画。"
-        ),
-        "type": "echarts",
-        "height": 340,
-        "option": {
-            "grid": {"left": 76, "right": 28, "top": 38, "bottom": 78},
-            "tooltip": {"trigger": "axis"},
-            "legend": {"type": "scroll", "bottom": 0},
-            "xAxis": {"type": "value", "name": "epoch/step"},
-            "yAxis": {"type": "log", "name": "损失（对数轴）"},
-            "series": series,
-        },
-    }
-
-
-def _roc_series_from_metrics(metrics: dict[str, Any]) -> list[list[float]]:
-    pairs = [
-        ("val_roc_fpr", "val_roc_tpr"),
-        ("roc_fpr", "roc_tpr"),
-        ("fpr", "tpr"),
-    ]
-    for fpr_key, tpr_key in pairs:
-        fpr = _numeric_sequence(metrics.get(fpr_key), limit=160)
-        tpr = _numeric_sequence(metrics.get(tpr_key), limit=160)
-        if fpr and tpr and len(fpr) == len(tpr):
-            return [[x, y] for x, y in zip(fpr, tpr)]
-    return []
-
-
-def _build_roc_curve_chart(context: dict[str, Any]) -> dict[str, Any] | None:
-    series: list[dict[str, Any]] = []
-    for row in _merge_run_context(context):
-        metrics = row.get("metrics") or {}
-        if not isinstance(metrics, dict):
-            continue
-        data = _roc_series_from_metrics(metrics)
-        if len(data) < 2:
-            continue
-        series.append({
-            "name": _run_label(row),
-            "type": "line",
-            "smooth": True,
-            "showSymbol": False,
-            "data": data,
-        })
-        if len(series) >= 4:
-            break
-    if not series:
-        return None
-    series.append({
-        "name": "random_baseline",
-        "type": "line",
-        "symbol": "none",
-        "lineStyle": {"type": "dashed", "color": "#94a3b8"},
-        "data": [[0, 0], [1, 1]],
-    })
-    return {
-        "id": "roc_curve",
-        "title": "ROC 曲线",
-        "description": "分类任务中用于观察模型区分正负样本的能力；曲线越靠近左上角越好。",
-        "type": "echarts",
-        "height": 320,
-        "option": {
-            "grid": {"left": 48, "right": 24, "top": 36, "bottom": 72},
-            "tooltip": {"trigger": "axis"},
-            "legend": {"type": "scroll", "bottom": 0},
-            "xAxis": {"type": "value", "name": "FPR", "min": 0, "max": 1},
-            "yAxis": {"type": "value", "name": "TPR", "min": 0, "max": 1},
-            "series": series,
-        },
-    }
-
-
-def _prediction_pairs_from_metrics(metrics: dict[str, Any]) -> tuple[list[float], list[float]]:
-    pairs = [
-        ("y_true", "y_pred"),
-        ("actual", "predicted"),
-        ("actuals", "predictions"),
-    ]
-    for actual_key, predicted_key in pairs:
-        actual = _numeric_sequence(metrics.get(actual_key), limit=200)
-        predicted = _numeric_sequence(metrics.get(predicted_key), limit=200)
-        if actual and predicted and len(actual) == len(predicted):
-            return actual, predicted
-    curve = metrics.get("prediction_curve")
-    if isinstance(curve, (list, tuple)):
-        actual: list[float] = []
-        predicted: list[float] = []
-        for item in list(curve)[:200]:
-            if not isinstance(item, dict):
-                continue
-            actual_value = _numeric(item.get("actual") or item.get("y_true"))
-            predicted_value = _numeric(item.get("predicted") or item.get("y_pred"))
-            if actual_value is None or predicted_value is None:
-                continue
-            actual.append(actual_value)
-            predicted.append(predicted_value)
-        if actual and len(actual) == len(predicted):
-            return actual, predicted
-    return [], []
-
-
-def _build_prediction_curve_chart(context: dict[str, Any]) -> dict[str, Any] | None:
-    for row in _merge_run_context(context):
-        metrics = row.get("metrics") or {}
-        if not isinstance(metrics, dict):
-            continue
-        actual, predicted = _prediction_pairs_from_metrics(metrics)
-        if len(actual) < 2:
-            continue
-        x_values = list(range(1, len(actual) + 1))
-        label = _run_label(row)
-        return {
-            "id": "prediction_curve",
-            "title": "预测结果曲线",
-            "description": f"展示 {label} 的真实值与预测值随样本序号的变化，用于观察误差是否集中在局部样本。",
-            "type": "echarts",
-            "height": 320,
-            "option": {
-                "grid": {"left": 52, "right": 24, "top": 36, "bottom": 62},
-                "tooltip": {"trigger": "axis"},
-                "legend": {"bottom": 0},
-                "xAxis": {"type": "category", "name": "样本序号", "data": x_values},
-                "yAxis": {"type": "value", "name": "value"},
-                "series": [
-                    {
-                        "name": "actual",
-                        "type": "line",
-                        "showSymbol": False,
-                        "data": actual,
-                    },
-                    {
-                        "name": "predicted",
-                        "type": "line",
-                        "showSymbol": False,
-                        "data": predicted,
-                    },
-                ],
-            },
-        }
-    return None
-
-
-def _run_status_chart(context: dict[str, Any]) -> dict[str, Any] | None:
-    counts = {
-        key: int(value)
-        for key, value in (context.get("run_status_counts") or {}).items()
-        if int(value or 0) > 0
-    }
-    if not counts:
-        return None
-    color_by_status = {
-        "SUCCESS": "#10b981",
-        "FAILED": "#ef4444",
-        "RUNNING": "#2563eb",
-        "PENDING": "#f59e0b",
-        "QUEUED": "#8b5cf6",
-    }
-    return {
-        "id": "run_status_distribution",
-        "title": "Run 状态分布",
-        "description": "用于快速判断实验是否完成、失败是否集中。",
-        "type": "echarts",
-        "height": 280,
-        "option": {
-            "tooltip": {"trigger": "item"},
-            "legend": {"bottom": 0},
-            "series": [
-                {
-                    "type": "pie",
-                    "radius": ["42%", "68%"],
-                    "center": ["50%", "44%"],
-                    "data": [
-                        {
-                            "name": key,
-                            "value": value,
-                            "itemStyle": {"color": color_by_status.get(key, "#64748b")},
-                        }
-                        for key, value in counts.items()
-                    ],
-                    "label": {"formatter": "{b}: {c}"},
-                }
-            ],
-        },
-    }
-
-
-def _build_charts(context: dict[str, Any]) -> list[dict[str, Any]]:
-    charts = [
-        _build_training_curves_chart(context),
-        _build_roc_curve_chart(context),
-        _build_prediction_curve_chart(context),
-    ]
-    return [chart for chart in charts if chart is not None]
-
-
 def _build_data_profile_table(context: dict[str, Any]) -> dict[str, Any] | None:
     task = context.get("task") or {}
     dataset = context.get("dataset") or {}
@@ -1337,187 +685,6 @@ def _build_data_profile_table(context: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _first_metric(metrics: dict[str, Any], candidates: list[str]) -> tuple[str | None, Any]:
-    if not isinstance(metrics, dict):
-        return None, None
-    for key in candidates:
-        if key in metrics:
-            return key, metrics[key]
-    return None, None
-
-
-def _metric_text(key: str | None, value: Any) -> str:
-    if key is None and value is None:
-        return "—"
-    if key is None:
-        return _fmt_value(value)
-    label = _metric_label(key)
-    if label and label != key:
-        return f"{label}（{key}）={_fmt_value(value)}"
-    return f"{key}={_fmt_value(value)}"
-
-
-def _metric_lookup(metrics: dict[str, Any], *keys: str) -> Any:
-    if not isinstance(metrics, dict):
-        return None
-    for key in keys:
-        if key in metrics:
-            return metrics[key]
-    return None
-
-
-def _metric_label(metric: str | None) -> str:
-    key = (metric or "").lower()
-    labels = {
-        "accuracy": "准确率",
-        "final_test_accuracy": "最终测试准确率",
-        "selection_cv_mean_accuracy": "交叉验证平均准确率",
-        "cv_avg_accuracy": "交叉验证平均准确率",
-        "validation_accuracy": "验证准确率",
-        "train_accuracy": "训练准确率",
-        "test_accuracy": "测试准确率",
-        "val_acc": "验证准确率",
-        "f1": "F1 分数",
-        "final_test_f1": "最终测试 F1",
-        "selection_cv_mean_f1": "交叉验证平均 F1",
-        "roc_auc": "ROC-AUC",
-        "final_test_roc_auc": "最终测试 ROC-AUC",
-        "selection_cv_mean_roc_auc": "交叉验证平均 ROC-AUC",
-        "auc": "AUC",
-        "rmse": "RMSE",
-        "mae": "MAE",
-        "mse": "MSE",
-        "r2": "R2",
-        "train_loss": "训练损失",
-        "training_loss": "训练损失",
-        "val_loss": "验证损失",
-        "validation_loss": "验证损失",
-        "loss": "损失",
-    }
-    return labels.get(key, metric or "指标")
-
-
-def _metric_direction_text(metric: str | None, objective_direction: str | None = None) -> str:
-    key = (metric or "").lower()
-    if objective_direction and key in ("objective", "score"):
-        return "越大越好" if objective_direction == "max" else "越小越好"
-    if any(token in key for token in ("loss", "rmse", "mae", "mse", "error")):
-        return "越小越好"
-    return "越大越好"
-
-
-def _metric_usage_text(metric: str | None) -> str:
-    key = (metric or "").lower()
-    if "cv" in key or "selection" in key or "val" in key:
-        return "选择/验证阶段"
-    if "final" in key or key in {"accuracy", "f1", "roc_auc", "auc", "rmse", "mae", "mse", "r2"}:
-        return "最终效果"
-    return "辅助判断"
-
-
-def _strip_markdown_tables(markdown: str | None) -> str:
-    """Remove AI-generated Markdown tables; structured tables render separately."""
-    if not markdown:
-        return ""
-    cleaned: list[str] = []
-    previous_blank = False
-    for raw_line in markdown.splitlines():
-        line = raw_line.strip()
-        if line.startswith("|") and line.endswith("|") and "|" in line[1:-1]:
-            if not previous_blank:
-                cleaned.append("")
-                previous_blank = True
-            continue
-        cleaned.append(raw_line)
-        previous_blank = line == ""
-    text = "\n".join(cleaned)
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return text + ("\n" if text else "")
-
-
-def _effect_note(selection_value: Any, final_value: Any, direction: str | None) -> str:
-    selection = _round_number(selection_value)
-    final = _round_number(final_value)
-    if selection is None and final is None:
-        return "暂无可对比的效果指标"
-    if final is None:
-        return "尚未记录最终测试，先按选择阶段指标理解相对表现"
-    if selection is None:
-        return "已有最终测试，可作为当前泛化效果依据"
-    gap = final - selection
-    if (direction or "max") == "min":
-        gap = selection - final
-    if abs(gap) <= 0.03:
-        return "选择阶段与最终测试接近，稳定性初步可接受"
-    if gap < 0:
-        return "最终测试弱于选择阶段，需要关注过拟合或数据切分差异"
-    return "最终测试优于选择阶段，建议复核数据切分并继续做稳定性验证"
-
-
-def _build_metric_comparison_table(context: dict[str, Any]) -> dict[str, Any] | None:
-    task = context.get("task") or {}
-    objective = task.get("objective_metric") or "score"
-    direction = task.get("objective_direction") or "max"
-    rows = []
-    cohort_counts: dict[str, int] = {}
-    for item in context.get("leaderboard") or []:
-        scheme = validation_scheme(item)
-        cohort_counts[scheme] = cohort_counts.get(scheme, 0) + 1
-        metrics = item.get("metrics") or {}
-        selection_value = item.get("selection_value") or item.get("objective_value")
-        final_value = item.get("final_test_value")
-        test_accuracy = final_value if (item.get("final_test_metric_key") or "").endswith("accuracy") else None
-        if test_accuracy is None:
-            test_accuracy = _metric_lookup(metrics, "final_test_accuracy", "accuracy", "test_accuracy", "val_acc")
-        rows.append({
-            "validation_scheme": scheme,
-            "rank": cohort_counts[scheme],
-            "model_type": item.get("model_type") or "—",
-            "strategy_type": item.get("strategy_type") or "—",
-            "trial_no": _fmt_value(item.get("trial_no")),
-            "selection_metric": _metric_text(item.get("selection_metric_key"), selection_value),
-            "test_accuracy": _fmt_value(test_accuracy),
-            "test_f1": _fmt_value(_metric_lookup(metrics, "final_test_f1", "f1", "test_f1", "val_f1_macro")),
-            "test_roc_auc": _fmt_value(_metric_lookup(metrics, "final_test_roc_auc", "roc_auc", "auc", "val_auc_roc")),
-            "test_rmse": _fmt_value(_metric_lookup(metrics, "final_test_rmse", "rmse", "test_rmse")),
-            "test_mae": _fmt_value(_metric_lookup(metrics, "final_test_mae", "mae", "test_mae")),
-            "effect_note": _effect_note(selection_value, final_value, direction),
-            "run_id": item.get("run_id"),
-        })
-    if not rows:
-        return None
-    columns = [
-        {"key": "validation_scheme", "title": "验证口径"},
-        {"key": "rank", "title": "组内排名"},
-        {"key": "model_type", "title": "模型"},
-        {"key": "strategy_type", "title": "策略"},
-        {"key": "trial_no", "title": "Trial"},
-        {"key": "selection_metric", "title": "选择/验证指标"},
-        {"key": "test_accuracy", "title": "测试准确率"},
-        {"key": "test_f1", "title": "测试 F1"},
-        {"key": "test_roc_auc", "title": "测试 ROC-AUC"},
-        {"key": "test_rmse", "title": "测试 RMSE"},
-        {"key": "test_mae", "title": "测试 MAE"},
-        {"key": "effect_note", "title": "评价结论"},
-        {"key": "run_id", "title": "Run ID"},
-    ]
-    optional_metric_keys = {"test_accuracy", "test_f1", "test_roc_auc", "test_rmse", "test_mae"}
-    columns = [
-        column
-        for column in columns
-        if column["key"] not in optional_metric_keys
-        or any(row.get(column["key"]) not in (None, "", "—") for row in rows)
-    ]
-    task_type = str(task.get("task_type") or "").lower()
-    title = "模型评价（误差相关）" if task_type == "regression" else "模型评价（分类指标）"
-    return {
-        "id": "metric_comparison",
-        "title": title,
-        "columns": columns,
-        "rows": rows,
-    }
-
-
 def _merge_run_context(context: dict[str, Any]) -> list[dict[str, Any]]:
     successful_by_id = {
         run.get("run_id"): run
@@ -1539,44 +706,6 @@ def _merge_run_context(context: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         merged.append(run)
     return merged[:_TOP_RUNS]
-
-
-def _training_setup_text(row: dict[str, Any]) -> str:
-    params = row.get("params") or {}
-    search_meta = row.get("search_meta") or {}
-    parts = []
-    if row.get("strategy_type"):
-        parts.append(f"策略={row['strategy_type']}")
-    if row.get("trial_no") is not None:
-        parts.append(f"Trial={row['trial_no']}")
-    if isinstance(params, dict):
-        if params.get("cv_folds") is not None:
-            parts.append(f"交叉验证={params['cv_folds']} 折")
-        if params.get("test_size") is not None:
-            parts.append(f"测试集比例={params['test_size']}")
-        if params.get("random_state") is not None:
-            parts.append(f"随机种子={params['random_state']}")
-    if isinstance(search_meta, dict):
-        mode = search_meta.get("evaluation_mode") or search_meta.get("search_mode")
-        if mode:
-            parts.append(f"评估方式={mode}")
-    return "；".join(str(part) for part in parts) or "训练设置未完整记录"
-
-
-def _process_summary_text(row: dict[str, Any]) -> str:
-    metrics = row.get("metrics") or {}
-    history = None
-    if isinstance(metrics, dict):
-        for key in ("training_history", "history", "loss_history", "evals_result"):
-            value = metrics.get(key)
-            if value:
-                history = value
-                break
-    if isinstance(history, list):
-        return f"记录了 {len(history)} 个训练过程点，可继续查看收敛或波动情况"
-    if isinstance(history, dict):
-        return f"记录了 {len(history)} 组训练过程指标，可用于复核收敛轨迹"
-    return "未记录逐轮曲线，当前依据训练/验证/测试汇总指标判断过程质量"
 
 
 def _key_params_text(row: dict[str, Any]) -> str:
@@ -1641,296 +770,6 @@ def _build_parameter_settings_table(context: dict[str, Any]) -> dict[str, Any] |
     }
 
 
-def _run_effect_text(row: dict[str, Any], objective: str, direction: str) -> str:
-    metrics = row.get("metrics") or {}
-    selection_value = row.get("selection_value") or row.get("objective_value")
-    final_value = row.get("final_test_value")
-    if selection_value is None and isinstance(metrics, dict):
-        _, selection_value = _first_metric(
-            metrics,
-            [f"selection_cv_mean_{objective}", f"validation_{objective}", f"val_{objective}"],
-        )
-    if final_value is None and isinstance(metrics, dict):
-        _, final_value = _first_metric(metrics, [f"final_test_{objective}", f"test_{objective}"])
-    return _effect_note(selection_value, final_value, direction)
-
-
-def _build_model_training_process_table(context: dict[str, Any]) -> dict[str, Any] | None:
-    task = context.get("task") or {}
-    objective = task.get("objective_metric") or "score"
-    direction = task.get("objective_direction") or "max"
-    rows = []
-    for row in _merge_run_context(context):
-        rows.append({
-            "model_type": row.get("model_type") or "—",
-            "strategy_type": row.get("strategy_type") or "—",
-            "trial_no": _fmt_value(row.get("trial_no")),
-            "status": row.get("status") or "SUCCESS",
-            "training_setup": _training_setup_text(row),
-            "key_params": _key_params_text(row),
-            "process_summary": _process_summary_text(row),
-            "effect_summary": _run_effect_text(row, objective, direction),
-            "run_id": row.get("run_id"),
-        })
-    if not rows:
-        return None
-    return {
-        "id": "model_training_process",
-        "title": "模型训练过程",
-        "columns": [
-            {"key": "model_type", "title": "模型"},
-            {"key": "strategy_type", "title": "策略"},
-            {"key": "trial_no", "title": "Trial"},
-            {"key": "status", "title": "状态"},
-            {"key": "training_setup", "title": "训练设置"},
-            {"key": "key_params", "title": "关键参数"},
-            {"key": "process_summary", "title": "过程记录"},
-            {"key": "effect_summary", "title": "过程解读"},
-            {"key": "run_id", "title": "Run ID"},
-        ],
-        "rows": rows,
-    }
-
-
-def _best_run(rows: list[dict[str, Any]], direction: str) -> dict[str, Any]:
-    def score(row: dict[str, Any]) -> float:
-        value = _round_number(row.get("final_test_value"))
-        if value is None:
-            value = _round_number(row.get("selection_value") or row.get("objective_value"))
-        if value is None:
-            return float("-inf") if direction == "max" else float("inf")
-        return value
-
-    return sorted(rows, key=score, reverse=direction == "max")[0]
-
-
-def _group_risk_text(rows: list[dict[str, Any]], objective: str, direction: str) -> str:
-    gaps: list[float] = []
-    finals: list[float] = []
-    for row in rows:
-        selection = _round_number(row.get("selection_value") or row.get("objective_value"))
-        final = _round_number(row.get("final_test_value"))
-        if final is not None:
-            finals.append(final)
-        if selection is not None and final is not None:
-            gap = final - selection if direction == "max" else selection - final
-            gaps.append(gap)
-    if not finals:
-        return "缺少最终测试指标，当前只能看选择阶段表现"
-    if gaps and min(gaps) < -0.05:
-        return f"存在 {objective} 测试表现明显低于选择阶段的 Run，需关注过拟合或切分差异"
-    if len(finals) >= 2 and max(finals) - min(finals) > 0.05:
-        return "同组 Run 最终效果波动较大，调参结论需要更多试验支撑"
-    return "选择阶段与最终测试整体接近，稳定性初步可接受"
-
-
-def _search_profile_text(rows: list[dict[str, Any]]) -> str:
-    strategies = {str(row.get("strategy_type") or "—") for row in rows}
-    trials = [row.get("trial_no") for row in rows if row.get("trial_no") is not None]
-    strategy_text = "、".join(sorted(strategies))
-    if trials:
-        return f"{strategy_text}；覆盖 Trial {min(trials)}-{max(trials)}"
-    return strategy_text
-
-
-def _build_model_training_summary_table(context: dict[str, Any]) -> dict[str, Any] | None:
-    task = context.get("task") or {}
-    objective = task.get("objective_metric") or "score"
-    direction = task.get("objective_direction") or "max"
-    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for row in _merge_run_context(context):
-        key = (str(row.get("model_type") or "—"), str(row.get("strategy_type") or "—"))
-        grouped.setdefault(key, []).append(row)
-
-    rows = []
-    for (model_type, strategy_type), group_rows in grouped.items():
-        best = _best_run(group_rows, direction)
-        rows.append({
-            "model_type": model_type,
-            "strategy_type": strategy_type,
-            "trial_count": str(len(group_rows)),
-            "search_profile": _search_profile_text(group_rows),
-            "best_selection_metric": _metric_text(best.get("selection_metric_key"), best.get("selection_value") or best.get("objective_value")),
-            "best_final_metric": _metric_text(best.get("final_test_metric_key"), best.get("final_test_value")),
-            "key_params": _key_params_text(best),
-            "stability_risk": _group_risk_text(group_rows, objective, direction),
-        })
-    if not rows:
-        return None
-    return {
-        "id": "model_training_summary",
-        "title": "模型训练摘要",
-        "columns": [
-            {"key": "model_type", "title": "模型"},
-            {"key": "strategy_type", "title": "策略"},
-            {"key": "trial_count", "title": "Trial 数"},
-            {"key": "search_profile", "title": "训练/搜索方式"},
-            {"key": "best_selection_metric", "title": "最佳选择指标"},
-            {"key": "best_final_metric", "title": "最佳测试指标"},
-            {"key": "key_params", "title": "代表参数"},
-            {"key": "stability_risk", "title": "稳定性与风险"},
-        ],
-        "rows": rows,
-    }
-
-
-def _metric_glossary_candidates(context: dict[str, Any]) -> list[str]:
-    task = context.get("task") or {}
-    seen: list[str] = []
-
-    def add(metric: str | None) -> None:
-        if metric and metric not in seen:
-            seen.append(metric)
-
-    add(task.get("objective_metric"))
-    for row in context.get("leaderboard") or []:
-        add(row.get("selection_metric_key"))
-        add(row.get("final_test_metric_key"))
-        metrics = row.get("metrics") or {}
-        if isinstance(metrics, dict):
-            for key in ("accuracy", "f1", "roc_auc", "auc", "rmse", "mae", "mse", "r2", "val_loss"):
-                if key in metrics:
-                    add(key)
-    return seen[:10]
-
-
-def _metric_meaning(metric: str) -> str:
-    key = metric.lower()
-    if "accuracy" in key:
-        return "预测正确的样本占比，适合类别较均衡的分类任务。"
-    if key in {"f1", "final_test_f1"} or key.endswith("_f1"):
-        return "精确率和召回率的调和平均，适合同时关注误报和漏报。"
-    if "roc_auc" in key or key == "auc":
-        return "模型区分正负样本的能力，越接近 1 区分能力越强。"
-    if "rmse" in key:
-        return "预测误差平方平均后开根号，对大误差更敏感。"
-    if "mae" in key:
-        return "预测值与真实值的平均绝对误差，更直观反映平均偏差。"
-    if "r2" in key:
-        return "模型解释目标波动的比例，通常越接近 1 越好。"
-    if "loss" in key:
-        return "训练或验证损失，用于观察收敛和过拟合。"
-    return "平台记录的模型评估指标，需要结合任务类型和优化方向解读。"
-
-
-def _build_metric_glossary_table(context: dict[str, Any]) -> dict[str, Any] | None:
-    task = context.get("task") or {}
-    rows = []
-    for metric in _metric_glossary_candidates(context):
-        rows.append({
-            "metric": metric,
-            "label": _metric_label(metric),
-            "stage": _metric_usage_text(metric),
-            "direction": _metric_direction_text(metric, task.get("objective_direction")),
-            "meaning": _metric_meaning(metric),
-        })
-    if not rows:
-        return None
-    return {
-        "id": "metric_glossary",
-        "title": "指标读法说明",
-        "columns": [
-            {"key": "metric", "title": "指标"},
-            {"key": "label", "title": "中文名"},
-            {"key": "stage", "title": "使用阶段"},
-            {"key": "direction", "title": "方向"},
-            {"key": "meaning", "title": "怎么读"},
-        ],
-        "rows": rows,
-    }
-
-
-def _build_recommendation_plan_table(context: dict[str, Any]) -> dict[str, Any] | None:
-    task = context.get("task") or {}
-    dataset = context.get("dataset") or {}
-    counts = context.get("run_status_counts") or {}
-    columns = _iter_column_info(dataset.get("columns_info"))
-    missing_columns = [
-        name
-        for name, info in columns
-        if (info.get("missing_count") or 0) or (info.get("missing_rate") or 0)
-    ]
-    final_key, final_value, final_source = _available_final_metric(context)
-    rows: list[dict[str, Any]] = []
-
-    if missing_columns:
-        rows.append({
-            "priority": "P0",
-            "area": "数据质量",
-            "evidence": f"{len(missing_columns)} 个字段存在缺失：{'、'.join(missing_columns[:5])}",
-            "action": "补齐缺失处理策略，区分数值填充、类别填充和是否删除异常样本。",
-            "expected_benefit": "减少模型把缺失模式误当作有效信号的风险。",
-        })
-    else:
-        rows.append({
-            "priority": "P1",
-            "area": "数据理解",
-            "evidence": f"字段画像显示 {len(columns)} 个字段，缺失风险不突出。",
-            "action": "补充字段业务含义、取值范围和异常值统计，完善数据概况解释。",
-            "expected_benefit": "让报告从“列名解释”升级为可审计的数据质量说明。",
-        })
-
-    if final_source == "run_level":
-        rows.append({
-            "priority": "P0",
-            "area": "最终评估",
-            "evidence": f"已有 Run 级 `{final_key}`={_fmt_value(final_value)}，但任务级 final_evaluation 尚未固化。",
-            "action": "执行或确认最终评估，把胜出 Run、测试集指标和评估版本写入任务级状态。",
-            "expected_benefit": "避免报告结论依赖临时榜单，提高上线判断可信度。",
-        })
-    elif final_value is None:
-        rows.append({
-            "priority": "P0",
-            "area": "最终评估",
-            "evidence": "当前没有可用最终测试指标。",
-            "action": "先完成独立测试集评估，再生成面向决策的报告。",
-            "expected_benefit": "避免只凭选择阶段分数判断泛化效果。",
-        })
-
-    rows.append({
-        "priority": "P1",
-        "area": "训练验证",
-        "evidence": f"当前成功 Run {counts.get('SUCCESS', 0)} 个，目标指标 `{task.get('objective_metric') or '—'}`。",
-        "action": "比较各模型选择指标与测试指标差距；差距大的模型优先增加交叉验证折数或重复切分验证。",
-        "expected_benefit": "识别过拟合和数据切分偶然性，提升模型选择稳定性。",
-    })
-
-    if _top_shap_items(context):
-        top_features = "、".join(item["feature"] for item in _top_shap_items(context)[:3])
-        rows.append({
-            "priority": "P2",
-            "area": "特征解释",
-            "evidence": f"当前最重要特征集中在 {top_features}。",
-            "action": "围绕高影响特征做异常值检查、业务合理性复核和必要的衍生特征。",
-            "expected_benefit": "提升可解释性，并降低模型依赖错误字段的风险。",
-        })
-
-    return {
-        "id": "recommendation_plan",
-        "title": "建议行动计划",
-        "columns": [
-            {"key": "priority", "title": "优先级"},
-            {"key": "area", "title": "方向"},
-            {"key": "evidence", "title": "依据"},
-            {"key": "action", "title": "动作"},
-            {"key": "expected_benefit", "title": "预期收益"},
-        ],
-        "rows": rows,
-    }
-
-
-def _build_tables(context: dict[str, Any]) -> list[dict[str, Any]]:
-    tables: list[dict[str, Any]] = []
-    for table in (
-        _build_data_profile_table(context),
-        _build_parameter_settings_table(context),
-        _build_metric_comparison_table(context),
-    ):
-        if table is not None:
-            tables.append(table)
-    return tables
-
-
 def _build_evidence(context: dict[str, Any]) -> list[str]:
     task = context.get("task") or {}
     dataset = context.get("dataset") or {}
@@ -1960,162 +799,70 @@ def _build_evidence(context: dict[str, Any]) -> list[str]:
     return evidence
 
 
-def _section_from_markdown(markdown: str, heading: str) -> str | None:
-    pattern = re.compile(
-        rf"(^##\s+{re.escape(heading)}[\s\S]*?)(?=^##\s+|\Z)",
-        flags=re.MULTILINE,
-    )
-    match = pattern.search(markdown or "")
-    if not match:
-        return None
-    return match.group(1).strip() + "\n"
+def _enrich_context(context: dict[str, Any]) -> dict[str, Any]:
+    """The context plus the target statistics the facts and charts read.
+
+    Computed once here rather than inside the overall report's prompt, which is
+    where it used to live — every sub-report then saw a null target mean and
+    reached for the number in the prompt's own example.
+    """
+    enriched = dict(context)
+    if "_target_stats" not in enriched:
+        enriched["_target_stats"] = _target_column_stats(context)
+    return enriched
 
 
-def _section_from_markdown_any(markdown: str, headings: list[str]) -> str | None:
-    for heading in headings:
-        section = _section_from_markdown(markdown, heading)
-        if section:
-            return section
-    return None
-
-
-def _intro_title(markdown: str) -> str:
-    first_heading = re.search(r"^#\s+(.+)$", markdown or "", flags=re.MULTILINE)
-    return f"# {first_heading.group(1).strip()}\n" if first_heading else "# AI 建模报告\n"
-
-
-def _with_title(markdown: str) -> str:
-    """The report body, guaranteed to open with exactly one H1."""
-    body = _strip_markdown_tables(markdown or "")
-    if re.search(r"^#\s+\S", body, flags=re.MULTILINE):
-        return body
-    return _intro_title(body) + "\n" + body
-
-
-def _input_output_markdown(context: dict[str, Any]) -> str:
+def _build_meta(context: dict[str, Any]) -> dict[str, Any]:
     task = context.get("task") or {}
     dataset = context.get("dataset") or {}
-    experiments = context.get("experiments") or []
-    selected_models: list[str] = []
-    strategies: list[str] = []
-    for exp in experiments:
-        strategy = str(exp.get("strategy_type") or "—")
-        if strategy not in strategies:
-            strategies.append(strategy)
-        for model in exp.get("selected_models") or []:
-            model_text = str(model)
-            if model_text not in selected_models:
-                selected_models.append(model_text)
-    model_text = "、".join(selected_models[:8]) or "暂无记录"
-    strategy_text = "、".join(strategies) or "暂无记录"
-    output_text = "分类标签与类别概率" if task.get("task_type") == "classification" else "连续数值预测"
-
-    return (
-        "## 输入与输出说明\n\n"
-        f"本次建模的入参包括数据集 `{dataset.get('name') or '—'}`、目标列 "
-        f"`{task.get('target_column') or '—'}`、任务类型 `{task.get('task_type') or '—'}`，"
-        f"以及候选模型 `{model_text}` 和训练策略 `{strategy_text}`。这些输入决定了平台如何切分数据、"
-        "训练候选模型、计算选择阶段指标，并最终把结果汇总给报告生成器。\n\n"
-        f"本任务的业务出参是{output_text}；平台出参包括训练过程曲线、预测结果曲线、"
-        "效果指标表、关键特征解释、实验状态和这份 AI 报告归档。阅读时要把“预测输出”和"
-        "“评估输出”分开：前者服务于模型使用，后者服务于判断模型是否可靠。"
-    )
+    counts = context.get("run_status_counts") or {}
+    board = context.get("leaderboard") or []
+    return {
+        "task_name": task.get("name"),
+        "dataset_name": dataset.get("name") or task.get("dataset_name"),
+        "target_column": task.get("target_column"),
+        "task_type": task.get("task_type"),
+        "objective_metric": task.get("objective_metric"),
+        "run_count": sum(int(v) for v in counts.values()) if counts else len(board),
+        "model_count": len({e.get("model_type") for e in board if e.get("model_type")}),
+    }
 
 
-def _param_snippet(params: dict[str, Any] | None) -> str:
-    compact = _compact_params(params)
-    if not isinstance(compact, dict) or not compact:
-        return "未记录关键超参数"
-    parts = []
-    for key, value in list(compact.items())[:6]:
-        rendered = json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else _fmt_value(value)
-        parts.append(f"`{key}`={rendered}")
-    return "，".join(parts)
+def _build_appendix_tables(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """The two wide tables that stay out of the prose: column profile, parameters."""
+    return [
+        table
+        for table in (_build_data_profile_table(context), _build_parameter_settings_table(context))
+        if table is not None
+    ]
 
 
-def _block_chart(chart_id: str, caption: str) -> dict[str, Any]:
-    return {"type": "chart", "id": f"{chart_id}_block", "chart_id": chart_id, "caption": caption}
-
-
-def _block_table(table_id: str, caption: str) -> dict[str, Any]:
-    return {"type": "table", "id": f"{table_id}_block", "table_id": table_id, "caption": caption}
-
-
-def _build_report_blocks(
+def build_rich_report_payload(
+    context: dict[str, Any] | str,
     markdown: str,
-    charts: list[dict[str, Any]],
-    tables: list[dict[str, Any]],
-    task_type: str = "",
-) -> list[dict[str, Any]]:
-    """The overall report's body: the model's prose, then the real artifacts.
+    charts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Everything the page needs beyond the markdown, in the payload contract.
 
-    It used to slice the prose into 第一章/第三章 and pad the gaps with six
-    server-written chapters — 任务范围, 过程与评价, 数据集概况, 参数说明,
-    训练过程, 效果小结. That scaffold dates from when the report was one long
-    document and there was nothing else to read. There is now: the overall
-    report gives the verdict and the dataset, and a sub-report per model covers
-    training and results. The chapters said the same things a third time, in the
-    mechanical register that made the report hard to read — and their headings
-    are what put "第二章 过程与评价" in the table of contents of a report that
-    has no chapters.
-
-    The tables and charts stay. They are computed from real data, they are the
-    only place several of these facts appear at all, and each keeps its one-line
-    caption saying how to read it.
+    Charts are semantic specs (see report_charts), never renderer options; when
+    the caller has not already built and placed them, they are built here and
+    filtered to the {{chart:id}} markers the document actually carries.
     """
-    chart_ids = {chart["id"] for chart in charts}
-    table_ids = {table["id"] for table in tables}
+    from app.services import ai_report_narrative, report_charts, report_facts
 
-    blocks: list[dict[str, Any]] = [
-        # The title is prepended only when the prose lacks one. It used to be
-        # safe to always prepend because the body was a *slice* of the prose;
-        # now the whole document goes in, title included.
-        {"type": "markdown", "id": "conclusion", "markdown": _with_title(markdown)},
-    ]
-    metric_caption = (
-        "这张表按相同验证口径分别比较误差指标；交叉验证与单次留出验证不形成全局排名。"
-        if task_type == "regression" else
-        "这张表按相同验证口径分别比较分类指标，优先看最终测试，其次看选择阶段结果。"
-    )
-    captions = [
-        ("table", "data_profile",
-         "这张表说明数据集中有哪些字段、每个字段扮演什么角色，以及是否存在缺失或编码风险。"),
-        ("table", "parameter_settings",
-         "这张表只保留本 task 训练真正需要追溯的配置：模型、策略、Trial、验证设置和关键参数。"),
-        ("chart", "training_curves",
-         "这张图优先展示逐 epoch 的 loss/score 曲线；没有逐轮记录时展示 Trial 级选择指标与最终测试指标，用来判断调参过程是否稳定。"),
-        ("table", "metric_comparison",
-         metric_caption),
-        ("chart", "roc_curve",
-         "这张图用于分类任务，观察模型区分正负样本的能力；曲线越靠近左上角，区分能力越强。"),
-        ("chart", "prediction_curve",
-         "这张图把真实值与预测值按样本序号放在一起，方便观察预测偏差是否集中在局部样本。"),
-    ]
-    for kind, artifact_id, caption in captions:
-        present = chart_ids if kind == "chart" else table_ids
-        if artifact_id in present:
-            blocks.append(
-                _block_chart(artifact_id, caption) if kind == "chart"
-                else _block_table(artifact_id, caption)
-            )
-    return blocks
-
-
-def build_rich_report_payload(context: dict[str, Any] | str, markdown: str) -> dict[str, Any]:
-    structured = context if isinstance(context, dict) else {}
-    headline_metrics = _build_headline_metrics(structured, markdown)
-    charts = _build_charts(structured)
-    tables = _build_tables(structured)
+    structured = _enrich_context(context if isinstance(context, dict) else {})
+    facts = report_facts.build_overview_facts(structured)
+    if charts is None:
+        charts = ai_report_narrative.keep_placed(
+            report_charts.build_overview_charts(structured), markdown,
+        )
     return {
         "report_schema_version": _REPORT_SCHEMA_VERSION,
-        "headline_metrics": headline_metrics,
+        "headline": (facts.get("headline") or {}).get("sentence") or "",
+        "meta": _build_meta(structured),
         "charts": charts,
-        "tables": tables,
+        "appendix_tables": _build_appendix_tables(structured),
         "evidence": _build_evidence(structured),
-        "report_blocks": _build_report_blocks(
-            markdown, charts, tables,
-            str((structured.get("task") or {}).get("task_type") or "").lower(),
-        ),
     }
 
 
@@ -2697,7 +1444,9 @@ async def generate_ai_task_report(
         # Lifted out of the context so the sub-report list can mark the winner
         # without the frontend digging through the report's own input.
         "best_run_id": (context.get("task") or {}).get("best_run_id"),
-        **build_rich_report_payload(context, narrative["overview"]),
+        **build_rich_report_payload(
+            context, narrative["overview"], charts=narrative["overview_charts"],
+        ),
     }
     return await archive_ai_report(db, report, owner_username=owner_username)
 
@@ -2714,14 +1463,8 @@ async def _generate_narrative(
         return _normalise_markdown(await _request_chat_completion(settings, messages))
 
     task_type = ((context.get("task") or {}).get("task_type") or "regression")
-    # The template facts need these; they were previously computed only inside
-    # the overall report's prompt, which is why every sub-report saw a null
-    # target mean and reached for the number in the prompt's own example.
-    enriched = dict(context)
-    enriched["_target_stats"] = _target_column_stats(context)
-    enriched["_readiness"] = compute_readiness_score(context)
     result = await ai_report_narrative.generate_narrative_report(
-        enriched,
+        _enrich_context(context),
         call_model=_call,
         task_type=task_type,
     )
