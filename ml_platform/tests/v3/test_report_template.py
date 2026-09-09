@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.services import ai_report_narrative as narrative
+from app.services import report_charts as rc
 from app.services import report_facts as rf
 from app.services import report_template as rt
 
@@ -27,6 +27,13 @@ class TestRender:
 
     def test_if_block_keeps_when_present(self):
         assert "B" in rt.render("A{{#if x}}\nB\n{{/if}}", {"x": "y"})
+
+    def test_a_false_flag_drops_its_block(self):
+        # fields.has_groups is a computed boolean. Treating False as "present"
+        # kept the block open and asked the model what the dataset's
+        # constructed features were solving when it had none.
+        assert rt.render("A{{#if flag}}B{{/if}}", {"flag": False}).strip() == "A"
+        assert rt.render("A{{#if flag}}B{{/if}}", {"flag": True}).strip() == "AB"
 
     def test_nested_if_blocks_pair_correctly(self):
         # A non-greedy pattern alone mispairs these, silently dropping the tail.
@@ -63,6 +70,12 @@ class TestWritingSlots:
         out, n = rt.apply_writing("建议：<<写建议>>", {})
         assert out == "建议："
         assert n == 0
+
+    def test_an_unanswered_slot_on_its_own_line_leaves_no_blank_run(self):
+        # The overview puts the dataset slot on a line of its own; deleting it
+        # left "\n\n\n\n" between a figure and the next heading.
+        out, _ = rt.apply_writing("{{chart:field_composition}}\n\n<<两句>>\n\n## 特征依赖", {})
+        assert out == "{{chart:field_composition}}\n\n## 特征依赖"
 
     def test_a_non_dict_reply_costs_the_sentences_not_the_report(self):
         out, n = rt.apply_writing("正文 <<写一句>>", "模型答非所问")
@@ -162,33 +175,43 @@ class TestOverviewFactsHandleDuplicateRuns:
             "metrics": {"cv_avg_rmse": value, "cv_std_rmse": 1.0, "cv_avg_r2": 0.99},
         }
         return {
-            "task": {"name": "T", "objective_metric": "rmse", "target_column": "y"},
-            "dataset": {"row_count": 10, "column_count": 2, "column_names": ["y", "x_lag_1"]},
+            "task": {"name": "T", "objective_metric": "rmse", "target_column": "y",
+                     "final_evaluation": {"state": "FINALIZED"}},
+            "dataset": {"row_count": 10, "column_count": 2, "column_names": ["y", "x"]},
             "leaderboard": [entry(1, "A", 72.0), entry(2, "A", 72.0),
                             entry(3, "B", 72.3), entry(4, "C", 80.0)],
             "run_status_counts": {"SUCCESS": 4},
             "_target_stats": {"mean": 8896.59, "min": 1.0, "max": 2.0},
-            "_readiness": {"score": 60, "checks": []},
         }
 
-    def test_the_duplicate_is_called_out(self):
+    def test_the_duplicate_is_the_top_risk_when_nothing_worse_applies(self):
         facts = rf.build_overview_facts(self._ctx())
-        assert "同一模型" in facts["duplicates"]["note"]
+        assert facts["risk"]["key"] == "dup"
+        assert "同一个 A 的重复训练" in facts["risk"]["sentence"]
+        assert "重复训练" in facts["headline"]["sentence"]
 
     def test_the_runner_up_skips_the_duplicate(self):
         facts = rf.build_overview_facts(self._ctx())
-        assert facts["runner_up"]["model"] == "B"
+        assert facts["conclusion"]["runner"].startswith("B 只差 0.3")
 
-    def test_the_third_model_is_the_third_distinct_one(self):
+    def test_the_rest_are_counted_after_the_distinct_runner_up(self):
         # board[2] is still B here; reporting it as third had B "落后" itself.
         facts = rf.build_overview_facts(self._ctx())
-        assert "C" in facts["third"]["sentence"]
-        assert "B" not in facts["third"]["sentence"]
+        assert facts["conclusion"]["others"] == "其余一个模型落后 8 以上。"
 
-    def test_no_duplicate_section_when_every_model_is_distinct(self):
+    def test_no_duplicate_risk_when_every_model_is_distinct(self):
         ctx = self._ctx()
         ctx["leaderboard"] = [e for i, e in enumerate(ctx["leaderboard"]) if i != 1]
-        assert "duplicates" not in rf.build_overview_facts(ctx)
+        facts = rf.build_overview_facts(ctx)
+        assert facts["risk"]["key"] is None
+        assert "没有发现" in facts["risk"]["sentence"]
+
+    def test_a_rerun_gets_its_own_bar_but_not_its_own_row_of_dots(self):
+        ctx = self._ctx()
+        for e in ctx["leaderboard"]:
+            e["metrics"]["cv_folds"] = [{"fold": i, "rmse": e["objective_value"] + i * 0.1} for i in range(1, 4)]
+        assert rc.leaderboard_bars(ctx)["categories"] == ["A", "A #2", "B", "C"]
+        assert rc.fold_dots(ctx)["categories"] == ["A", "B", "C"]
 
 
 class TestValidationCohorts:
@@ -207,25 +230,49 @@ class TestValidationCohorts:
             "leaderboard": [cv, holdout],
             "run_status_counts": {"SUCCESS": 2},
             "_target_stats": {"mean": 1000.0, "min": 1.0, "max": 2.0},
-            "_readiness": {"score": 60, "checks": []},
         }
 
-    def test_mixed_validation_has_no_global_winner_claim(self):
+    def test_a_decisive_gap_names_a_winner_across_schemes(self):
+        # 72 against 132 with a fold std of 0.8: refusing to rank these because
+        # one is a fold mean and the other a hold-out score is coy, not careful.
         facts = rf.build_overview_facts(self._ctx())
-        assert "不存在可直接认定的全局最优模型" in facts["conclusion"]["sentence"]
-        assert "不形成全局排名" in facts["families"]["caveat"]
+        assert facts["conclusion"]["verdict"].startswith("xgboost 表现最好，交叉验证 RMSE 72")
+        assert "留出验证模型的误差都在它的 1.8 倍以上，明显落后" in facts["conclusion"]["others"]
+        for phrase in ("不存在", "无法认定"):
+            assert phrase not in " ".join(facts["conclusion"].values())
+        assert facts["headline"]["sentence"].startswith("xgboost 胜出")
 
-    def test_table_ranks_within_each_validation_cohort(self):
-        table = rf.build_overview_facts(self._ctx())["tables"]["leaderboard"]
-        assert "验证口径" in table and "组内排名" in table
-        assert "| 交叉验证 | 1 | xgboost" in table
-        assert "| 留出验证 | 1 | lstm" in table
+    def test_a_close_gap_across_schemes_is_left_open(self):
+        ctx = self._ctx()
+        ctx["leaderboard"][1]["objective_value"] = 73.0
+        ctx["leaderboard"][1]["metrics"]["selection_val_rmse"] = 73.0
+        facts = rf.build_overview_facts(ctx)
+        assert "口径不同，排不出先后" in facts["conclusion"]["others"]
+        assert "lstm" in facts["conclusion"]["others"]
 
-    def test_a_holdout_run_is_not_compared_to_a_cv_run(self):
+    def test_a_close_gap_inside_one_scheme_is_a_draw(self):
+        ctx = self._ctx()
+        ctx["leaderboard"][1] = {
+            "run_id": "cv2", "rank": 2, "model_type": "lightgbm", "objective_value": 72.3,
+            "metrics": {"selection_cv_mean_rmse": 72.3, "cv_std_rmse": 0.9},
+        }
+        facts = rf.build_overview_facts(ctx)
+        assert "lightgbm 只差 0.3" in facts["conclusion"]["runner"]
+        assert "分不出高下" in facts["conclusion"]["runner"]
+
+    def test_a_holdout_run_far_behind_is_ranked_behind_the_cv_winner(self):
         ctx = self._ctx()
         _, facts = rf.build_run_facts(ctx["leaderboard"][1], ctx, ctx["leaderboard"][0])
         assert "相差 60" not in facts["gap"]["sentence"]
-        assert "本模型即本次最优" in facts["gap"]["sentence"]
+        assert "留出验证组里最好的" in facts["gap"]["sentence"]
+        assert "本模型的误差是它的 1.8 倍" in facts["gap"]["caveat"]
+        assert "落后是确定的" in facts["gap"]["caveat"]
+
+    def test_a_holdout_run_close_to_the_cv_winner_is_not_ranked(self):
+        ctx = self._ctx()
+        ctx["leaderboard"][1]["objective_value"] = 73.0
+        ctx["leaderboard"][1]["metrics"]["selection_val_rmse"] = 73.0
+        _, facts = rf.build_run_facts(ctx["leaderboard"][1], ctx, ctx["leaderboard"][0])
         assert "两种口径不直接比较" in facts["gap"]["caveat"]
 
     def test_cv_summary_without_folds_renders_no_blank_fold_sentence(self):
@@ -237,34 +284,51 @@ class TestValidationCohorts:
         assert "极差 ，" not in rendered
         assert "（ ）" not in rendered
 
-    def test_temporal_features_warn_when_old_runs_lack_split_provenance(self):
+    def test_temporal_leakage_outranks_every_other_risk(self):
+        # Also unfinalised, also without a rerun — the leak is the one that
+        # changes what the numbers mean, so it is the one the reader is told.
         ctx = self._ctx()
         ctx["dataset"]["column_names"] = ["load", "load_lag_48", "hour_sin"]
-        warning = rf.build_overview_facts(ctx)["validation"]["risk_sentence"]
-        assert "不能证明模型对未来时段" in warning
-        assert "时间顺序" in warning
         facts = rf.build_overview_facts(ctx)
-        assert "先按时间顺序重新训练和验证" in facts["next_step"]["sentence"]
-        assert "不建议使用封存测试集" in facts["next_step"]["sentence"]
+        assert facts["risk"]["key"] == "leak"
+        assert facts["risk"]["sentence"].startswith("这批 Run 用的是随机切分")
+        assert "乐观" in facts["risk"]["sentence"]
+        assert "随机切分训练的，分数偏乐观" in facts["headline"]["sentence"]
+        for banned in ("建议", "应当", "优先"):
+            assert banned not in facts["risk"]["sentence"]
+
+    def test_missing_final_evaluation_is_the_risk_without_a_leak(self):
+        facts = rf.build_overview_facts(self._ctx())
+        assert facts["risk"]["key"] == "final"
+        assert "封存测试集" in facts["risk"]["sentence"]
+        assert "还没在封存测试集上做最终评估" in facts["headline"]["sentence"]
 
     def test_time_aware_runs_name_their_actual_validation_scheme(self):
         entry = self._ctx()["leaderboard"][0]
         entry["metrics"]["validation_strategy"] = "time_series_expanding"
         assert rf.validation_scheme(entry) == "时间序列交叉验证"
 
-    def test_mixed_cohort_shap_does_not_claim_a_global_best(self):
+    def test_a_dominant_feature_is_named_in_the_dependency_lead(self):
         ctx = self._ctx()
         ctx["leaderboard"][0]["metrics"]["top_shap_importances"] = [
             {"feature": "load_lag_1", "mean_abs_shap": 10.0},
             {"feature": "load_lag_2", "mean_abs_shap": 2.0},
         ]
-        sentence = rf.build_overview_facts(ctx)["shap"]["evidence_sentence"]
-        assert sentence.startswith("交叉验证组领先模型")
-        assert "最优模型" not in sentence
+        sentence = rf.build_overview_facts(ctx)["shap"]["lead_sentence"]
+        assert sentence == "模型主要在用 load_lag_1 做预测，其余特征只是修正。"
+
+    def test_prose_numbers_are_rounded_for_reading(self):
+        assert rf.readable(72.4673) == "72.5"
+        assert rf.readable(0.3183) == "0.3"
+        assert rf.readable(132.0422) == "132"
+        assert rf.readable(130.0) == "130"
+        assert rf.readable(0.7778, "accuracy") == "0.778"
+        assert rf.pct_text(72.4673, 8896.59) == "0.8%"
+        assert rf.pct_text(72.4673, 8896.59, exact=True) == "0.81%"
 
 
-class TestChartDefects:
-    """Three ways a chart was drawn wrong rather than not drawn at all."""
+class TestChartSpecs:
+    """The figure data is right; how it is drawn is no longer decided here."""
 
     def _folds(self):
         # lightgbm's real r2 values: two folds sit exactly on the minimum.
@@ -272,53 +336,28 @@ class TestChartDefects:
             [(0.9974, 72.8147), (0.9974, 71.8756), (0.9972, 73.5246),
              (0.9972, 74.0774), (0.9974, 71.6359)])]
 
-    def _chart(self, cid, run, objective="rmse"):
-        built = narrative.build_run_charts(run, [cid], objective)
-        return built[0] if built else None
-
     def test_the_fold_chart_plots_the_objective_metric(self):
         # It took the first numeric key in the fold dict, which is r2 — the
         # prose and the ranking both talk about rmse.
-        chart = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}})
-        assert "RMSE" in chart["title"].upper()
-        assert chart["option"]["series"][0]["data"][0] == 72.8147
+        spec = rc.fold_scores({"metrics": {"cv_folds": self._folds()}}, "rmse")
+        assert "RMSE" in spec["title"] and "rmse" not in spec["title"]
+        assert spec["series"][0]["values"][0] == 72.8147
+        assert spec["unit"] == "RMSE"
 
     def test_the_fold_chart_falls_back_when_the_objective_is_absent(self):
-        chart = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}}, "mape")
-        assert chart is not None
+        assert rc.fold_scores({"metrics": {"cv_folds": self._folds()}}, "mape") is not None
 
-    def test_the_lowest_bar_is_not_zero_pixels_high(self):
-        # scale:true puts the axis floor on the data minimum, so the two folds
-        # sitting at 0.9972 rendered as nothing at all.
-        chart = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}}, "r2")
-        axis = chart["option"]["yAxis"]
-        assert axis.get("scale") is not True
-        assert axis["min"] < 0.9972, axis
+    def test_the_mean_is_a_reference_line_not_a_styled_mark(self):
+        spec = rc.fold_scores({"metrics": {"cv_folds": self._folds()}}, "rmse")
+        assert spec["reference_lines"][0]["value"] == pytest.approx(72.7856, abs=1e-3)
+        assert rc.renderer_leaks(spec) == []
 
-    def test_the_axis_bounds_are_round_numbers(self):
-        # ECharts prints an explicit min and max verbatim, so an unrounded
-        # padded bound became the tick label "74.32155".
-        axis = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}})["option"]["yAxis"]
-        for bound in (axis["min"], axis["max"]):
-            assert len(str(bound).split(".")[-1]) <= 2, bound
+    def test_every_fold_row_carries_the_other_metrics_for_hover(self):
+        spec = rc.fold_scores({"metrics": {"cv_folds": self._folds()}}, "rmse")
+        assert spec["rows"][0] == {"category": "第 1 折", "fold": 1, "rmse": 72.8147, "r2": 0.9974}
+        assert [f["key"] for f in spec["tooltip_fields"]] == ["fold", "rmse", "r2"]
 
-    def test_the_metric_name_is_capitalised_in_the_title(self):
-        chart = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}})
-        assert "RMSE" in chart["title"]
-        assert "rmse" not in chart["title"]
-
-    def test_the_mean_line_label_sits_inside_the_plot(self):
-        # At the default right-hand end the plot edge clipped it to "均值".
-        chart = self._chart("fold_scores", {"metrics": {"cv_folds": self._folds()}})
-        mark = chart["option"]["series"][0]["markLine"]
-        assert mark["label"]["position"].startswith("inside")
-
-    def test_identical_fold_values_still_get_a_usable_axis(self):
-        flat = [{"fold": i + 1, "rmse": 5.0} for i in range(3)]
-        axis = self._chart("fold_scores", {"metrics": {"cv_folds": flat}})["option"]["yAxis"]
-        assert axis["min"] < 5.0 < axis["max"]
-
-    def test_the_loss_chart_uses_a_log_axis(self):
+    def test_the_loss_chart_asks_for_a_log_axis(self):
         # Epoch 1 is orders of magnitude above the rest; on a linear axis the
         # whole curve flattens onto zero and the divergence point vanishes.
         run = {"metrics": {"history": [
@@ -326,7 +365,10 @@ class TestChartDefects:
             {"epoch": 2, "train_loss": 300.0, "val_loss": 320.0},
             {"epoch": 3, "train_loss": 140.0, "val_loss": 150.0},
         ]}}
-        assert self._chart("loss_history", run)["option"]["yAxis"]["type"] == "log"
+        spec = rc.loss_history(run, "rmse")
+        assert spec["y_log"] is True
+        assert spec["x"] == [1, 2, 3]
+        assert spec["rows"][0]["train_loss"] == 4.2e7
 
 
 class TestDeepLearningTrainingFacts:
@@ -368,6 +410,20 @@ class TestDeepLearningTrainingFacts:
         assert facts["train"]["plan_note"] == "计划训练 50 轮，"
         assert facts["train"]["stop_reason"] == "触发早停"
         assert facts["train"]["actual_epochs"] == 38
+
+    def test_a_held_out_run_reports_its_own_mae_and_r2(self):
+        # Only cv_avg_* keys were read, so every deep-learning sub-report had
+        # a single number and no MAE or R² — and the one number was printed to
+        # four decimals.
+        hist = [{"epoch": i, "val_rmse": 200.0 - i * 10} for i in range(1, 8)]
+        run = {"model_type": "m", "objective_value": 132.0422,
+               "metrics": {"selection_val_rmse": 132.0422, "val_rmse": 132.0422,
+                           "val_mae": 99.03, "val_r2": 0.9917, "history": hist}}
+        ctx = {"task": {"objective_metric": "rmse", "target_column": "load"},
+               "leaderboard": [run], "_target_stats": {"mean": 8896.59}}
+        _, facts = rf.build_run_facts(run, ctx, run)
+        assert facts["metrics"]["sentence"] == "验证 RMSE 132、MAE 99，分别占 load 均值的 1.5% 和 1.1%；R² 0.992。"
+        assert facts["train"]["best_value"] == "130"
 
     def test_a_held_out_score_carries_the_comparability_caveat(self):
         # Ranked against a champion scored by cross-validation, which is a
@@ -438,23 +494,27 @@ class TestRunFactsDoNotMisstateProvenance:
         assert facts["train"]["stop_reason"] != "训练结束"
 
 
-class TestChartCaptionsDoNotAssert:
-    def test_the_fold_caption_states_no_finding(self):
-        # "个别折偏低说明数据划分不均" printed under a chart whose own verdict
-        # two lines above says no fold is an outlier.
-        from app.services import ai_report_narrative as narrative
-        run = {"metrics": {"cv_folds": [{"fold": i, "rmse": 1.0 + i} for i in range(1, 4)]}}
-        chart = narrative.build_run_charts(run, ["fold_scores"])[0]
-        assert "说明" not in chart["description"]
+class TestChartCaptionsReadTheData:
+    """A caption is a finding computed from the figure, not a legend."""
 
-    def test_the_loss_caption_states_no_finding(self):
-        from app.services import ai_report_narrative as narrative
+    def test_the_fold_caption_agrees_with_the_fold_verdict(self):
+        # "个别折偏低说明数据划分不均" once printed under a chart whose own
+        # verdict two lines above said no fold was an outlier.
+        run = {"metrics": {"cv_folds": [{"fold": i, "rmse": 1.0 + i * 0.01} for i in range(1, 6)]}}
+        spec = rc.fold_scores(run, "rmse")
+        assert "没有单折离群" in spec["caption"]
+        _, facts = rf.build_run_facts({"model_type": "m", **run}, {"leaderboard": [{}]})
+        assert "无单折离群" in facts["cv"]["verdict_sentence"]
+
+    def test_the_loss_caption_names_the_best_epoch(self):
         run = {"metrics": {"history": [
             {"epoch": 1, "train_loss": 9.0, "val_loss": 9.5},
             {"epoch": 2, "train_loss": 4.0, "val_loss": 5.0},
+            {"epoch": 3, "train_loss": 3.0, "val_loss": 5.5},
         ]}}
-        chart = narrative.build_run_charts(run, ["loss_history"])[0]
-        assert "就是过拟合的起点" not in chart["description"]
+        spec = rc.loss_history(run, "rmse")
+        assert "第 2 轮最低" in spec["caption"]
+        assert spec["markers"][0]["x"] == 2
 
 
 class TestDeepLearningConfigIsRead:
@@ -501,14 +561,12 @@ class TestConstantLearningRateHasNoChart:
     def test_a_flat_rate_is_not_plotted(self):
         # These runs set scheduler "none", so the chart was a horizontal line
         # captioned "调度器折半降速" — a schedule that never ran.
-        from app.services import ai_report_narrative as narrative
         run = {"metrics": {"history": [{"epoch": i, "lr": 0.001} for i in range(1, 6)]}}
-        assert narrative.build_run_charts(run, ["lr_history"]) == []
+        assert rc.lr_history(run) is None
 
     def test_a_changing_rate_is_plotted(self):
-        from app.services import ai_report_narrative as narrative
         run = {"metrics": {"history": [{"epoch": 1, "lr": 0.01}, {"epoch": 2, "lr": 0.005}]}}
-        assert len(narrative.build_run_charts(run, ["lr_history"])) == 1
+        assert rc.lr_history(run)["series"][0]["values"] == [0.01, 0.005]
 
 
 class TestStringifiedConfigIsStillRead:
