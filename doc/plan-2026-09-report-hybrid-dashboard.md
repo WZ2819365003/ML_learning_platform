@@ -68,27 +68,27 @@
 ### 分阶段与验收门
 
 **阶段 1 · 后端**（图构建器 + facts + 三个模板 + P1/P2/P3；`report_blocks` 停止生成，改为正文内标记）
-- [ ] `POST /v3/tasks/{id}/ai-report` 返回的 `markdown` 含 5 个 `{{chart:…}}` 标记、**0 个** markdown 表格（`^\|` 行）；每个标记在 `charts` 里有同 id 的语义规格（含 `kind`、`tooltip_fields`），不再是 ECharts option
-- [ ] 每张图规格的 `tooltip_fields` 覆盖原来对应表格的全部列
-- [ ] 可读性：总报告正文每句 ≤ 2 个数字、每段 ≤ 3 句（脚本检查）
-- [ ] 结论第一句含具体模型名与百分比；不含"不存在""无法认定"；结论段 ≤ 3 句
-- [ ] 每张图的 `description` 含至少一个来自数据的模型名或数字（解读，不是说明）
-- [ ] 7 个分报告 markdown 不匹配 `不值得|建议|应当|优先`
-- [ ] 后端 `tests/` 全过；云端一次性容器跑
+- [x] `POST /v3/tasks/{id}/ai-report` 返回的 `markdown` 含 5 个 `{{chart:…}}` 标记、**0 个** markdown 表格（`^\|` 行）；每个标记在 `charts` 里有同 id 的语义规格（含 `kind`、`tooltip_fields`），不再是 ECharts option
+- [x] 每张图规格的 `tooltip_fields` 覆盖原来对应表格的全部列
+- [x] 可读性：总报告正文每句 ≤ 2 个数字、每段 ≤ 3 句（脚本检查）
+- [x] 结论第一句含具体模型名与百分比；不含"不存在""无法认定"；结论段 ≤ 3 句
+- [x] 每张图的 `description` 含至少一个来自数据的模型名或数字（解读，不是说明）
+- [x] 7 个分报告 markdown 不匹配 `不值得|建议|应当|优先`
+- [x] 后端 `tests/` 全过；云端一次性容器跑
 
 **阶段 2 · 前端**（`ReportDocument` 统一渲染；封面改版；附录折叠；导出/打印覆盖新图）
-- [ ] 总报告和分报告用同一组件渲染；`report_blocks`、正文 `TableBlock` 相关代码删除；附录用折叠面板放两张宽表
-- [ ] 所有图经 `renderReportChart(spec)` 渲染，后端不再出现 `"grid"`/`"nameGap"` 等 ECharts 字段（`grep -rn '"grid"' report_*.py ai_report_narrative.py` 零命中）
-- [ ] 悬停窗字段与规格一致（我在浏览器逐图悬停核对）
-- [ ] 封面无 60/100 大字；封面判定句 ≠ 结论第一段
-- [ ] 每张图上方 ≤ 1 行空白、下方紧跟读图段（我在浏览器量）
-- [ ] 打印/导出 PDF 含全部新图（走 ffe9aa2 的离屏文档）
-- [ ] vitest 全过、build 成功
+- [x] 总报告和分报告用同一组件渲染；`report_blocks`、正文 `TableBlock` 相关代码删除；附录用折叠面板放两张宽表
+- [x] 所有图经 `renderReportChart(spec)` 渲染，后端不再出现 `"grid"`/`"nameGap"` 等 ECharts 字段（`grep -rn '"grid"' report_*.py ai_report_narrative.py` 零命中）
+- [x] 悬停窗字段与规格一致（我在浏览器逐图悬停核对）
+- [x] 封面无 60/100 大字；封面判定句 ≠ 结论第一段
+- [x] 每张图上方 ≤ 1 行空白、下方紧跟读图段（我在浏览器量）
+- [x] 打印/导出 PDF 含全部新图（走 ffe9aa2 的离屏文档）
+- [x] vitest 全过、build 成功
 
 **阶段 3 · 数据与整体验收**
-- [ ] 重跑本任务 7 个 run，ML run 的 `metrics.val_scatter` 存在
-- [ ] 重新生成报告；我在浏览器逐页核对总报告 5 图 + 7 个分报告
-- [ ] 云端 HEAD == 本地 HEAD
+- [x] 重跑本任务 7 个 run，ML run 的 `metrics.val_scatter` 存在
+- [x] 重新生成报告；我在浏览器逐页核对总报告 5 图 + 7 个分报告
+- [x] 云端 HEAD == 本地 HEAD
 
 ## 工作流 B · 混合策略
 
@@ -112,11 +112,11 @@
 
 ### 验收标准
 
-- [ ] 模型配置 step 不再出现"混合策略" tab（或已重命名且 Alert 文案指向"模型部署 → 多模型部署"做融合）
-- [ ] 仍能在一个批次里同时启动 ≥1 个 ML + ≥1 个 DL 模型（通过保留的入口）
-- [ ] 历史批次 `报告验证-混合` 在编排进度中仍正常显示
-- [ ] `TrainingPlans.jsx` 里 `mixed` 的筛选/标签与新命名一致
-- [ ] 前端测试全过；云端 HEAD == 本地 HEAD
+- [x] 模型配置 step 不再出现"混合策略" tab（或已重命名且 Alert 文案指向"模型部署 → 多模型部署"做融合）
+- [x] 仍能在一个批次里同时启动 ≥1 个 ML + ≥1 个 DL 模型（通过保留的入口）
+- [x] 历史批次 `报告验证-混合` 在编排进度中仍正常显示
+- [x] `TrainingPlans.jsx` 里 `mixed` 的筛选/标签与新命名一致
+- [x] 前端测试全过；云端 HEAD == 本地 HEAD
 
 ---
 
@@ -143,11 +143,11 @@
 
 ### 验收标准
 
-- [ ] 侧边栏无"仪表盘"入口；`/dashboard` 路由 302 → `/v3/tasks`（或任务列表实际路径）
-- [ ] 登录成功后落地到任务列表
-- [ ] `Dashboard.jsx` 及仅被它引用的组件/样式已删除（`grep -rn Dashboard src/` 零命中）
-- [ ] 旧 API `trainingApi.listTasks / modelApi.listModels` 若已无其他调用方，一并删除；若仍有调用方，保留并在本文附录列出调用方
-- [ ] 前端 build 成功、测试全过；云端 HEAD == 本地 HEAD
+- [x] 侧边栏无"仪表盘"入口；`/dashboard` 路由 302 → `/v3/tasks`（或任务列表实际路径）
+- [x] 登录成功后落地到任务列表
+- [x] `Dashboard.jsx` 及仅被它引用的组件/样式已删除（`grep -rn Dashboard src/` 零命中）
+- [x] 旧 API `trainingApi.listTasks / modelApi.listModels` 若已无其他调用方，一并删除；若仍有调用方，保留并在本文附录列出调用方
+- [x] 前端 build 成功、测试全过；云端 HEAD == 本地 HEAD
 
 ---
 
@@ -162,3 +162,16 @@
 | C 仪表盘 | `pages/Dashboard.jsx`、路由表、`Sidebar.jsx`、`services/api.js`（仅删除无调用方的函数）、对应测试 |
 
 A 最重，先派；B、C 各半天，可与 A 并行。三个都完成后由我按上面的清单在浏览器 + 测试逐条验收。
+
+
+---
+
+## 验收记录 · 2026-09-09
+
+云端 HEAD = 本地 HEAD = `227f3c6`。B（多模型对照，重命名路线）、C（仪表盘删除）、A（报告：后端 `report_charts.py` 语义规格 + 前端 `reportCharts.js`/`ReportDocument` 统一渲染）均已合并部署，最终归档 `91ce2217`（18 Run / 5 种模型）在浏览器逐项核对：封面一行元信息 + 判定句、无分数卡；总报告 5 图 0 表；hbar 整行悬停出 tooltip（字段 = `tooltip_fields`）；树模型分报告有"实际值 vs 预测值（交叉验证末折）"并排残差图；附录折叠。
+
+验收中额外修掉的四处（均有测试）：worker 镜像从未重建导致训练走旧代码；选型模式下 `X_val=None`，树模型改用末折外样本预测并标注来源；`val_scatter_source` 与 `model_count` 分别被 16 键上限和 top_k 榜单截断；hbar tooltip 由 item 改 axis 触发。
+
+**遗留观察（未改，待定）**
+1. 封面判定句"这批模型是随机切分训练的"：现在 18 个 run 里 9 个已是时间序列切分，但领先的 72.47 仍来自旧的随机切分 run。措辞应改为"领先的模型是随机切分训练的"更准确。
+2. 分报告上限 8 篇按名次取，18 个 run 后 DL 模型全部排在 8 名之外，报告里不再出现任何 DL 分报告。要么放宽上限，要么"每种模型至少一篇"。
