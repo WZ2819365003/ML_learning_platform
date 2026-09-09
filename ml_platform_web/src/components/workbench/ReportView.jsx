@@ -20,7 +20,8 @@ import { DownloadOutlined, PrinterOutlined, ReloadOutlined } from '@ant-design/i
 import { modelingTaskApi } from '../../services/api'
 import MarkdownReport from './MarkdownReport'
 import { AiReportReader } from './AiReportModal'
-import RunReportPanel, { RunReportBody } from './RunReportPanel'
+import RunReportPanel from './RunReportPanel'
+import ReportPrintDocument from './ReportPrintDocument'
 import { buildCompleteReportMarkdown, pickLatestArchive, resolveReportSource } from './reportViewModel'
 
 const { Text } = Typography
@@ -178,23 +179,7 @@ export default function ReportView({ taskId, taskName, generatedAiReport = null 
         </Card>
       )}
 
-      <div className="report-print-document" aria-hidden="true">
-        {/* The same ReportDocument as on screen, so every figure the reader
-            saw is drawn again here; the appendix is open because a folded
-            panel prints as nothing. */}
-        {source.kind === 'ai' ? (
-          <>
-            <AiReportReader report={source.report} taskName={taskName} appendixOpen />
-            {(source.report?.run_reports || []).map((run) => (
-              <section className="report-print-run" key={run.run_id || run.model_type}>
-                <RunReportBody report={run} appendixOpen />
-              </section>
-            ))}
-          </>
-        ) : (
-          <MarkdownReport markdown={source.markdown} />
-        )}
-      </div>
+      <ReportPrintDocument source={source} taskName={taskName} />
     </div>
   )
 }
