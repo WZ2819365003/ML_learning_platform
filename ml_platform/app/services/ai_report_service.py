@@ -162,6 +162,24 @@ def _context_for_llm(value: Any, *, depth: int = 0) -> Any:
     return _compact_value(value, depth=depth)
 
 
+_MATRIX_METRIC_KEYS = ("confusion_matrix", "class_labels", "confusion_source")
+
+
+def _compact_matrix_value(value: Any, *, limit: int = 40) -> Any:
+    """A confusion matrix kept as numbers, at its full width.
+
+    _compact_value cuts every list to twelve and stringifies past depth three,
+    which turns a fifteen-class matrix into ragged text; _compact_curve_value
+    stringifies the inner rows for the same reason. Neither is usable as a
+    matrix, so the copy here keeps the nesting and the numbers.
+    """
+    if isinstance(value, (list, tuple)):
+        return [_compact_matrix_value(item, limit=limit) for item in list(value)[:limit]]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return str(value)[:80]
+
+
 def _compact_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(metrics, dict):
         return {}
@@ -188,6 +206,13 @@ def _compact_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
     # hold-out — the chart claims an evaluation that never happened.
     if "val_scatter_source" in metrics:
         compact["val_scatter_source"] = metrics["val_scatter_source"]
+    # The confusion matrix and its labels are the whole of the classification
+    # figures. A classification run carries well over sixteen metric keys, so
+    # whether these survive the loop above is decided by how the other keys
+    # happen to sort — kept explicitly instead, like the scatter's source.
+    for key in _MATRIX_METRIC_KEYS:
+        if key in metrics:
+            compact[key] = _compact_matrix_value(metrics[key])
     if isinstance(shap, dict) and shap:
         top = sorted(
             shap.items(),

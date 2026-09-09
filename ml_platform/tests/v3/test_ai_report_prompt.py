@@ -310,6 +310,54 @@ class TestScatterSourceSurvivesCompaction:
         assert "val_scatter" in out
 
 
+class TestConfusionMatrixSurvivesCompaction:
+    """The classification figures must reach the report intact.
+
+    A classification run carries well over sixteen metric keys once the
+    cv_avg_/cv_std_/selection_cv_/final_test_ families are counted, so whether
+    confusion_matrix survived the cap was decided by how the other keys happen
+    to sort — and the general path would have cut it to twelve rows of
+    stringified text anyway.
+    """
+
+    def _metrics(self, classes=3):
+        metrics = {f"a_metric_{i:02d}": float(i) for i in range(20)}
+        metrics.update({f"filler_{i}": [1, 2] for i in range(12)})
+        metrics["confusion_matrix"] = [
+            [10 if r == c else 1 for c in range(classes)] for r in range(classes)
+        ]
+        metrics["class_labels"] = [f"c{i}" for i in range(classes)]
+        metrics["confusion_source"] = "cv_last_fold"
+        return metrics
+
+    def test_the_matrix_and_its_labels_are_kept_past_the_key_cap(self):
+        out = _compact_metrics(self._metrics())
+        assert out["confusion_matrix"] == [[10, 1, 1], [1, 10, 1], [1, 1, 10]]
+        assert out["class_labels"] == ["c0", "c1", "c2"]
+        assert out["confusion_source"] == "cv_last_fold"
+
+    def test_the_cells_stay_numbers(self):
+        # _compact_value stringifies past depth three, which would hand the
+        # chart "[10, 1, 1]" instead of a row it can sum.
+        out = _compact_metrics(self._metrics())
+        assert all(isinstance(cell, int) for row in out["confusion_matrix"] for cell in row)
+
+    def test_a_wide_matrix_is_not_cut_to_twelve_columns(self):
+        # Fifteen classes is not an absurd dataset, and a matrix cut to twelve
+        # columns is a matrix whose row sums are wrong.
+        out = _compact_metrics(self._metrics(classes=15))
+        assert len(out["confusion_matrix"]) == 15
+        assert all(len(row) == 15 for row in out["confusion_matrix"])
+        assert len(out["class_labels"]) == 15
+
+    def test_the_roc_curve_travels_with_the_other_curves(self):
+        metrics = {f"a_metric_{i:02d}": float(i) for i in range(20)}
+        metrics["val_roc_fpr"] = [i / 100 for i in range(101)]
+        metrics["val_roc_tpr"] = [i / 100 for i in range(101)]
+        out = _compact_metrics(metrics)
+        assert len(out["val_roc_fpr"]) == len(out["val_roc_tpr"]) == 101
+
+
 class TestCoverModelCountCountsEveryRun:
     def test_model_count_is_not_limited_to_the_top_k_leaderboard(self):
         # The leaderboard handed to the report is capped at top_k; the models
