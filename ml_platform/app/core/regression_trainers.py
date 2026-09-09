@@ -43,6 +43,11 @@ class RegressionMixin:
         base_model = self.model
 
         fold_results = []
+        # The last fold's out-of-sample pairs. Under selection the sealed
+        # hold-out is withheld (X_val is None), so these are the only
+        # predictions the model made on rows it never trained on — and with
+        # TimeSeriesSplit the last fold is the most recent contiguous window.
+        last_fold_pairs = None
         for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_train)):
             X_f_tr, X_f_val = _take_rows(X_train, train_idx), _take_rows(X_train, val_idx)
             y_f_tr, y_f_val = _take_rows(y_train, train_idx), _take_rows(y_train, val_idx)
@@ -58,6 +63,7 @@ class RegressionMixin:
                 else self.model.fit(X_f_tr, y_f_tr)
             )
             y_pred = fold_model.predict(X_f_val)
+            last_fold_pairs = (y_f_val, y_pred)
 
             fold_metrics = self._compute_regression_metrics(y_f_val, y_pred, eval_metrics)
             fold_metrics["fold"] = fold_idx + 1
@@ -108,8 +114,16 @@ class RegressionMixin:
         # Attached after the final_test_ mirror above, so it is not duplicated
         # under a final_test_val_scatter key.
         scatter = _validation_scatter(y_val, y_val_pred)
+        source = "holdout"
+        if scatter is None and last_fold_pairs is not None:
+            # No hold-out was offered (selection keeps the sealed set sealed),
+            # so the chart draws the last cross-validation fold instead. The
+            # source is recorded so the report can say which it is showing.
+            scatter = _validation_scatter(*last_fold_pairs)
+            source = "cv_last_fold"
         if scatter is not None:
             final_metrics["val_scatter"] = scatter
+            final_metrics["val_scatter_source"] = source
         return final_metrics
 
     @staticmethod

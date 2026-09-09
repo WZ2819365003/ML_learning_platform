@@ -38,3 +38,23 @@
 2026-09-02 09:42:59,486 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
 2026-09-02 09:42:59,487 [INFO] wechat_mcp - Transport: stdio
 2026-09-02 09:42:59,487 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-04 09:35:44,039 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-04 09:35:44,305 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-04 09:35:44,306 [INFO] wechat_mcp - Transport: stdio
+2026-09-04 09:35:44,307 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-04 09:36:42,222 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-04 09:36:42,361 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-04 09:36:42,363 [INFO] wechat_mcp - Transport: stdio
+2026-09-04 09:36:42,363 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-04 09:50:14,212 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-04 09:50:14,475 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-04 09:50:14,476 [INFO] wechat_mcp - Transport: stdio
+2026-09-04 09:50:14,476 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-04 15:10:12,750 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-04 15:10:13,113 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-04 15:10:13,114 [INFO] wechat_mcp - Transport: stdio
+2026-09-04 15:10:13,115 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-05 12:02:24,634 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-05 12:02:25,221 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-05 12:02:25,222 [INFO] wechat_mcp - Transport: stdio
+2026-09-05 12:02:25,222 [INFO] wechat_mcp - MCP Debug mode: False

@@ -47,3 +47,28 @@ def test_the_window_is_the_last_five_hundred_points():
 def test_no_validation_split_means_no_scatter():
     assert _validation_scatter(None, None) is None
     assert _validation_scatter([], []) is None
+
+
+def test_selection_mode_falls_back_to_the_last_fold():
+    # Selection withholds the sealed hold-out (X_val is None), which is why the
+    # first three tree-model reruns still had no scatter. The last fold's
+    # out-of-sample predictions are the honest substitute, and the source is
+    # recorded so the report can say so.
+    X, y = _frame(160)
+    trainer = RandomForestRegressorTrainer()
+    trainer.configure({"n_estimators": 5, "max_depth": 3})
+    metrics = trainer.train(X, y, None, None, cv_folds=4)
+
+    scatter = metrics["val_scatter"]
+    assert metrics["val_scatter_source"] == "cv_last_fold"
+    assert len(scatter["actual"]) == len(scatter["predicted"]) > 0
+    # KFold(n_splits=4) on 160 rows: the last fold holds 40 rows.
+    assert len(scatter["actual"]) == 40
+
+
+def test_a_real_holdout_is_labelled_as_one():
+    X, y = _frame(160)
+    trainer = RandomForestRegressorTrainer()
+    trainer.configure({"n_estimators": 5, "max_depth": 3})
+    metrics = trainer.train(X.iloc[:120], y.iloc[:120], X.iloc[120:], y.iloc[120:], cv_folds=3)
+    assert metrics["val_scatter_source"] == "holdout"

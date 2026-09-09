@@ -265,3 +265,30 @@ class TestRunCharts:
         spec = rc.lr_history(run)
         assert spec["y_log"] is True and spec["series"][0]["values"] == [0.01, 0.005]
         assert "共变动 1 次" in spec["caption"]
+
+
+class TestPredVsActualNamesItsSource:
+    def _run(self, source):
+        m = {"val_scatter": {"actual": [1.0, 2.0, 3.0, 4.0], "predicted": [1.1, 1.9, 3.2, 3.8]}}
+        if source:
+            m["val_scatter_source"] = source
+        return {"metrics": m}
+
+    def test_a_fold_window_is_not_called_a_holdout(self):
+        from app.services.report_charts import pred_vs_actual
+        spec = pred_vs_actual(self._run("cv_last_fold"))
+        assert "交叉验证末折" in spec["caption"]
+        assert "留出集" not in spec["caption"]
+        assert "交叉验证末折" in spec["title"]
+
+    def test_a_holdout_window_keeps_the_plain_title(self):
+        from app.services.report_charts import pred_vs_actual
+        spec = pred_vs_actual(self._run("holdout"))
+        assert spec["title"] == "实际值 vs 预测值"
+        assert "留出集末尾" in spec["caption"]
+
+    def test_an_older_run_without_a_source_is_treated_as_a_holdout(self):
+        # DL runs stored val_scatter before the source flag existed; theirs is
+        # a true hold-out, so the default keeps their captions unchanged.
+        from app.services.report_charts import pred_vs_actual
+        assert "留出集末尾" in pred_vs_actual(self._run(None))["caption"]

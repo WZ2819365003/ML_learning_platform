@@ -582,10 +582,16 @@ def pred_vs_actual(run: dict[str, Any], target: str | None = None) -> dict[str, 
     ]
     within = sum(1 for r in residuals if abs(r) <= rmse)
     worst = max(range(n), key=lambda i: abs(residuals[i]))
-    caption = (f"留出集末尾 {n} 个点里，{rf.pct_text(within, n)} 的预测偏差在 ±{rf.readable(rmse)} 以内；"
+    # Under selection the sealed hold-out is withheld, so a tree model's window
+    # is its last cross-validation fold. The caption says which, because "留出
+    # 集" over a fold would claim an evaluation that never happened.
+    source = (run.get("metrics") or {}).get("val_scatter_source") or "holdout"
+    where = "交叉验证末折" if source == "cv_last_fold" else "留出集末尾"
+    caption = (f"{where} {n} 个点里，{rf.pct_text(within, n)} 的预测偏差在 ±{rf.readable(rmse)} 以内；"
                f"偏得最远的第 {worst + 1} 个点差了 {rf.readable(abs(residuals[worst]))}。")
     return _spec(
-        "pred_vs_actual", "scatter_pair", "实际值 vs 预测值", caption,
+        "pred_vs_actual", "scatter_pair",
+        "实际值 vs 预测值" + ("（交叉验证末折）" if source == "cv_last_fold" else ""), caption,
         str(target) if target else None, tooltip_fields, rows,
         pair={"x": list(range(1, n + 1)), "actual": [round(a, 4) for a in actual],
               "predicted": [round(p, 4) for p in predicted]},
