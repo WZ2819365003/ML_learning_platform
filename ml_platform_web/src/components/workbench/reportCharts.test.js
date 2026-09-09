@@ -19,6 +19,7 @@ import {
   leaderboardSpec,
   legacyOptionChart,
   lossHistorySpec,
+  rocCurveSpec,
   scatterPairSpec,
   shapBarsSpec,
   specsByKind,
@@ -104,6 +105,33 @@ describe('renderReportChart · series per kind', () => {
     expect(option.series[0].markArea.data[0][0]).toEqual({ xAxis: 31, name: '早停区' })
     expect(option.series[0].markArea.data[0][1]).toEqual({ xAxis: 38 })
     expect(option.tooltip.trigger).toBe('axis')
+  })
+
+  it('lines: a float x axis is left alone, and the chance diagonal stays off the legend', () => {
+    const option = renderReportChart(rocCurveSpec)
+    expect(seriesTypes(option)).toEqual(['line', 'line'])
+    expect(option.series[1].id).toBe('reference-diagonal')
+    expect(option.series[1].data).toEqual([[0, 0], [1, 1]])
+    expect(option.series[1].lineStyle).toMatchObject({
+      type: 'dashed', color: REPORT_CHART_THEME.colors.muted,
+    })
+    // The legend is built from spec.series, so the baseline is not in it —
+    // and with one real curve the legend does not show at all.
+    expect(option.legend.data).toEqual(['ROC'])
+    expect(option.legend.show).toBe(false)
+    // An epoch axis snaps to whole numbers; an FPR axis must not, or 0–1
+    // collapses to two ticks.
+    expect(option.xAxis.minInterval).toBeUndefined()
+    expect(renderReportChart(lossHistorySpec).xAxis.minInterval).toBe(1)
+    // The float x values reach the series untouched.
+    expect(option.series[0].data[1]).toEqual([0.008, rocCurveSpec.series[0].values[1]])
+    expect(option.xAxis.min).toBe(0)
+    expect(option.xAxis.max).toBe(1)
+  })
+
+  it('lines: a spec without reference_diagonal keeps only its own series', () => {
+    const option = renderReportChart({ ...rocCurveSpec, reference_diagonal: false })
+    expect(seriesTypes(option)).toEqual(['line'])
   })
 
   it('matrix: hits and misses as heatmaps, each on its own hidden depth ramp', () => {
@@ -333,6 +361,34 @@ describe('renderReportChart · tooltips', () => {
     const right = option.tooltip.formatter([{ seriesId: 'residual', dataIndex: 0, data: option.series[2].data[0] }])
     expect(right).toContain('区间</span>: -120 – -100')
     expect(right).toContain('样本数')
+  })
+
+  it('lines tooltip ignores the chance diagonal', () => {
+    const option = renderReportChart(rocCurveSpec)
+    const html = option.tooltip.formatter([
+      { seriesName: 'ROC', seriesId: 'line-0', dataIndex: 3, value: [0.037, 0.813] },
+      { seriesName: 'series\u00002', seriesId: 'reference-diagonal', dataIndex: 0, value: [0, 0] },
+    ])
+    expect(html).toContain('阈值</span>: 0.850')
+    expect(html).toContain('假正率</span>: 0.037')
+    expect(html).not.toContain('reference')
+    // The diagonal arriving first must not become the row the tooltip reads.
+    const flipped = option.tooltip.formatter([
+      { seriesId: 'reference-diagonal', dataIndex: 0, value: [0, 0] },
+      { seriesName: 'ROC', seriesId: 'line-0', dataIndex: 3, value: [0.037, 0.813] },
+    ])
+    expect(flipped).toBe(html)
+  })
+
+  it('lines tooltip falls back to series values with the diagonal filtered out', () => {
+    const option = renderReportChart({ ...rocCurveSpec, rows: [], tooltip_fields: [] })
+    const html = option.tooltip.formatter([
+      { seriesName: 'ROC', seriesId: 'line-0', dataIndex: 3, value: [0.037, 0.813] },
+      { seriesName: 'x', seriesId: 'reference-diagonal', dataIndex: 0, value: [0, 0] },
+    ])
+    expect(html).toContain('ROC</span>: 0.813')
+    expect(html).toContain('假正率 (FPR) 0.037')
+    expect(html).not.toContain('>x</span>')
   })
 
   it('matrix tooltip names the classes rather than their indices', () => {

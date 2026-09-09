@@ -325,6 +325,37 @@ export const confusionMatrix4Spec = {
   rows: [],
 }
 
+// A steep ROC (AUC 0.94) sampled at 21 thresholds. The FPR values are floats
+// on purpose: the lines renderer used to assume an integer epoch axis.
+const ROC_FPR = [
+  0, 0.008, 0.021, 0.037, 0.058, 0.084, 0.115, 0.152, 0.196, 0.248, 0.309,
+  0.381, 0.464, 0.558, 0.663, 0.775, 0.881, 0.947, 0.982, 0.996, 1,
+]
+const ROC_ROWS = ROC_FPR.map((fpr, i) => ({
+  threshold: Math.round((1 - i / (ROC_FPR.length - 1)) * 1000) / 1000,
+  fpr,
+  tpr: fpr === 0 ? 0 : Math.round(fpr ** (1 / 16) * 10000) / 10000,
+}))
+
+/** 分类分报告 · ROC 曲线 — lines with a float x axis and a chance diagonal. */
+export const rocCurveSpec = {
+  id: 'roc_curve',
+  kind: 'lines',
+  title: 'ROC 曲线',
+  caption: 'AUC 0.94，曲线整体贴着左上角；灰色虚线是随机猜测的水平。',
+  unit: '真正率 (TPR)',
+  x_label: '假正率 (FPR)',
+  x: ROC_FPR,
+  series: [{ name: 'ROC', values: ROC_ROWS.map((r) => r.tpr) }],
+  reference_diagonal: true,
+  tooltip_fields: [
+    { key: 'threshold', label: '阈值', format: '.3f' },
+    { key: 'fpr', label: '假正率', format: '.3f' },
+    { key: 'tpr', label: '真正率', format: '.3f' },
+  ],
+  rows: ROC_ROWS,
+}
+
 /** Every fixture, keyed by kind, for table-driven tests. */
 export const specsByKind = {
   hbar: leaderboardSpec,
@@ -338,7 +369,7 @@ export const specsByKind = {
 
 export const allSpecs = [
   leaderboardSpec, foldDotsSpec, targetHistSpec, fieldCompositionSpec, shapBarsSpec, lossHistorySpec, scatterPairSpec,
-  confusionMatrixSpec, confusionMatrix4Spec,
+  confusionMatrixSpec, confusionMatrix4Spec, rocCurveSpec,
 ]
 
 /** A legacy archive chart: a ready ECharts option, no `kind`. */

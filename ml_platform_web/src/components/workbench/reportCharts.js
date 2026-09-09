@@ -536,6 +536,12 @@ function renderStacked(spec) {
 
 // ── lines ────────────────────────────────────────────────────────────────────
 
+/**
+ * The chance line on an ROC plot: it is scenery, not a curve to compare
+ * against the others, so it stays out of the legend and out of the tooltip.
+ */
+const REFERENCE_DIAGONAL_ID = 'reference-diagonal'
+
 function renderLines(spec) {
   const x = spec.x || []
   const seriesSpecs = spec.series || []
@@ -573,6 +579,22 @@ function renderLines(spec) {
       }
     }
   }
+  if (spec.reference_diagonal) {
+    // Unnamed: the legend is built from spec.series, so leaving this one out
+    // of that list is what keeps it out of the legend.
+    series.push({
+      id: REFERENCE_DIAGONAL_ID,
+      type: 'line',
+      silent: true,
+      animation: false,
+      showSymbol: false,
+      symbol: 'none',
+      tooltip: { show: false },
+      z: 1,
+      lineStyle: { width: 1, type: 'dashed', color: T.colors.muted },
+      data: [[0, 0], [1, 1]],
+    })
+  }
 
   const fields = spec.tooltip_fields?.length ? spec.tooltip_fields : null
   return {
@@ -585,17 +607,22 @@ function renderLines(spec) {
     },
     xAxis: valueAxis({
       name: spec.x_label || 'epoch', min: x.length ? x[0] : undefined, max: x.length ? x[x.length - 1] : undefined,
-      splitLine: { show: false }, axisLine: axisLine(), minInterval: 1,
+      splitLine: { show: false }, axisLine: axisLine(),
+      // An epoch axis wants whole-number ticks. An ROC's false-positive rate
+      // does not: forcing them there collapses 0–1 to two ticks.
+      ...(x.length && x.every((value) => Number.isInteger(value)) ? { minInterval: 1 } : {}),
     }),
     yAxis: valueAxis({ type: spec.y_log ? 'log' : 'value', name: spec.unit || '', nameGap: 44, scale: true }),
     tooltip: fieldTooltip(
       { ...spec, tooltip_fields: fields || [] },
-      (params, first) => {
-        const index = first?.dataIndex ?? -1
-        const row = rows[index]
+      (params) => {
+        const list = (Array.isArray(params) ? params : [params])
+          .filter((p) => p && p.seriesId !== REFERENCE_DIAGONAL_ID)
+        const first = list[0]
+        if (!first) return ''
+        const row = rows[first.dataIndex ?? -1]
         if (fields && row) return { row }
         // No per-epoch rows: show the series values at this x.
-        const list = Array.isArray(params) ? params : [params]
         const lines = list.map((p) => (
           `<div class="ai-report-tip-row"><span class="ai-report-tip-label">${escapeHtml(String(p.seriesName))}</span>: ${formatValue(p.value?.[1])}</div>`
         ))
