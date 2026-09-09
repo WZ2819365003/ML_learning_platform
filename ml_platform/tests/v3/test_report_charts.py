@@ -272,6 +272,24 @@ class TestRunCharts:
         assert "共变动 1 次" in spec["caption"]
 
 
+class TestFieldCompositionNeedsSomethingToCompare:
+    def test_a_dataset_with_no_constructed_features_draws_nothing(self, ctx):
+        # Every column in the base group is one full-width bar captioned "all
+        # of them came from the same place" — no comparison, no figure. The
+        # template's {{#if fields.has_groups}} already drops the paragraph that
+        # would ask what those features solve.
+        ctx["dataset"]["column_names"] = ["load", "timestamp", "hour", "dry_bulb_temp"]
+        assert rc.field_composition(ctx) is None
+
+    def test_two_segments_are_enough(self, ctx):
+        ctx["dataset"]["column_names"] = ["load", "timestamp", "load_lag_1"]
+        assert rc.field_composition(ctx) is not None
+
+    def test_the_overview_simply_loses_the_slot(self, ctx):
+        ctx["dataset"]["column_names"] = ["load", "timestamp", "hour"]
+        assert "field_composition" not in {c["id"] for c in rc.build_overview_charts(ctx)}
+
+
 class TestConfusionMatrix:
     def test_cells_are_predicted_by_actual_with_the_row_share(self, cls_ctx):
         spec = rc.confusion_matrix(cls_ctx["leaderboard"][0])

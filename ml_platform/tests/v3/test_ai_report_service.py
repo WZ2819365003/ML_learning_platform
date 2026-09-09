@@ -287,10 +287,15 @@ async def test_generate_ai_report_renders_facts_and_asks_only_for_the_gaps(db, m
     }
 
     # Every marker in the document is backed by a spec, in document order, and
-    # every spec is a placed marker. This task has no folds and no target
-    # histogram, so those two figures are dropped rather than shipped empty.
+    # every spec is a placed marker. This task has no folds, no target
+    # histogram, no confusion matrix and four plain columns, so those four
+    # figures are dropped rather than shipped empty — a field composition of
+    # one segment is a full-width bar with nothing to compare.
     placed = re.findall(r"\{\{chart:([a-z0-9_]+)\}\}", markdown)
-    assert placed == ["leaderboard_bars", "field_composition", "shap_bars"]
+    assert placed == ["leaderboard_bars", "shap_bars"]
+    # …and the paragraph that would have asked what those constructed features
+    # solve goes with the chart, leaving no orphan slot behind.
+    assert "构造" not in markdown
     assert [chart["id"] for chart in result["charts"]] == placed
     for chart in result["charts"]:
         _assert_spec(chart)

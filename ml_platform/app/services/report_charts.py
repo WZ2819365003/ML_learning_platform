@@ -517,15 +517,18 @@ def field_composition(context: dict[str, Any]) -> dict[str, Any] | None:
     segments += [{"name": g["name"], "count": len(g["columns"]), "items": list(g["columns"])}
                  for g in fields["groups"]]
     segments = [s for s in segments if s["count"]]
+    # One segment is a full-width bar under the caption "all of them came from
+    # the same place" — a stack with nothing to compare. The template already
+    # drops the paragraph asking what the constructed features solve when there
+    # are none ({{#if fields.has_groups}}); the figure has to go with it.
+    if len(segments) < 2:
+        return None
     rows = [{"category": s["name"], "count": s["count"], "items": "、".join(s["items"])} for s in segments]
     tooltip_fields = [{"key": "count", "label": "列数", "format": "0"}, {"key": "items", "label": "字段"}]
 
-    if fields["groups"]:
-        largest = max(fields["groups"], key=lambda g: len(g["columns"]))
-        caption = (f"{fields['eng_count']} 列（{fields['eng_pct']}）是训练流程构造出来的，"
-                   f"其中{largest['name']}最多，有 {len(largest['columns'])} 列。")
-    else:
-        caption = f"{len(columns)} 列全部是原始采集字段，没有构造特征。"
+    largest = max(fields["groups"], key=lambda g: len(g["columns"]))
+    caption = (f"{fields['eng_count']} 列（{fields['eng_pct']}）是训练流程构造出来的，"
+               f"其中{largest['name']}最多，有 {len(largest['columns'])} 列。")
     return _spec(
         "field_composition", "stacked", f"{len(columns)} 列是怎么来的",
         caption, "列", tooltip_fields, rows, segments=segments,
