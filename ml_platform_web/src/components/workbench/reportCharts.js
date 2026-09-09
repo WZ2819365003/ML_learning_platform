@@ -22,12 +22,15 @@ export const REPORT_CHART_THEME = Object.freeze({
     muted: '#94a3b8',
     mutedLight: '#cbd5e1',
     accent: '#dc2626',
+    accentLight: '#fecaca',
     ink: '#0f172a',
     text: '#334155',
     subtle: '#64748b',
     grid: 'rgba(15, 23, 42, 0.08)',
     axis: 'rgba(15, 23, 42, 0.28)',
     shade: 'rgba(37, 99, 235, 0.08)',
+    // Text and hairlines drawn on top of a filled shape.
+    onFill: '#ffffff',
   }),
   // Segment colours for the stacked bar cycle through these.
   palette: Object.freeze(['#2563eb', '#60a5fa', '#94a3b8', '#cbd5e1', '#1d4ed8', '#bfdbfe']),
@@ -46,6 +49,18 @@ export const REPORT_CHART_THEME = Object.freeze({
   labelGutter: 12,
   tooltipMaxItems: 20,
   defaultDecimals: 4,
+  // Confusion matrix: the cell's hue says right or wrong, its opacity says how
+  // many, and the two are read together — hence one place for both scales.
+  matrix: Object.freeze({
+    // Counts fit inside the cells up to a 5x5. At 6x6 the digits collide, so
+    // the number moves into the tooltip rather than shrinking past legibility.
+    maxLabelledClasses: 5,
+    labelFontSize: Object.freeze({ max: 16, min: 12 }),
+    // Past this share of its ramp the fill is dark enough that the count
+    // printed on it reads better light than dark. Set high on purpose: over
+    // most of both ramps the ink colour still wins on contrast.
+    invertLabelAbove: 0.85,
+  }),
 })
 
 const T = REPORT_CHART_THEME
@@ -190,6 +205,10 @@ const DEFAULT_FIELDS = {
   stacked: [{ key: 'name', label: '类别' }, { key: 'count', label: '列数', format: 'int' }, { key: 'items', label: '列名' }],
   lines: [{ key: 'epoch', label: '轮', format: 'int' }],
   scatter_pair: [{ key: 'x', label: '位置' }, { key: 'actual', label: '实际' }, { key: 'predicted', label: '预测' }],
+  matrix: [
+    { key: 'actual', label: '实际' }, { key: 'predicted', label: '预测' },
+    { key: 'count', label: '样本数', format: 'int' }, { key: 'pct', label: '占该类', format: 'percent' },
+  ],
 }
 
 function rowOf(param) {
@@ -681,6 +700,164 @@ function renderScatterPair(spec) {
   }
 }
 
+// ── matrix ───────────────────────────────────────────────────────────────────
+
+/**
+ * The count printed inside a cell, sized so an n x n grid stays legible.
+ *
+ * Cells shrink as classes multiply, so the digits shrink with them, one point
+ * per extra class down to the floor. Past `maxLabelledClasses` the label is
+ * dropped entirely rather than rendered too small to read (see renderMatrix).
+ */
+export function matrixLabelFontSize(classCount) {
+  const { max, min } = T.matrix.labelFontSize
+  return Math.max(min, max - Math.max(0, (classCount || 0) - 2))
+}
+
+/**
+ * The tooltip fields for a matrix, with one contract wrinkle ironed out.
+ *
+ * The backend sends `pct` as a share of the row (0.93) but declares it
+ * `format: 'percent'`, which this file reads as "already a percentage" —
+ * taken literally, a 93% row prints as 0.9%. So when every `pct` is a
+ * fraction, the field is read with the fraction format instead. Values above
+ * 1 are left alone: those really are percentages.
+ */
+function matrixTooltipFields(spec, cells) {
+  const fields = spec.tooltip_fields?.length ? spec.tooltip_fields : DEFAULT_FIELDS.matrix
+  const fractional = cells.every((cell) => !Number.isFinite(cell.pct) || Math.abs(cell.pct) <= 1)
+  if (!fractional) return fields
+  return fields.map((field) => (
+    field?.key === 'pct' && field.format === 'percent' ? { ...field, format: 'pct' } : field
+  ))
+}
+
+/** One half of the matrix — the hits or the misses — as a heatmap series. */
+function matrixSeries(id, cells, labels, ramp, rows) {
+  const maxCount = cells.reduce((max, cell) => Math.max(max, Number(cell.count) || 0), 0)
+  const labelled = labels.length > 0 && labels.length <= T.matrix.maxLabelledClasses
+  return {
+    maxCount,
+    series: {
+      id,
+      type: 'heatmap',
+      // A white hairline keeps two same-coloured neighbours from merging.
+      itemStyle: { borderColor: T.colors.onFill, borderWidth: 1 },
+      label: {
+        show: labelled,
+        fontSize: matrixLabelFontSize(labels.length),
+        fontFamily: T.fontFamily,
+        formatter: (params) => formatValue(params.value?.[2], 'int'),
+      },
+      emphasis: { focus: 'none', itemStyle: { borderColor: T.colors.ink, borderWidth: 1.5 } },
+      data: cells.map((cell) => {
+        const count = Number(cell.count) || 0
+        const depth = maxCount > 0 ? count / maxCount : 0
+        return {
+          value: [cell.x, cell.y, count],
+          label: { color: depth >= T.matrix.invertLabelAbove ? T.colors.onFill : T.colors.ink },
+          row: matrixRow(cell, labels, rows),
+        }
+      }),
+    },
+    // Hidden: the depth scale is not a control, and a legend for it would say
+    // less than the counts already printed in the cells. A heatmap will not
+    // render at all without one, so this is also what makes the series draw.
+    visualMap: {
+      show: false,
+      type: 'continuous',
+      dimension: 2,
+      min: 0,
+      max: maxCount || 1,
+      inRange: { color: [...ramp] },
+    },
+  }
+}
+
+/** The tooltip row for a cell: class names rather than the indices. */
+function matrixRow(cell, labels, rows) {
+  const index = rows.findIndex((row) => row && row.x === cell.x && row.y === cell.y)
+  return {
+    ...(index >= 0 ? rows[index] : {}),
+    ...cell,
+    // The reader hovers a cell to learn which classes it joins; an index would
+    // make them count rows to find out.
+    actual: labels[cell.y] ?? cell.y,
+    predicted: labels[cell.x] ?? cell.x,
+  }
+}
+
+/**
+ * Confusion matrix — an n x n heatmap of `cells` indexed into `labels`.
+ *
+ * Two things have to be readable at once: whether a cell is a hit or a miss,
+ * and how big it is. Hue carries the first and depth the second, which is two
+ * colour ramps — and one visualMap holds exactly one. So the hits and the
+ * misses are separate series, each with its own hidden ramp: the main colour
+ * down the diagonal, the warning colour off it.
+ *
+ * Each ramp is scaled to its own half. A confusion matrix worth reading has a
+ * diagonal an order of magnitude above everything else, and a shared scale
+ * would flatten every mistake to the same pale wash — the reader could no
+ * longer see which confusion is the big one.
+ *
+ * `labels` order is the index order of `cells`, and the y axis is inverted so
+ * the first label reads at the top rather than at the origin.
+ */
+function renderMatrix(spec) {
+  const labels = spec.labels || []
+  const rows = spec.rows || []
+  const cells = (spec.cells || []).filter(
+    (cell) => cell && Number.isFinite(cell.x) && Number.isFinite(cell.y),
+  )
+  const hits = matrixSeries(
+    'matrix-hit', cells.filter((cell) => cell.x === cell.y), labels,
+    [T.colors.primaryLight, T.colors.primary], rows,
+  )
+  const misses = matrixSeries(
+    'matrix-miss', cells.filter((cell) => cell.x !== cell.y), labels,
+    [T.colors.accentLight, T.colors.accent], rows,
+  )
+  // The y axis name sits outside the category labels, so the grid needs the
+  // label gutter plus a line for the name itself.
+  const nameGap = categoryAxisLeft(labels)
+  const left = nameGap + T.fontSize + T.labelMargin
+  const axisName = (name) => ({
+    name: name || '',
+    nameLocation: 'middle',
+    nameTextStyle: { ...axisText(), color: T.colors.subtle },
+  })
+
+  return {
+    animationDuration: 300,
+    textStyle: { fontFamily: T.fontFamily },
+    grid: {
+      left, right: T.grid.right, top: T.grid.top,
+      bottom: T.grid.axisNameBottom, containLabel: false,
+    },
+    xAxis: {
+      ...categoryAxis(labels, { splitArea: { show: false } }),
+      ...axisName(spec.axis?.x),
+      nameGap: T.grid.bottom,
+    },
+    yAxis: {
+      ...categoryAxis(labels, { inverse: true, splitArea: { show: false } }),
+      ...axisName(spec.axis?.y),
+      nameGap,
+      nameRotate: 90,
+    },
+    visualMap: [
+      { ...hits.visualMap, seriesIndex: 0 },
+      { ...misses.visualMap, seriesIndex: 1 },
+    ],
+    tooltip: fieldTooltip(
+      { ...spec, tooltip_fields: matrixTooltipFields(spec, cells) },
+      (_params, first) => rowOf(first),
+    ),
+    series: [hits.series, misses.series],
+  }
+}
+
 // ── dispatch ─────────────────────────────────────────────────────────────────
 
 const RENDERERS = {
@@ -690,6 +867,7 @@ const RENDERERS = {
   stacked: renderStacked,
   lines: renderLines,
   scatter_pair: renderScatterPair,
+  matrix: renderMatrix,
 }
 
 export const REPORT_CHART_KINDS = Object.freeze(Object.keys(RENDERERS))

@@ -12,6 +12,8 @@ import {
 } from './reportCharts'
 import {
   allSpecs,
+  confusionMatrix4Spec,
+  confusionMatrixSpec,
   fieldCompositionSpec,
   foldDotsSpec,
   leaderboardSpec,
@@ -102,6 +104,80 @@ describe('renderReportChart · series per kind', () => {
     expect(option.series[0].markArea.data[0][0]).toEqual({ xAxis: 31, name: '早停区' })
     expect(option.series[0].markArea.data[0][1]).toEqual({ xAxis: 38 })
     expect(option.tooltip.trigger).toBe('axis')
+  })
+
+  it('matrix: hits and misses as heatmaps, each on its own hidden depth ramp', () => {
+    const option = renderReportChart(confusionMatrixSpec)
+    expect(seriesTypes(option)).toEqual(['heatmap', 'heatmap'])
+    expect(option.series.map((s) => s.id)).toEqual(['matrix-hit', 'matrix-miss'])
+    // Hidden on purpose: it is the depth scale, not a control, and the cells
+    // already print the counts a legend would be standing in for.
+    expect(option.visualMap.map((v) => v.show)).toEqual([false, false])
+    expect(option.visualMap.map((v) => v.seriesIndex)).toEqual([0, 1])
+    expect(option.visualMap.map((v) => v.dimension)).toEqual([2, 2])
+    // The diagonal ramp runs to the main colour, the misses to the warning one.
+    expect(option.visualMap[0].inRange.color).toEqual([
+      REPORT_CHART_THEME.colors.primaryLight, REPORT_CHART_THEME.colors.primary,
+    ])
+    expect(option.visualMap[1].inRange.color).toEqual([
+      REPORT_CHART_THEME.colors.accentLight, REPORT_CHART_THEME.colors.accent,
+    ])
+    // Each ramp is scaled to its own half, so a small mistake is still visible
+    // next to a diagonal an order of magnitude larger.
+    expect(option.visualMap.map((v) => v.max)).toEqual([812, 68])
+  })
+
+  it('matrix: cells are [predicted, actual, count] on axes that list the labels', () => {
+    const option = renderReportChart(confusionMatrixSpec)
+    expect(option.xAxis.data).toEqual(confusionMatrixSpec.labels)
+    expect(option.yAxis.data).toEqual(confusionMatrixSpec.labels)
+    // Inverted, so labels[0] reads at the top rather than at the origin.
+    expect(option.yAxis.inverse).toBe(true)
+    expect(option.xAxis.name).toBe('预测')
+    expect(option.yAxis.name).toBe('实际')
+    expect(option.series[0].data.map((d) => d.value)).toEqual([[0, 0, 812], [1, 1, 159]])
+    expect(option.series[1].data.map((d) => d.value)).toEqual([[1, 0, 61], [0, 1, 68]])
+  })
+
+  it('matrix: a perfect classifier still renders, misses and all', () => {
+    const option = renderReportChart({
+      ...confusionMatrixSpec,
+      cells: [{ x: 0, y: 0, count: 900, pct: 1 }, { x: 1, y: 1, count: 100, pct: 1 }],
+    })
+    expect(option.series[1].data).toEqual([])
+    // A heatmap without a visual map does not draw at all, so the empty half
+    // keeps its own.
+    expect(option.visualMap[1].max).toBe(1)
+  })
+
+  it('matrix: prints the count in the cell, smaller as classes multiply', () => {
+    const two = renderReportChart(confusionMatrixSpec).series[0].label
+    const four = renderReportChart(confusionMatrix4Spec).series[0].label
+    expect(two.show).toBe(true)
+    expect(four.show).toBe(true)
+    expect(four.fontSize).toBeLessThan(two.fontSize)
+    expect(two.formatter({ value: [0, 0, 812] })).toBe('812')
+  })
+
+  it('matrix: the deepest cells take the light count, the pale ones keep ink', () => {
+    const option = renderReportChart(confusionMatrixSpec)
+    expect(option.series[0].data[0].label.color).toBe(REPORT_CHART_THEME.colors.onFill)
+    expect(option.series[0].data[1].label.color).toBe(REPORT_CHART_THEME.colors.ink)
+    const four = renderReportChart(confusionMatrix4Spec)
+    // 62 of a 88-miss ramp is only 70% along it — still pale enough for ink.
+    expect(four.series[1].data[0].label.color).toBe(REPORT_CHART_THEME.colors.ink)
+  })
+
+  it('matrix: at six classes the counts would collide, so they move to hover', () => {
+    const labels = ['a', 'b', 'c', 'd', 'e', 'f']
+    const option = renderReportChart({
+      ...confusionMatrixSpec,
+      labels,
+      cells: labels.flatMap((_, y) => labels.map((__, x) => ({ x, y, count: x === y ? 90 : 2, pct: 0.1 }))),
+    })
+    expect(option.series.every((s) => s.label.show === false)).toBe(true)
+    expect(option.series[0].data).toHaveLength(6)
+    expect(option.series[1].data).toHaveLength(30)
   })
 
   it('scatter_pair: two grids, actual/predicted lines on the left, residual bars on the right', () => {
@@ -257,6 +333,39 @@ describe('renderReportChart · tooltips', () => {
     const right = option.tooltip.formatter([{ seriesId: 'residual', dataIndex: 0, data: option.series[2].data[0] }])
     expect(right).toContain('区间</span>: -120 – -100')
     expect(right).toContain('样本数')
+  })
+
+  it('matrix tooltip names the classes rather than their indices', () => {
+    const option = renderReportChart(confusionMatrixSpec)
+    const html = option.tooltip.formatter({ data: option.series[1].data[1] })
+    labelsOf(confusionMatrixSpec).forEach((label) => expect(html).toContain(`${label}</span>: `))
+    // Cell (x=0, y=1): actual 已流失, predicted 未流失 — the missed churners.
+    expect(html).toContain('实际</span>: 已流失')
+    expect(html).toContain('预测</span>: 未流失')
+    expect(html).toContain('样本数</span>: 68')
+    expect(html).toContain('占该类</span>: 30%')
+    expect(html).not.toContain('</span>: 0<')
+  })
+
+  it('matrix tooltip falls back to the contract fields when the spec omits them', () => {
+    const option = renderReportChart({ ...confusionMatrixSpec, tooltip_fields: [] })
+    const html = option.tooltip.formatter({ data: option.series[1].data[0] })
+    expect(html).toContain('实际</span>: 未流失')
+    expect(html).toContain('预测</span>: 已流失')
+    expect(html).toContain('样本数</span>: 61')
+  })
+
+  it('matrix tooltip reads a fractional pct as a share, not as 0.9%', () => {
+    // The contract sends pct as a fraction but declares it `percent`; taken at
+    // face value a 93% row would print as 0.9%.
+    const option = renderReportChart(confusionMatrixSpec)
+    expect(option.tooltip.formatter({ data: option.series[0].data[0] })).toContain('占该类</span>: 93%')
+    // A backend that switches to real percentages must not be doubled.
+    const asPercent = renderReportChart({
+      ...confusionMatrixSpec,
+      cells: confusionMatrixSpec.cells.map((cell) => ({ ...cell, pct: cell.pct * 100 })),
+    })
+    expect(asPercent.tooltip.formatter({ data: asPercent.series[0].data[0] })).toContain('占该类</span>: 93%')
   })
 
   it('escapes markup in labels and values', () => {
