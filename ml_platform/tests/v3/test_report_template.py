@@ -1,10 +1,13 @@
 """The renderer's job is that no model output can touch a computed number."""
 
+import re
+
 import pytest
 
 from app.services import report_charts as rc
 from app.services import report_facts as rf
 from app.services import report_template as rt
+from tests.v3 import report_fixture
 
 
 class TestRender:
@@ -139,6 +142,38 @@ class TestTemplatesOnDisk:
         body = rt.load_template(name)
         for invented in ("ARIMA", "random_forest", "xgboost", "lightgbm", "8897"):
             assert invented not in body, invented
+
+
+class TestNoConstructedFeaturesLeavesNoHole:
+    """The overview's 数据集 section has to survive having nothing to say.
+
+    Its two figures — the target histogram and the field composition — and the
+    paragraph between them are all optional. With a categorical target and a
+    dataset of plain collected columns, all three are absent at once, and the
+    section must not end up with an orphan <<…>> slot or a heading over
+    nothing.
+    """
+
+    def _render(self, chart_ids):
+        ctx = report_fixture.classification_context()
+        ctx["dataset"]["column_names"] = ["churn", "age", "tenure_days", "monthly_spend"]
+        return rt.render(rt.load_template("overview"), rf.build_overview_facts(ctx), chart_ids)
+
+    def test_the_constructed_feature_paragraph_is_gone(self):
+        out = self._render({"leaderboard_bars", "shap_bars"})
+        assert "构造" not in out
+        assert "<<这批构造特征" not in out
+
+    def test_no_slot_marker_is_left_dangling(self):
+        out = self._render({"leaderboard_bars", "shap_bars"})
+        # A chart marker is legal here; an unresolved {{fact}} or {{#if}} is not.
+        assert not rt.integrity_issues(re.sub(r"<<.+?>>", "", out, flags=re.S))
+
+    def test_the_paragraph_returns_when_there_are_constructed_features(self):
+        ctx = report_fixture.classification_context()
+        out = rt.render(rt.load_template("overview"), rf.build_overview_facts(ctx),
+                        {"leaderboard_bars", "class_balance", "field_composition"})
+        assert "<<这批构造特征" in out
 
 
 class TestFillMessages:

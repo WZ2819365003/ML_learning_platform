@@ -20,6 +20,11 @@ _FORBIDDEN_SOURCE = re.compile(r'"grid"|nameGap|itemStyle|"#[0-9a-f]{6}"')
 
 
 @pytest.fixture
+def cls_ctx():
+    return report_fixture.classification_context()
+
+
+@pytest.fixture
 def ctx():
     # Function-scoped on purpose: several tests below edit the context to
     # provoke a caption, and a shared copy leaked those edits into the
@@ -265,6 +270,175 @@ class TestRunCharts:
         spec = rc.lr_history(run)
         assert spec["y_log"] is True and spec["series"][0]["values"] == [0.01, 0.005]
         assert "共变动 1 次" in spec["caption"]
+
+
+class TestFieldCompositionNeedsSomethingToCompare:
+    def test_a_dataset_with_no_constructed_features_draws_nothing(self, ctx):
+        # Every column in the base group is one full-width bar captioned "all
+        # of them came from the same place" — no comparison, no figure. The
+        # template's {{#if fields.has_groups}} already drops the paragraph that
+        # would ask what those features solve.
+        ctx["dataset"]["column_names"] = ["load", "timestamp", "hour", "dry_bulb_temp"]
+        assert rc.field_composition(ctx) is None
+
+    def test_two_segments_are_enough(self, ctx):
+        ctx["dataset"]["column_names"] = ["load", "timestamp", "load_lag_1"]
+        assert rc.field_composition(ctx) is not None
+
+    def test_the_overview_simply_loses_the_slot(self, ctx):
+        ctx["dataset"]["column_names"] = ["load", "timestamp", "hour"]
+        assert "field_composition" not in {c["id"] for c in rc.build_overview_charts(ctx)}
+
+
+class TestConfusionMatrix:
+    def test_cells_are_predicted_by_actual_with_the_row_share(self, cls_ctx):
+        spec = rc.confusion_matrix(cls_ctx["leaderboard"][0])
+        assert spec["kind"] == "matrix"
+        assert spec["labels"] == ["流失", "观望", "留存"]
+        assert spec["axis"] == {"x": "预测", "y": "实际"}
+        assert len(spec["cells"]) == 9
+        # Row 0 is the true class 流失; its 58 misses went to 观望 (column 1).
+        cell = next(c for c in spec["cells"] if c["y"] == 0 and c["x"] == 1)
+        assert cell["count"] == 58
+        assert cell["pct"] == pytest.approx(58 / 450 * 100, abs=0.01)
+
+    def test_every_cell_has_a_hover_row(self, cls_ctx):
+        spec = rc.confusion_matrix(cls_ctx["leaderboard"][0])
+        assert len(spec["rows"]) == len(spec["cells"])
+        assert spec["rows"][1] == {"category": "流失 → 观望", "actual": "流失",
+                                   "predicted": "观望", "count": 58, "pct": "12.89%"}
+        assert {f["key"] for f in spec["tooltip_fields"]} == {"actual", "predicted", "count", "pct"}
+
+    def test_caption_reads_the_diagonal_and_the_worst_confusion(self, cls_ctx):
+        caption = rc.confusion_matrix(cls_ctx["leaderboard"][0])["caption"]
+        assert "留出集 1000 个样本里判对 811 个" in caption
+        assert "错得最多的是把 流失 判成 观望，58 个" in caption
+
+    def test_a_fold_window_is_not_called_a_holdout(self, cls_ctx):
+        spec = rc.confusion_matrix(cls_ctx["leaderboard"][1])
+        assert spec["title"] == "混淆矩阵（交叉验证末折）"
+        assert "交叉验证末折" in spec["caption"] and "留出集" not in spec["caption"]
+
+    def test_a_perfect_classifier_says_so(self):
+        run = {"metrics": {"confusion_matrix": [[10, 0], [0, 12]], "class_labels": ["a", "b"]}}
+        assert "没有一个样本被判错" in rc.confusion_matrix(run)["caption"]
+
+    def test_a_ragged_matrix_is_dropped_rather_than_drawn(self):
+        # Row sums would be wrong, and a wrong matrix is worse than none.
+        assert rc.confusion_matrix({"metrics": {"confusion_matrix": [[1, 2], [3]]}}) is None
+        assert rc.confusion_matrix({"metrics": {"confusion_matrix": [[5]]}}) is None
+        assert rc.confusion_matrix({"metrics": {"confusion_matrix": [[0, 0], [0, 0]]}}) is None
+        assert rc.confusion_matrix({"metrics": {}}) is None
+
+    def test_it_parses_a_stringified_matrix(self):
+        # An archived payload can arrive with the nesting flattened to JSON text.
+        run = {"metrics": {"confusion_matrix": json.dumps([[4, 1], [2, 3]]),
+                           "class_labels": json.dumps(["no", "yes"])}}
+        spec = rc.confusion_matrix(run)
+        assert spec["labels"] == ["no", "yes"]
+        assert [c["count"] for c in spec["cells"]] == [4, 1, 2, 3]
+
+    def test_missing_labels_fall_back_to_positions(self):
+        spec = rc.confusion_matrix({"metrics": {"confusion_matrix": [[4, 1], [2, 3]]}})
+        assert spec["labels"] == ["类别 0", "类别 1"]
+
+
+class TestRocCurve:
+    def test_x_is_the_false_positive_rate_and_the_diagonal_is_requested(self, cls_ctx):
+        spec = rc.roc_curve(cls_ctx["leaderboard"][0])
+        assert spec["kind"] == "lines"
+        assert spec["reference_diagonal"] is True
+        assert spec["x"][0] == 0.0 and spec["x"][-1] == 1.0
+        assert len(spec["series"]) == 1 and len(spec["series"][0]["values"]) == len(spec["x"])
+        assert spec["y_log"] is False
+
+    def test_the_caption_speaks_in_auc(self, cls_ctx):
+        caption = rc.roc_curve(cls_ctx["leaderboard"][0])["caption"]
+        assert caption.startswith("AUC 0.921")
+        assert "贴住左上角" in caption
+        # The operating point is read off the curve, not invented.
+        assert "抓住 81% 的正例，同时误报 6.7% 的负例" in caption
+
+    def test_a_coin_flip_curve_is_called_one(self):
+        points = [i / 20 for i in range(21)]
+        run = {"metrics": {"val_roc_fpr": points, "val_roc_tpr": points}}
+        caption = rc.roc_curve(run)["caption"]
+        assert "AUC 0.5" in caption and "与随机猜测差不多" in caption
+
+    def test_multiclass_runs_have_no_curve_to_draw(self):
+        assert rc.roc_curve({"metrics": {"confusion_matrix": [[1, 0], [0, 1]]}}) is None
+        assert rc.roc_curve({"metrics": {"val_roc_fpr": [0.0, 1.0], "val_roc_tpr": [0.0, 1.0]}}) is None
+
+    def test_a_fold_window_is_labelled(self, cls_ctx):
+        assert rc.roc_curve(cls_ctx["leaderboard"][1])["title"] == "ROC 曲线（交叉验证末折）"
+
+
+class TestClassBalance:
+    def test_counts_come_from_the_matrix_row_sums(self, cls_ctx):
+        spec = rc.class_balance(cls_ctx)
+        assert spec["kind"] == "hbar"
+        # 450 / 340 / 210, ordered largest first.
+        assert spec["categories"] == ["流失", "观望", "留存"]
+        assert spec["series"][0]["values"] == [450, 340, 210]
+        assert spec["rows"][0] == {"category": "流失", "count": 450, "pct": "45%"}
+
+    def test_a_balanced_task_is_not_warned_about(self, cls_ctx):
+        caption = rc.class_balance(cls_ctx)["caption"]
+        assert "多数类 流失 占 45%" in caption
+        assert "没有明显失衡" in caption
+        assert "取自xgboost的留出集 1000 个样本" in caption
+
+    def test_a_dominant_class_gets_the_baseline_warning(self, cls_ctx):
+        cls_ctx["leaderboard"][0]["metrics"]["confusion_matrix"] = [
+            [700, 20, 10], [40, 120, 10], [20, 10, 70],
+        ]
+        caption = rc.class_balance(cls_ctx)["caption"]
+        assert "准确率要对照这个基线看" in caption
+
+    def test_it_falls_through_to_a_run_that_kept_a_matrix(self, cls_ctx):
+        cls_ctx["leaderboard"][0]["metrics"].pop("confusion_matrix")
+        spec = rc.class_balance(cls_ctx)
+        assert spec is not None and "logistic_regression" in spec["caption"]
+
+    def test_nothing_to_read_means_no_chart(self, cls_ctx):
+        for entry in cls_ctx["leaderboard"]:
+            entry["metrics"].pop("confusion_matrix")
+        assert rc.class_balance(cls_ctx) is None
+
+
+class TestClassificationAssembly:
+    def test_the_overview_still_has_five_figures(self, cls_ctx):
+        assert [c["id"] for c in rc.build_overview_charts(cls_ctx)] == [
+            "leaderboard_bars", "fold_dots", "class_balance", "field_composition", "shap_bars"]
+
+    def test_the_target_histogram_slot_is_the_one_that_changed(self, cls_ctx):
+        # A categorical target has no histogram in the profile, so the slot was
+        # simply empty and a classification overview had four figures.
+        assert rc.target_hist(cls_ctx) is None
+        ids = {c["id"] for c in rc.build_overview_charts(cls_ctx)}
+        assert "target_hist" not in ids and "class_balance" in ids
+
+    def test_a_regression_task_is_untouched(self, ctx):
+        assert [c["id"] for c in rc.build_overview_charts(ctx)] == [
+            "leaderboard_bars", "fold_dots", "target_hist", "field_composition", "shap_bars"]
+
+    def test_a_classification_run_swaps_the_scatter_for_matrix_and_roc(self, cls_ctx):
+        ids = [c["id"] for c in rc.build_run_charts(cls_ctx["leaderboard"][0], cls_ctx)]
+        assert ids == ["fold_scores", "confusion_matrix", "roc_curve", "shap_bars"]
+        assert "pred_vs_actual" not in ids
+
+    def test_a_run_reached_without_its_context_still_gets_the_pair(self, cls_ctx):
+        ids = [c["id"] for c in rc.build_run_charts(cls_ctx["leaderboard"][0], None)]
+        assert "confusion_matrix" in ids and "roc_curve" in ids
+
+    def test_a_regression_run_is_untouched(self, ctx):
+        ids = [c["id"] for c in rc.build_run_charts(ctx["leaderboard"][4], ctx)]
+        assert ids == ["loss_history", "pred_vs_actual"]
+
+    def test_no_renderer_vocabulary_leaks_from_the_new_specs(self, cls_ctx):
+        specs = (rc.build_overview_charts(cls_ctx)
+                 + rc.build_run_charts(cls_ctx["leaderboard"][0], cls_ctx))
+        assert rc.renderer_leaks(specs) == []
 
 
 class TestPredVsActualNamesItsSource:

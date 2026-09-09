@@ -30,6 +30,10 @@
 
 {{chart:pred_vs_actual}}
 
+{{chart:confusion_matrix}}
+
+{{chart:roc_curve}}
+
 {{metrics.sentence}}{{#if error_shape.sentence}}{{error_shape.sentence}}{{/if}}
 
 {{#if shap.concentration_sentence}}

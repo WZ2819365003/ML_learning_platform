@@ -287,10 +287,15 @@ async def test_generate_ai_report_renders_facts_and_asks_only_for_the_gaps(db, m
     }
 
     # Every marker in the document is backed by a spec, in document order, and
-    # every spec is a placed marker. This task has no folds and no target
-    # histogram, so those two figures are dropped rather than shipped empty.
+    # every spec is a placed marker. This task has no folds, no target
+    # histogram, no confusion matrix and four plain columns, so those four
+    # figures are dropped rather than shipped empty — a field composition of
+    # one segment is a full-width bar with nothing to compare.
     placed = re.findall(r"\{\{chart:([a-z0-9_]+)\}\}", markdown)
-    assert placed == ["leaderboard_bars", "field_composition", "shap_bars"]
+    assert placed == ["leaderboard_bars", "shap_bars"]
+    # …and the paragraph that would have asked what those constructed features
+    # solve goes with the chart, leaving no orphan slot behind.
+    assert "构造" not in markdown
     assert [chart["id"] for chart in result["charts"]] == placed
     for chart in result["charts"]:
         _assert_spec(chart)
@@ -321,8 +326,11 @@ async def test_generate_ai_report_renders_facts_and_asks_only_for_the_gaps(db, m
         assert not re.search(r"不值得|建议|应当|优先", report["markdown"])
         for chart in report["charts"]:
             _assert_spec(chart)
-    assert [c["id"] for c in by_model["random_forest"]["charts"]] == ["loss_history"]
+    # This run stored val_roc_fpr/val_roc_tpr all along; before the ROC spec
+    # existed the report carried the data and drew nothing with it.
+    assert [c["id"] for c in by_model["random_forest"]["charts"]] == ["loss_history", "roc_curve"]
     assert by_model["random_forest"]["charts"][0]["y_log"] is True
+    assert by_model["random_forest"]["charts"][1]["caption"].startswith("AUC 0.8")
     assert by_model["logistic_regression"]["charts"] == []
     assert "本模型即本次最优" in by_model["random_forest"]["markdown"]
     assert "与最优的 random_forest" in by_model["logistic_regression"]["markdown"]

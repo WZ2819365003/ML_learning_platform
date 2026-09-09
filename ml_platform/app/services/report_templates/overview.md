@@ -20,6 +20,8 @@
 
 {{chart:target_hist}}
 
+{{chart:class_balance}}
+
 {{chart:field_composition}}
 
 {{#if fields.has_groups}}
