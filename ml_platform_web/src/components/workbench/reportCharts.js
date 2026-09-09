@@ -252,17 +252,24 @@ function roleColor(role) {
   return T.colors.primary
 }
 
-function verticalMarkLine(items, valueKey = 'value', labelKey = 'label') {
+/**
+ * A dashed vertical line at `item[valueKey]` labelled `item[labelKey]`.
+ *
+ * The label sits upright above the plot (ECharts would otherwise rotate it
+ * along the line). "Above" is the line's end on a normal y axis and its start
+ * on an inverted one — the hbar and dots charts invert theirs so the first
+ * category reads at the top — hence `invertedAxis`.
+ */
+function verticalMarkLine(items, valueKey = 'value', labelKey = 'label', invertedAxis = false) {
   return {
     symbol: 'none',
     silent: true,
     animation: false,
     lineStyle: { color: T.colors.accent, type: 'dashed', width: 1.2 },
-    // Upright above the line; ECharts would otherwise rotate the text along it.
     label: {
       show: true,
       formatter: '{b}',
-      position: 'end',
+      position: invertedAxis ? 'start' : 'end',
       rotate: 0,
       distance: 4,
       color: T.colors.accent,
@@ -297,7 +304,7 @@ function renderHbar(spec) {
       row: rows[i] || { category, value: s.values?.[i] ?? null },
     })),
     ...(seriesIndex === 0 && spec.reference_lines?.length
-      ? { markLine: verticalMarkLine(spec.reference_lines) }
+      ? { markLine: verticalMarkLine(spec.reference_lines, 'value', 'label', true) }
       : {}),
   }))
 

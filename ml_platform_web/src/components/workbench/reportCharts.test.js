@@ -45,6 +45,9 @@ describe('renderReportChart · series per kind', () => {
     const line = option.series[0].markLine
     expect(line.lineStyle).toMatchObject({ color: REPORT_CHART_THEME.colors.accent, type: 'dashed' })
     expect(line.data).toEqual([{ xAxis: 88.97, name: '平均负荷的 1%' }])
+    // The y axis is inverted, so the top of the line is its start; the label
+    // must sit there, upright, rather than on the x-axis ticks at the bottom.
+    expect(line.label).toMatchObject({ position: 'start', rotate: 0 })
     expect(option.series[0].itemStyle.color).toBe(REPORT_CHART_THEME.colors.primary)
     expect(option.series[1].itemStyle.color).toBe(REPORT_CHART_THEME.colors.muted)
     expect(option.legend.show).toBe(true)
@@ -77,6 +80,7 @@ describe('renderReportChart · series per kind', () => {
     expect(option.xAxis.max).toBe(14274)
     expect(option.series[0].markLine.data.map((d) => d.name)).toEqual(['Q1', '均值', 'Q3'])
     expect(option.series[0].markLine.data[1].xAxis).toBe(8897)
+    expect(option.series[0].markLine.label).toMatchObject({ position: 'end', rotate: 0 })
   })
 
   it('stacked: one stacked bar segment per group on a single hidden category', () => {
