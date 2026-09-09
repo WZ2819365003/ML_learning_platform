@@ -303,3 +303,22 @@ describe('renderReportChart · legacy and unknown', () => {
     })
   })
 })
+
+
+describe('renderReportChart · hbar hover target', () => {
+  it('triggers on the axis row, not the six-pixel bar', () => {
+    // With an item trigger the reader had to land the cursor on the bar itself
+    // to see a tooltip; in the browser that meant no tooltip at all.
+    const option = renderReportChart(leaderboardSpec)
+    expect(option.tooltip.trigger).toBe('axis')
+    expect(option.tooltip.axisPointer.type).toBe('shadow')
+  })
+
+  it('formats the row from the array params an axis trigger delivers', () => {
+    const option = renderReportChart(leaderboardSpec)
+    const html = option.tooltip.formatter([{ data: option.series[0].data[0] }])
+    for (const label of leaderboardSpec.tooltip_fields.map((f) => f.label)) {
+      expect(html).toContain(label)
+    }
+  })
+})

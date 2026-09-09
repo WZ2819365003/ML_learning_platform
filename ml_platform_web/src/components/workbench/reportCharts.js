@@ -354,7 +354,13 @@ function renderHbar(spec) {
     grid: { left, right: T.grid.right, top, bottom, containLabel: false },
     xAxis: valueAxis({ name: spec.unit || '', scale: false }),
     yAxis: categoryAxis(categories, { inverse: true }),
-    tooltip: fieldTooltip(spec, (_params, first) => rowOf(first)),
+    // Axis-triggered: the bars are six pixels thick, and an item trigger
+    // made the reader land the cursor on one to see anything. Hovering
+    // anywhere across the row now shows that row.
+    tooltip: {
+      ...fieldTooltip(spec, (_params, first) => rowOf(first), 'axis'),
+      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(15,23,42,0.06)' } },
+    },
     series: [...bars, ...errorBars],
   }
 }
