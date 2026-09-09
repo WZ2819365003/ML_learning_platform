@@ -78,6 +78,57 @@ function ParamsTable({ params }) {
   )
 }
 
+export const DASH = '—'
+
+/**
+ * `progress` on both TrainingTask and DLTrainingTask is already a percentage:
+ * training_service and dl_service both write `task.progress = 100.0` on
+ * completion. (It is PlatformTask.progress that is a 0–1 fraction.) The drawer
+ * used to multiply by 100 anyway and rendered a finished run as "10000%".
+ */
+export function formatProgress(progress) {
+  if (progress == null) return DASH
+  const n = Number(progress)
+  if (!Number.isFinite(n)) return DASH
+  return `${n.toFixed(0)}%`
+}
+
+/**
+ * Resolve the drawer's identity fields from the inspector payload.
+ *
+ * The modeling *contract* — target column, dataset identity, and where this run
+ * placed overall — belongs to the ModelingTask, not to the legacy TrainingTask
+ * execution record the drawer used to read. `training_task` stays the source
+ * for everything only it knows (hyperparameters, arch/opt config, model path).
+ *
+ * Two distinct ranks, deliberately kept apart:
+ *   - taskRank       — position on the task leaderboard, across all experiments
+ *   - experimentRank — ExperimentRun.rank, position inside one experiment
+ * Showing the second under a bare 「排名」 label was the original bug; they are
+ * both surfaced now, each with its own label.
+ */
+export function deriveRunFields(data) {
+  const run = data?.run
+  const mtask = data?.modeling_task
+  const ttask = data?.training_task
+  const taskRank = mtask?.rank ?? null
+
+  return {
+    modelingTaskName: mtask?.name || DASH,
+    // TrainingTask.target_column is a correct answer when it exists — it is
+    // simply absent on DL runs and on runs whose legacy row was purged. So it
+    // stays as a fallback rather than being dropped.
+    targetColumn: mtask?.target_column || ttask?.target_column || DASH,
+    // Dataset.name is the original uploaded filename; ModelingTask copies it at
+    // creation, so it survives the legacy row being purged.
+    datasetFile: mtask?.dataset_name || DASH,
+    taskRank: taskRank ?? DASH,
+    experimentRank: run?.rank ?? DASH,
+    progressLabel: formatProgress(ttask?.progress),
+    isTopOne: (taskRank ?? run?.rank ?? null) === 1,
+  }
+}
+
 export default function RunInspector({ open, runId, onClose, defaultTab = 'overview' }) {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState(null)
@@ -109,6 +160,10 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
   const siblings = data?.siblings || []
   const logs = data?.logs || []
   const diagnosis = data?.diagnosis
+  const {
+    modelingTaskName, targetColumn, datasetFile,
+    taskRank, experimentRank, progressLabel, isTopOne,
+  } = deriveRunFields(data)
   const isDlRun = ttask?.family === 'dl'
   const taskKind = isDlRun
     ? ttask?.task_type || run?.params?.task_type || 'classification'
@@ -174,7 +229,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                           message={
                             <span>
                               Trial #{run.trial_no ?? '?'} · {ttask?.model_type || '模型'}
-                              {run.rank === 1 && <Tag color="gold" style={{ marginLeft: 8 }}>🏆 Top-1</Tag>}
+                              {isTopOne && <Tag color="gold" style={{ marginLeft: 8 }}>🏆 Top-1</Tag>}
                             </span>
                           }
                           description={
@@ -196,7 +251,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                                 </span>
                               )}
                               {duration && <span>；耗时 <code>{duration}</code></span>}
-                              {ttask?.target_column && <span>；目标列 <code>{ttask.target_column}</code></span>}
+                              {targetColumn !== DASH && <span>；目标列 <code>{targetColumn}</code></span>}
                               {ds?.name && <span>；数据集 <code>{ds.name}</code>（{ds.row_count ?? '?'} 行 × {ds.column_count ?? '?'} 列）</span>}
                               。
                             </div>
@@ -208,7 +263,17 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                     <Descriptions size="small" column={2} bordered
                       labelStyle={{ background: '#f8fafc', width: 110 }}>
                       <Descriptions.Item label="Trial 号">{run?.trial_no ?? '-'}</Descriptions.Item>
-                      <Descriptions.Item label="排名">{run?.rank ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label={
+                        <Tooltip title="本 Run 在所属建模任务排行榜上的名次 —— 按任务的目标指标，跨该任务下的所有实验排序。未成功或没有目标指标值的 Run 不参与排名。">
+                          <span>排名 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+                        </Tooltip>
+                      }>{taskRank}</Descriptions.Item>
+                      <Descriptions.Item label={
+                        <Tooltip title="本 Run 在它自己那一个实验内部的名次，范围比上面的「排名」窄。两者不同是正常的。">
+                          <span>实验内排名 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+                        </Tooltip>
+                      }>{experimentRank}</Descriptions.Item>
+                      <Descriptions.Item label="建模任务">{modelingTaskName}</Descriptions.Item>
                       <Descriptions.Item label="所属实验">{exp?.name || '-'}</Descriptions.Item>
                       <Descriptions.Item label="策略">
                         <Tag color="blue">{exp?.strategy_type || exp?.source_experiment_type || '-'}</Tag>
@@ -356,14 +421,18 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                     )}
                     <div>
                       <Text strong><DatabaseOutlined /> 数据集</Text>
-                      {ds ? (
+                      {/* The modeling task knows the dataset even when the legacy
+                          TrainingTask row (and with it `ds`) has been purged, so
+                          the panel opens on either source rather than collapsing
+                          to 无数据集记录 in exactly the case the fallback is for. */}
+                      {(ds || datasetFile !== DASH) ? (
                         <Descriptions size="small" column={2} style={{ marginTop: 6 }} bordered
                           labelStyle={{ background: '#f8fafc', width: 100 }}>
-                          <Descriptions.Item label="名称">{ds.name}</Descriptions.Item>
-                          <Descriptions.Item label="行数">{ds.row_count ?? '-'}</Descriptions.Item>
-                          <Descriptions.Item label="列数">{ds.column_count ?? '-'}</Descriptions.Item>
-                          <Descriptions.Item label="文件">
-                            <Text ellipsis style={{ maxWidth: 220, fontSize: 12 }}>{ds.file_path || '-'}</Text>
+                          <Descriptions.Item label="名称">{ds?.name || datasetFile}</Descriptions.Item>
+                          <Descriptions.Item label="行数">{ds?.row_count ?? '-'}</Descriptions.Item>
+                          <Descriptions.Item label="列数">{ds?.column_count ?? '-'}</Descriptions.Item>
+                          <Descriptions.Item label="数据集文件">
+                            <Text ellipsis style={{ maxWidth: 220, fontSize: 12 }}>{datasetFile}</Text>
                           </Descriptions.Item>
                         </Descriptions>
                       ) : <Empty description="无数据集记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
@@ -376,8 +445,8 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                           labelStyle={{ background: '#f8fafc', width: 100 }}>
                           <Descriptions.Item label="模型">{ttask.model_type}</Descriptions.Item>
                           <Descriptions.Item label="状态">{STATUS_TAG[ttask.status] || ttask.status}</Descriptions.Item>
-                          <Descriptions.Item label="进度">{ttask.progress != null ? `${(ttask.progress * 100).toFixed(0)}%` : '-'}</Descriptions.Item>
-                          <Descriptions.Item label="目标列">{ttask.target_column || '-'}</Descriptions.Item>
+                          <Descriptions.Item label="进度">{progressLabel}</Descriptions.Item>
+                          <Descriptions.Item label="目标列">{targetColumn}</Descriptions.Item>
                           <Descriptions.Item label="模型文件" span={2}>
                             <Text ellipsis style={{ maxWidth: 400, fontSize: 12 }}>{ttask.model_path || '-'}</Text>
                           </Descriptions.Item>
