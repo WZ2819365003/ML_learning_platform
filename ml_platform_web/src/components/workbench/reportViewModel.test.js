@@ -48,7 +48,33 @@ describe('reportViewModel', () => {
     ])?.id).toBe('newer')
   })
 
-  it('exports overview, structured tables, chart index, and every Run report', () => {
+  it('exports the overview with its figures noted in place, the appendix, and every Run report', () => {
+    const markdown = buildCompleteReportMarkdown({
+      markdown: '# 总报告\n\n总体结论。\n\n{{chart:leaderboard}}\n\n读图段。',
+      charts: [{ id: 'leaderboard', kind: 'hbar', title: '七个模型的误差', caption: '树模型全在 1% 线以内。' }],
+      appendix_tables: [{
+        id: 'parameter_settings', title: '参数设置',
+        columns: [{ key: 'model', title: '模型' }, { key: 'rmse', title: 'RMSE' }],
+        rows: [{ model: 'xgboost', rmse: 72.4 }],
+      }],
+      run_reports: [{
+        run_id: 'run-1', model_type: 'xgboost',
+        markdown: '# xgboost · 分报告\n\n结果。\n\n{{chart:fold_scores}}',
+        charts: [{ id: 'fold_scores', kind: 'dots', title: '各折 RMSE', caption: '五折范围重叠。' }],
+      }],
+    })
+    expect(markdown).toContain('# 总报告')
+    expect(markdown).toContain('> 图表：七个模型的误差。树模型全在 1% 线以内。')
+    expect(markdown).toContain('# 附录')
+    expect(markdown).toContain('| xgboost | 72.4 |')
+    expect(markdown).toContain('# xgboost · 分报告')
+    expect(markdown).toContain('> 图表：各折 RMSE。五折范围重叠。')
+    expect(markdown).not.toContain('{{chart:')
+    // Every figure was placed in the prose, so there is no separate index.
+    expect(markdown).not.toContain('# 图表索引')
+  })
+
+  it('still lists legacy tables and unplaced charts of an old archive', () => {
     const markdown = buildCompleteReportMarkdown({
       markdown: '# 总报告\n\n总体结论。',
       tables: [{
@@ -56,18 +82,10 @@ describe('reportViewModel', () => {
         columns: [{ key: 'model', title: '模型' }, { key: 'rmse', title: 'RMSE' }],
         rows: [{ model: 'xgboost', rmse: 72.4 }],
       }],
-      charts: [{ id: 'training', title: '训练损失', description: '对数轴。' }],
-      run_reports: [{
-        run_id: 'run-1', model_type: 'xgboost',
-        markdown: '# xgboost · 分报告\n\n结果。\n\n{{chart:fold_scores}}',
-        charts: [{ id: 'fold_scores', title: '各折 RMSE', description: '虚线为均值。' }],
-      }],
+      charts: [{ id: 'training', title: '训练损失', description: '对数轴。', option: {} }],
     })
-    expect(markdown).toContain('# 总报告')
     expect(markdown).toContain('| xgboost | 72.4 |')
+    expect(markdown).toContain('# 图表索引')
     expect(markdown).toContain('**训练损失**：对数轴。')
-    expect(markdown).toContain('# xgboost · 分报告')
-    expect(markdown).toContain('> 图表：各折 RMSE。虚线为均值。')
-    expect(markdown).not.toContain('{{chart:')
   })
 })

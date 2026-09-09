@@ -1,56 +1,49 @@
 import { parseMarkdown } from '../../utils/markdown'
 
+/**
+ * What the cover shows: the title, one line of facts, and the headline.
+ *
+ * The payload carries `headline` and `meta`; older archives have neither, so
+ * the headline falls back to the first paragraph of the markdown and the meta
+ * row is simply omitted rather than invented.
+ */
 export function buildReportViewModel(report = {}, taskName = '建模任务') {
-  const markdown = visibleReportMarkdown(report)
-  const markdownBlocks = parseMarkdown(markdown)
-
+  const blocks = parseMarkdown(report.markdown || '')
+  const meta = report.meta && typeof report.meta === 'object' ? report.meta : null
   return {
-    title: extractTitle(markdownBlocks),
-    taskName,
-    score: extractScore(report, `${markdown}\n${report.markdown || ''}`),
-    summary: extractSummary(markdownBlocks),
-    metrics: normalizeMetrics(report.headline_metrics || []),
-    chartCount: Array.isArray(report.charts) ? report.charts.length : 0,
-    tableCount: Array.isArray(report.tables) ? report.tables.length : 0,
+    title: extractTitle(blocks, meta, taskName),
+    taskName: meta?.task_name || taskName,
+    headline: extractHeadline(report, blocks),
+    metaItems: buildMetaItems(meta),
+    generatedAt: report.generated_at || report.archived_at || null,
     archiveLabel: report.archive_id ? String(report.archive_id).slice(0, 8) : null,
   }
 }
 
-function visibleReportMarkdown(report) {
-  const blockMarkdown = (report.report_blocks || [])
-    .filter((block) => block?.type === 'markdown' && block.markdown)
-    .map((block) => block.markdown)
-    .join('\n\n')
-    .trim()
-  return blockMarkdown || report.markdown || ''
-}
-
-function extractTitle(blocks) {
+function extractTitle(blocks, meta, taskName) {
   const heading = blocks.find((block) => block.type === 'heading' && block.level === 1)
-  return heading?.text || 'AI 建模报告'
+  if (heading?.text) return heading.text
+  return `${meta?.task_name || taskName} · 建模报告`
 }
 
-function extractScore(report, markdown) {
-  const metric = (report.headline_metrics || []).find((item) => item.key === 'ai_score')
-  if (metric?.value) return String(metric.value)
-  const match = String(markdown || '').match(/(?:总分|综合得分)[：:]\s*([0-9]{1,3}\s*\/\s*100)/)
-  return match ? match[1].replace(/\s+/g, '') : '—'
-}
-
-function extractSummary(blocks) {
+function extractHeadline(report, blocks) {
+  if (typeof report.headline === 'string' && report.headline.trim()) return report.headline.trim()
   const paragraph = blocks.find((block) => block.type === 'paragraph')
   return paragraph?.text?.replace(/\*\*/g, '') || ''
 }
 
-function normalizeMetrics(items) {
+/** The facts of the meta row, in reading order; null when the payload has no meta. */
+export function buildMetaItems(meta) {
+  if (!meta) return null
+  const items = []
+  if (meta.dataset_name) items.push(String(meta.dataset_name))
+  if (meta.target_column) items.push(`目标列 ${meta.target_column}`)
+  const runs = Number(meta.run_count)
+  const models = Number(meta.model_count)
+  if (Number.isFinite(runs) && runs > 0) {
+    items.push(Number.isFinite(models) && models > 0
+      ? `${runs} 个 Run / ${models} 种模型`
+      : `${runs} 个 Run`)
+  }
   return items
-    .filter((item) => item && item.key !== 'ai_score')
-    .slice(0, 4)
-    .map((item) => ({
-      key: item.key || item.label,
-      label: item.label,
-      value: item.value,
-      detail: item.detail,
-      tone: item.tone || 'default',
-    }))
 }

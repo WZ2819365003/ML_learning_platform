@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { OVERVIEW, buildTreeItems, splitReportOnCharts } from './RunReportPanel'
+import { OVERVIEW, buildTreeItems } from './RunReportPanel'
 
 describe('buildTreeItems', () => {
   it('puts 总报告 first, as the root the models hang off', () => {
@@ -61,40 +61,5 @@ describe('buildTreeItems', () => {
 
   it('returns just the root when no model reported', () => {
     expect(buildTreeItems()).toEqual([{ id: OVERVIEW, label: '总报告' }])
-  })
-})
-
-describe('splitReportOnCharts', () => {
-  it('splits text around a chart marker', () => {
-    const segs = splitReportOnCharts('前文。\n\n{{chart:loss_history}}\n\n后文。')
-    expect(segs.map(s => s.kind)).toEqual(['markdown', 'chart', 'markdown'])
-    expect(segs[1].value).toBe('loss_history')
-  })
-
-  it('returns one span when the model placed nothing', () => {
-    // Declining to place a figure is an allowed answer, so a report with no
-    // markers is the normal case, not a failure.
-    expect(splitReportOnCharts('纯文字报告。')).toEqual([
-      { kind: 'markdown', value: '纯文字报告。' },
-    ])
-  })
-
-  it('handles a marker at the very end', () => {
-    const segs = splitReportOnCharts('说明。\n\n{{chart:fold_scores}}')
-    expect(segs.map(s => s.kind)).toEqual(['markdown', 'chart'])
-  })
-
-  it('keeps several markers in order', () => {
-    const segs = splitReportOnCharts('a\n\n{{chart:one}}\n\nb\n\n{{chart:two}}')
-    expect(segs.filter(s => s.kind === 'chart').map(s => s.value)).toEqual(['one', 'two'])
-  })
-
-  it('normalises case and spacing', () => {
-    expect(splitReportOnCharts('{{ Chart : Loss_History }}')[0].value).toBe('loss_history')
-  })
-
-  it('returns nothing for empty input', () => {
-    expect(splitReportOnCharts('')).toEqual([])
-    expect(splitReportOnCharts()).toEqual([])
   })
 })
