@@ -83,6 +83,43 @@ def _ranges_overlap(a: tuple[float, float], b: tuple[float, float]) -> bool:
     return a[0] <= b[1] and b[0] <= a[1]
 
 
+def _confusion(metrics: dict[str, Any]) -> dict[str, Any] | None:
+    """A square confusion matrix with its label order, or nothing.
+
+    Row i is the true class `labels[i]`, column j the predicted one, as both
+    the tree trainers and the deep-learning trainer store it. Ragged or
+    non-square data is dropped rather than drawn: a matrix whose row sums are
+    wrong is worse than no matrix.
+    """
+    raw = _json_list((metrics or {}).get("confusion_matrix"))
+    rows: list[list[int]] = []
+    for row in raw:
+        cells = [_num(v) for v in _json_list(row)]
+        if any(c is None for c in cells):
+            return None
+        rows.append([int(c) for c in cells])
+    size = len(rows)
+    if size < 2 or any(len(r) != size for r in rows):
+        return None
+    if sum(sum(r) for r in rows) <= 0:
+        return None
+    labels = [str(v) for v in _json_list((metrics or {}).get("class_labels"))]
+    if len(labels) != size:
+        labels = [f"类别 {i}" for i in range(size)]
+    source = (metrics or {}).get("confusion_source") or "holdout"
+    return {"matrix": rows, "labels": labels, "source": str(source)}
+
+
+def _split_name(source: str) -> str:
+    """What to call the rows a classification figure was measured on.
+
+    Under selection the sealed hold-out is withheld, so the figure is the last
+    cross-validation fold. Saying 留出集 over a fold would claim an evaluation
+    that never happened — the same distinction pred_vs_actual makes.
+    """
+    return "交叉验证末折" if source == "cv_last_fold" else "留出集"
+
+
 # ---------------------------------------------------------------------------
 # Overview charts
 # ---------------------------------------------------------------------------
@@ -404,6 +441,71 @@ def _hist_caption(counts: list[int], edges: list[float], mean: float | None,
     return f"{shape}、{tilt}，{body}{tail}。"
 
 
+def class_balance(context: dict[str, Any]) -> dict[str, Any] | None:
+    """How many samples each class has — the baseline accuracy has to beat.
+
+    Read off the confusion matrix's row sums rather than the dataset profile:
+    the profiler publishes `unique_count` and `min_class_count` for the target
+    but not a per-class tally, and the matrix's rows are per-class counts of
+    exactly the rows the model was scored on, which is the population the
+    accuracy in the leaderboard refers to.
+    """
+    entry, confusion = _first_confusion(context)
+    if confusion is None:
+        return None
+    labels, matrix = confusion["labels"], confusion["matrix"]
+    counts = [sum(row) for row in matrix]
+    total = sum(counts)
+
+    order = sorted(range(len(counts)), key=lambda i: counts[i], reverse=True)
+    categories = [labels[i] for i in order]
+    values = [counts[i] for i in order]
+    rows = [{"category": labels[i], "count": counts[i],
+             "pct": rf.pct_text(counts[i], total, exact=True)} for i in order]
+    tooltip_fields = [
+        {"key": "count", "label": "样本数", "format": "0"},
+        {"key": "pct", "label": "占比"},
+    ]
+    return _spec(
+        "class_balance", "hbar", f"{rf.cn_count(len(labels))}个类别的样本数",
+        _class_balance_caption(entry, confusion["source"], categories, values, total),
+        "样本数", tooltip_fields, rows,
+        categories=categories,
+        series=[{"name": "样本数", "values": values, "error": None, "color_role": "primary"}],
+        reference_lines=[],
+    )
+
+
+def _first_confusion(context: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """The leading run that kept a confusion matrix, and the matrix."""
+    summary = rf.rank_summary(context)
+    board = list(context.get("leaderboard") or [])
+    if summary is not None:
+        board = [summary["best"]] + [e for e in board if e is not summary["best"]]
+    for entry in board:
+        confusion = _confusion(entry.get("metrics") or {})
+        if confusion is not None:
+            return entry, confusion
+    return {}, None
+
+
+_MAJORITY_SHARE = 0.6
+
+
+def _class_balance_caption(entry: dict[str, Any], source: str, categories: list[str],
+                           values: list[int], total: int) -> str:
+    where = f"{entry.get('model_type') or '最优模型'}的{_split_name(source)}"
+    top_share = values[0] / total
+    head = (f"取自{where} {total} 个样本：多数类 {categories[0]} 占 "
+            f"{rf.pct_text(values[0], total)}")
+    if top_share >= _MAJORITY_SHARE:
+        # A model that answers "the majority class" every time already scores
+        # this much, so the accuracy above is only meaningful against it.
+        return head + "，准确率要对照这个基线看。"
+    smallest = f"最小类 {categories[-1]} 占 {rf.pct_text(values[-1], total)}"
+    return f"{head}，{smallest}，类别分布没有明显失衡。"
+
+
 def field_composition(context: dict[str, Any]) -> dict[str, Any] | None:
     """Where the columns came from: collected, or built by which step."""
     task = context.get("task") or {}
@@ -481,13 +583,24 @@ def _shap_caption(features: list[str], values: list[float], target: str | None) 
     return f"{lead}；{tail}。"
 
 
+def is_classification(context: dict[str, Any] | None) -> bool:
+    return str(((context or {}).get("task") or {}).get("task_type") or "").lower() == "classification"
+
+
 def build_overview_charts(context: dict[str, Any]) -> list[dict[str, Any]]:
-    """The five task-level figures, in reading order; absent data drops a figure."""
+    """The five task-level figures, in reading order; absent data drops a figure.
+
+    The third slot is the one the task type decides. A classification target has
+    no histogram in the column profile — target_hist correctly returns None for
+    it — so the slot showed nothing and a classification overview had four
+    figures where a regression one had five. The class balance is the figure
+    that belongs there: it is what the accuracy above has to be read against.
+    """
     summary = rf.rank_summary(context)
     charts = [
         leaderboard_bars(context),
         fold_dots(context),
-        target_hist(context),
+        class_balance(context) if is_classification(context) else target_hist(context),
         field_composition(context),
     ]
     if summary is not None:
@@ -601,6 +714,115 @@ def pred_vs_actual(run: dict[str, Any], target: str | None = None) -> dict[str, 
     )
 
 
+def confusion_matrix(run: dict[str, Any]) -> dict[str, Any] | None:
+    """Which class was called which — the classification answer to a scatter.
+
+    A classification run has no actual-versus-predicted curve to draw; what a
+    reader wants is where the mistakes went, which is the whole content of the
+    matrix. Cells carry the row share as well as the count, because "45" means
+    nothing until you know whether that class had 50 rows or 5000.
+    """
+    confusion = _confusion(run.get("metrics") or {})
+    if confusion is None:
+        return None
+    labels, matrix, source = confusion["labels"], confusion["matrix"], confusion["source"]
+
+    cells: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    for y, row in enumerate(matrix):
+        row_total = sum(row)
+        for x, count in enumerate(row):
+            pct = (count / row_total * 100) if row_total else 0.0
+            cells.append({"x": x, "y": y, "count": count, "pct": round(pct, 2)})
+            rows.append({
+                "category": f"{labels[y]} → {labels[x]}",
+                "actual": labels[y], "predicted": labels[x],
+                "count": count, "pct": f"{rf._fmt(pct, 2)}%",
+            })
+    tooltip_fields = [
+        {"key": "actual", "label": "实际"},
+        {"key": "predicted", "label": "预测"},
+        {"key": "count", "label": "样本数", "format": "0"},
+        {"key": "pct", "label": "占该实际类"},
+    ]
+    return _spec(
+        "confusion_matrix", "matrix",
+        "混淆矩阵" + ("（交叉验证末折）" if source == "cv_last_fold" else ""),
+        _confusion_caption(labels, matrix, source),
+        "样本数", tooltip_fields, rows,
+        labels=labels, cells=cells, axis={"x": "预测", "y": "实际"},
+    )
+
+
+def _confusion_caption(labels: list[str], matrix: list[list[int]], source: str) -> str:
+    total = sum(sum(row) for row in matrix)
+    correct = sum(matrix[i][i] for i in range(len(matrix)))
+    head = (f"{_split_name(source)} {total} 个样本里判对 {correct} 个"
+            f"（{rf.pct_text(correct, total)}）")
+    worst = max(
+        ((y, x) for y in range(len(matrix)) for x in range(len(matrix)) if x != y),
+        key=lambda p: matrix[p[0]][p[1]],
+        default=None,
+    )
+    if worst is None or matrix[worst[0]][worst[1]] == 0:
+        return head + "；没有一个样本被判错。"
+    y, x = worst
+    count = matrix[y][x]
+    return (f"{head}；错得最多的是把 {labels[y]} 判成 {labels[x]}，{count} 个，"
+            f"占 {labels[y]} 类的 {rf.pct_text(count, sum(matrix[y]))}。")
+
+
+def roc_curve(run: dict[str, Any]) -> dict[str, Any] | None:
+    """The binary ROC curve, against the diagonal a coin flip would trace."""
+    metrics = run.get("metrics") or {}
+    fpr = [_num(v) for v in _json_list(metrics.get("val_roc_fpr") or metrics.get("roc_fpr"))]
+    tpr = [_num(v) for v in _json_list(metrics.get("val_roc_tpr") or metrics.get("roc_tpr"))]
+    pairs = [(f, t) for f, t in zip(fpr, tpr) if f is not None and t is not None]
+    if len(pairs) < 3:
+        return None
+    fpr = [f for f, _ in pairs]
+    tpr = [t for _, t in pairs]
+
+    # The area under the points that are actually plotted, so the caption can
+    # never disagree with the picture. The stored val_auc_roc is computed on the
+    # undownsampled curve, and under selection it belongs to a different split
+    # than the one drawn here.
+    auc = sum((fpr[i + 1] - fpr[i]) * (tpr[i + 1] + tpr[i]) / 2 for i in range(len(pairs) - 1))
+    rows = [{"category": round(f, 4), "fpr": round(f, 4), "tpr": round(t, 4),
+             "lift": round(t - f, 4)} for f, t in pairs]
+    tooltip_fields = [
+        {"key": "fpr", "label": "假正例率", "format": "0.000"},
+        {"key": "tpr", "label": "真正例率", "format": "0.000"},
+        {"key": "lift", "label": "高于随机", "format": "0.000"},
+    ]
+    source = str(metrics.get("confusion_source") or "holdout")
+    return _spec(
+        "roc_curve", "lines",
+        "ROC 曲线" + ("（交叉验证末折）" if source == "cv_last_fold" else ""),
+        _roc_caption(auc, fpr, tpr),
+        "真正例率", tooltip_fields, rows,
+        x=[round(f, 6) for f in fpr],
+        series=[{"name": "真正例率", "values": [round(t, 6) for t in tpr]}],
+        reference_diagonal=True, y_log=False, markers=[], shade=None,
+    )
+
+
+def _roc_caption(auc: float, fpr: list[float], tpr: list[float]) -> str:
+    if auc >= 0.9:
+        reading = "曲线贴住左上角，正负例分得很开"
+    elif auc >= 0.8:
+        reading = "曲线离对角线有明显距离，正负例基本分得开"
+    elif auc >= 0.7:
+        reading = "曲线离对角线不远，正负例只是部分分开"
+    elif auc >= 0.6:
+        reading = "曲线勉强高于对角线，区分能力很弱"
+    else:
+        reading = "曲线几乎贴着对角线，与随机猜测差不多"
+    best = max(range(len(fpr)), key=lambda i: tpr[i] - fpr[i])
+    return (f"AUC {rf._fmt(auc, 3)}，{reading}；最划算的阈值能抓住 "
+            f"{rf.pct_text(tpr[best], 1.0)} 的正例，同时误报 {rf.pct_text(fpr[best], 1.0)} 的负例。")
+
+
 def loss_history(run: dict[str, Any], metric: str) -> dict[str, Any] | None:
     """Training and validation loss per epoch, best epoch marked, wait shaded."""
     history = (run.get("metrics") or {}).get("history")
@@ -681,11 +903,20 @@ def build_run_charts(run: dict[str, Any], context: dict[str, Any] | None = None)
     task = (context or {}).get("task") or {}
     metric = str(task.get("objective_metric") or "rmse").lower()
     target = task.get("target_column")
+    # A classifier has no actual-versus-predicted curve; the matrix and the ROC
+    # curve are its equivalent. The run's own metrics settle it as well as the
+    # task type does, so a run reached without its context still gets the right
+    # pair rather than an empty results section.
+    classification = is_classification(context) or "confusion_matrix" in (run.get("metrics") or {})
+    results = (
+        [confusion_matrix(run), roc_curve(run)] if classification
+        else [pred_vs_actual(run, target)]
+    )
     charts = [
         loss_history(run, metric),
         lr_history(run),
         fold_scores(run, metric),
-        pred_vs_actual(run, target),
+        *results,
         shap_bars(run, target),
     ]
     return [c for c in charts if c is not None]

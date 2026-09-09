@@ -206,3 +206,111 @@ def context() -> dict[str, Any]:
         "failed_run_examples": [],
         "_target_stats": {"mean": TARGET_MEAN, "min": TARGET_MIN, "max": TARGET_MAX, "std": None},
     }
+
+
+# ---------------------------------------------------------------------------
+# A classification task, for the figures a classifier gets instead
+# ---------------------------------------------------------------------------
+
+# Three classes, imbalanced but not overwhelmingly: 450 / 340 / 210 rows.
+# Row i is the true class CLASS_LABELS[i], column j the predicted one.
+CLASS_LABELS = ["流失", "观望", "留存"]
+CONFUSION = [
+    [372, 58, 20],
+    [41, 271, 28],
+    [17, 25, 168],
+]
+
+CLS_COLUMNS = [
+    "churn", "signup_date", "hour", "month", "day_of_week", "is_weekend",
+    "age", "tenure_days", "monthly_spend", "support_tickets",
+    "spend_lag_1", "spend_lag_2", "spend_roll_mean_6", "hour_sin", "hour_cos",
+]
+
+CLS_SHAP = [
+    {"feature": "tenure_days", "mean_abs_shap": 0.412},
+    {"feature": "monthly_spend", "mean_abs_shap": 0.187},
+    {"feature": "support_tickets", "mean_abs_shap": 0.104},
+    {"feature": "spend_lag_1", "mean_abs_shap": 0.061},
+]
+
+
+def _roc(points: int = 60, power: float = 0.08) -> tuple[list[float], list[float]]:
+    """A concave curve well above the diagonal, sampled as the trainer stores it."""
+    fpr = [round(i / points, 6) for i in range(points + 1)]
+    tpr = [round(f ** power, 6) for f in fpr]
+    return fpr, tpr
+
+
+def _cls_metrics(accuracy: float, std: float, folds: list[float] | None = None,
+                 source: str = "holdout", binary_roc: bool = True,
+                 shap: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "accuracy": accuracy, "f1": round(accuracy - 0.02, 4),
+        "cv_avg_accuracy": accuracy, "cv_std_accuracy": std,
+        "selection_cv_mean_accuracy": accuracy, "selection_cv_std_accuracy": std,
+        "confusion_matrix": [list(row) for row in CONFUSION],
+        "class_labels": list(CLASS_LABELS),
+        "confusion_source": source,
+    }
+    if folds is not None:
+        metrics["cv_folds"] = [
+            {"fold": i + 1, "accuracy": value, "f1": round(value - 0.02, 4)}
+            for i, value in enumerate(folds)
+        ]
+    if binary_roc:
+        metrics["val_roc_fpr"], metrics["val_roc_tpr"] = _roc()
+    if shap is not None:
+        metrics["top_shap_importances"] = shap
+    return metrics
+
+
+def classification_leaderboard() -> list[dict[str, Any]]:
+    return [
+        _entry(1, "c1a2b3c4-001", "xgboost", 0.9120,
+               _cls_metrics(0.9120, 0.0080, [0.905, 0.918, 0.910, 0.916, 0.911],
+                            shap=CLS_SHAP)),
+        _entry(2, "c1a2b3c4-002", "logistic_regression", 0.8870,
+               _cls_metrics(0.8870, 0.0104, [0.879, 0.893, 0.885, 0.891, 0.887],
+                            source="cv_last_fold",
+                            shap=[{"feature": "tenure_days", "mean_abs_shap": 0.301},
+                                  {"feature": "monthly_spend", "mean_abs_shap": 0.244}]),
+               trial_no=2),
+    ]
+
+
+def classification_context() -> dict[str, Any]:
+    """A three-class task with the keys the classification trainers now store."""
+    info = {name: {"dtype": "float64", "missing_count": 0, "missing_rate": 0.0,
+                   "unique_count": 120, "histogram": None} for name in CLS_COLUMNS}
+    # A categorical target has no histogram in the profile — which is why
+    # target_hist has nothing to draw for a classification task.
+    info["churn"] = {"dtype": "object", "missing_count": 0, "missing_rate": 0.0,
+                     "unique_count": 3, "min_class_count": 210, "histogram": None}
+    return {
+        "task": {
+            "id": "7f31c0aa-5e42-4d0b-9a11-2c8e6b40f001",
+            "name": "测试2-客户流失预测",
+            "dataset_name": "客户流失数据.csv",
+            "target_column": "churn",
+            "task_type": "classification",
+            "objective_metric": "accuracy",
+            "objective_direction": "max",
+            "status": "COMPLETED",
+            "best_run_id": "c1a2b3c4-001",
+            "final_evaluation": {"state": "OPEN", "version": 1},
+        },
+        "dataset": {
+            "id": "ds-2", "name": "客户流失数据.csv", "row_count": 5000,
+            "column_count": len(CLS_COLUMNS),
+            "columns_info": info, "column_names": list(CLS_COLUMNS),
+        },
+        "experiments": [
+            {"id": "e1", "name": "流失-ML", "strategy_type": "baseline",
+             "selected_models": ["xgboost", "logistic_regression"]},
+        ],
+        "run_status_counts": {"SUCCESS": 2},
+        "leaderboard": classification_leaderboard(),
+        "successful_run_examples": [],
+        "failed_run_examples": [],
+    }

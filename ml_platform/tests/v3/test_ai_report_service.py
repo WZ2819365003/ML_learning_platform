@@ -321,8 +321,11 @@ async def test_generate_ai_report_renders_facts_and_asks_only_for_the_gaps(db, m
         assert not re.search(r"不值得|建议|应当|优先", report["markdown"])
         for chart in report["charts"]:
             _assert_spec(chart)
-    assert [c["id"] for c in by_model["random_forest"]["charts"]] == ["loss_history"]
+    # This run stored val_roc_fpr/val_roc_tpr all along; before the ROC spec
+    # existed the report carried the data and drew nothing with it.
+    assert [c["id"] for c in by_model["random_forest"]["charts"]] == ["loss_history", "roc_curve"]
     assert by_model["random_forest"]["charts"][0]["y_log"] is True
+    assert by_model["random_forest"]["charts"][1]["caption"].startswith("AUC 0.8")
     assert by_model["logistic_regression"]["charts"] == []
     assert "本模型即本次最优" in by_model["random_forest"]["markdown"]
     assert "与最优的 random_forest" in by_model["logistic_regression"]["markdown"]
