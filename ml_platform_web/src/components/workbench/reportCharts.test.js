@@ -126,6 +126,21 @@ describe('renderReportChart · layout', () => {
     expect(option.grid.containLabel).toBe(false)
   })
 
+  it('grows the left margin with the longest category and never with the count', () => {
+    const bars = (categories) => renderReportChart({
+      ...shapBarsSpec, categories, rows: [], series: [{ name: 's', values: categories.map(() => 1) }],
+    })
+    const short = bars(['ab', 'cd']).grid.left
+    const longer = bars(['ab', 'a_much_longer_feature_name']).grid.left
+    const cjk = bars(['ab', '平均绝对贡献最高的负荷滞后特征项']).grid.left
+    const many = bars(Array.from({ length: 30 }, () => 'cd')).grid.left
+    expect(longer).toBeGreaterThan(short)
+    expect(cjk).toBeGreaterThan(longer)
+    expect(many).toBe(short)
+    // dots share the same category axis and the same margin rule.
+    expect(renderReportChart({ ...foldDotsSpec, categories: ['ab'], points: [] }).grid.left).toBe(short)
+  })
+
   it('estimates CJK glyphs as square and Latin as narrower', () => {
     expect(estimateTextWidth('交叉验证', 12)).toBe(48)
     expect(estimateTextWidth('xgboost', 12)).toBe(Math.ceil(7 * 12 * 0.58))
