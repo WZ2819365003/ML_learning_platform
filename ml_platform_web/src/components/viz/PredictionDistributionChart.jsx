@@ -11,7 +11,7 @@
  *
  * Accepts payload from GET /api/viz/:id/distribution.
  */
-import { Card, Empty, Space, Statistic, Tag, Typography } from 'antd'
+import { Card, Empty, Space, Statistic, Tag, Typography } from '../../ui'
 import EChart from '../EChart'
 
 const { Text } = Typography
@@ -44,7 +44,7 @@ export default function PredictionDistributionChart({ payload, height = 340 }) {
           name: 'residual',
           type: 'bar',
           data: counts,
-          itemStyle: { color: '#2563eb' },
+          itemStyle: { color: '#1a8dff' },
         },
       ],
     }
@@ -86,14 +86,14 @@ export default function PredictionDistributionChart({ payload, height = 340 }) {
           type: 'bar',
           stack: 'dist',
           data: posCounts,
-          itemStyle: { color: '#10b981' },
+          itemStyle: { color: '#00a870' },
         },
         {
           name: '负类样本',
           type: 'bar',
           stack: 'dist',
           data: negCounts,
-          itemStyle: { color: '#ef4444' },
+          itemStyle: { color: '#e34d59' },
         },
       ],
     }
@@ -102,7 +102,7 @@ export default function PredictionDistributionChart({ payload, height = 340 }) {
         <Card variant="outlined" size="small">
           <Space wrap size={[12, 8]}>
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>正类</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>正类</div>
               <Tag color="green">{String(payload.positive_label ?? '-')}</Tag>
             </div>
             <Text type="secondary" style={{ fontSize: 12 }}>
@@ -128,7 +128,7 @@ export default function PredictionDistributionChart({ payload, height = 340 }) {
         name: 'confidence',
         type: 'bar',
         data: counts,
-        itemStyle: { color: '#8b5cf6' },
+        itemStyle: { color: '#8e7cff' },
       },
     ],
   }

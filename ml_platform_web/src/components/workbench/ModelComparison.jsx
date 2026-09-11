@@ -2,11 +2,8 @@ import React, { useMemo, useState } from 'react'
 import {
   Card, Table, Tag, Button, Space, Tooltip, Typography, Empty, Alert, Spin,
   Modal, Input, message, Row, Col,
-} from 'antd'
-import {
-  TrophyOutlined, BulbOutlined, DownloadOutlined, CloudUploadOutlined,
-  ReloadOutlined, LineChartOutlined, SafetyCertificateOutlined,
-} from '@ant-design/icons'
+} from '../../ui'
+import { TrophyOutlined, CloudUploadOutlined, ReloadOutlined, LineChartOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import {
   buildComparisonVM,
   buildFinalizationVM,
@@ -106,7 +103,7 @@ function RowDetail({ row }) {
         ) : (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
             {params.map(([k, v]) => (
-              <Tag key={k} style={{ margin: 0, fontFamily: 'monospace', fontSize: 11 }}>
+              <Tag key={k} style={{ margin: 0, fontFamily: 'monospace' }}>
                 {k} = {typeof v === 'object' ? JSON.stringify(v) : String(v)}
               </Tag>
             ))}
@@ -120,7 +117,7 @@ function RowDetail({ row }) {
         ) : (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
             {metrics.map(([k, v]) => (
-              <Tag key={k} style={{ margin: 0, fontFamily: 'monospace', fontSize: 11 }}>
+              <Tag key={k} style={{ margin: 0, fontFamily: 'monospace' }}>
                 {k} = {v.toFixed(4)}
               </Tag>
             ))}
@@ -195,7 +192,7 @@ export default function ModelComparison({
         ? <Tag color="gold" icon={<TrophyOutlined />}>1</Tag>
         : <span>{r.rank ?? '-'}</span> },
     { title: '模型', key: 'model',
-      render: (_, r) => <Space size={4}><Tag>{r.model_type}</Tag>{r.family && <Tag style={{ fontSize: 10, margin: 0 }}>{r.family}</Tag>}</Space> },
+      render: (_, r) => <Space size={4}><Tag>{r.model_type}</Tag>{r.family && <Tag style={{ margin: 0 }}>{r.family}</Tag>}</Space> },
     { title: '策略', dataIndex: 'strategy_type', key: 'strategy_type', width: 110, render: s => <Tag color="blue">{s}</Tag> },
     { title: '状态', dataIndex: 'status', key: 'status', width: 90,
       render: s => { const u = String(s).toUpperCase(); return <Tag color={u === 'SUCCESS' ? 'success' : u === 'FAILED' ? 'error' : 'processing'}>{u}</Tag> } },
@@ -204,14 +201,14 @@ export default function ModelComparison({
       sorter: (a, b) => (a.metrics[k] ?? -Infinity) - (b.metrics[k] ?? -Infinity),
       render: (_, r) => {
         const v = r.metrics?.[k]
-        if (typeof v !== 'number') return <span style={{ color: '#cbd5e1' }}>-</span>
+        if (typeof v !== 'number') return <span style={{ color: 'var(--text-muted)' }}>-</span>
         // Winner of this column gets a tinted chip, so the eye can scan a
         // column instead of comparing four-decimal numbers by hand.
         const isColumnBest = metricBest[k] != null && v === metricBest[k]
         const isObjective = k === vm.objective_metric
         return (
           <code style={{
-            color: isColumnBest ? '#047857' : (isObjective ? '#2563eb' : '#334155'),
+            color: isColumnBest ? '#00a870' : (isObjective ? '#1a8dff' : 'var(--text-primary)'),
             fontWeight: isColumnBest || isObjective ? 600 : 400,
             background: isColumnBest ? 'rgba(16,185,129,0.10)' : undefined,
             padding: isColumnBest ? '1px 6px' : undefined,
@@ -225,25 +222,22 @@ export default function ModelComparison({
     { title: '差距', key: 'delta', width: 96,
       render: (_, r) => {
         const d = objectiveDelta(r, championValue, vm.objective_direction)
-        if (d == null) return <span style={{ color: '#cbd5e1' }}>-</span>
+        if (d == null) return <span style={{ color: 'var(--text-muted)' }}>-</span>
         if (Math.abs(d) < 1e-12) return <Tag color="gold" style={{ margin: 0 }}>冠军</Tag>
         return <Text type="secondary" style={{ fontFamily: 'monospace', fontSize: 12 }}>+{d.toFixed(4)}</Text>
       } },
     { title: '操作', key: 'actions', width: 220,
       render: (_, r) => (
-        <Space size={2}>
-          <Button size="small" type="link" onClick={() => openInspector(r.run_id, 'overview')}>详情</Button>
+        <Space size={16} className="table-actions">
+          <Button size="small" onClick={() => openInspector(r.run_id, 'overview')} type="link" className="table-action">详情</Button>
           <Tooltip title={r.can_explain ? '解释此模型' : '仅成功且有产物的 Run 可解释'}>
-            <Button size="small" type="link" icon={<BulbOutlined />} disabled={!r.can_explain}
-              onClick={() => openInspector(r.run_id, 'shap')}>解释</Button>
+            <Button size="small" disabled={!r.can_explain} onClick={() => openInspector(r.run_id, 'shap')} type="link" className="table-action">解释</Button>
           </Tooltip>
           {r.can_download && (
-            <Tooltip title="下载模型"><Button size="small" type="link" icon={<DownloadOutlined />}
-              href={runModelDownloadUrl(r.domain_task_id)} target="_blank" /></Tooltip>
+            <Tooltip title="下载模型"><Button size="small" href={runModelDownloadUrl(r.domain_task_id)} target="_blank" type="link" className="table-action">下载</Button></Tooltip>
           )}
           <Tooltip title={r.can_deploy ? '部署此模型' : '仅成功且有产物的 Run 可部署'}>
-            <Button size="small" type="link" icon={<CloudUploadOutlined />} disabled={!r.can_deploy}
-              onClick={() => { resetDeploy(); setDeployModal({ runId: r.run_id, name: `${task.name}-${r.model_type}` }) }}>部署</Button>
+            <Button size="small" disabled={!r.can_deploy} onClick={() => { resetDeploy(); setDeployModal({ runId: r.run_id, name: `${task.name}-${r.model_type}` }) }} type="link" className="table-action">部署</Button>
           </Tooltip>
         </Space>
       ) },
@@ -256,9 +250,9 @@ export default function ModelComparison({
       {bestRun && (
         <Card size="small" bodyStyle={{ padding: '10px 16px' }}>
           <Space wrap size={12}>
-            <TrophyOutlined style={{ color: '#f59e0b' }} />
+            <TrophyOutlined style={{ color: '#ed7b2f' }} />
             <Text strong>最优模型：{bestRun.model_type}</Text>
-            <Text type="secondary">选择分 {vm.objective_metric} = <code style={{ color: '#10b981' }}>{bestRun.objective_value?.toFixed(4)}</code></Text>
+            <Text type="secondary">选择分 {vm.objective_metric} = <code style={{ color: '#00a870' }}>{bestRun.objective_value?.toFixed(4)}</code></Text>
             {finalization.state === 'FINALIZED' ? (
               <>
                 <Tag color="success" icon={<SafetyCertificateOutlined />}>已确认最终模型</Tag>
@@ -299,7 +293,7 @@ export default function ModelComparison({
             rowExpandable: (r) =>
               Object.keys(r.params || {}).length > 0 || Object.keys(r.all_metrics || {}).length > 0,
           }}
-          pagination={vm.rows.length > 10 ? { pageSize: 10 } : false} />
+          pagination={vm.rows.length > 10 ? {showTotal: total => `共 ${total} 条`, showSizeChanger: false,  pageSize: 10 } : false} />
       </Card>
 
       {/* The metric bar chart is gone: it plotted one bar per model from the

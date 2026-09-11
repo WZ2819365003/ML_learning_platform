@@ -34,12 +34,12 @@ export default function ForecastChart({ result }) {
 
     chart.setOption(
       {
-        color: ['#0f4c81', '#d97706', '#d97706', '#d97706'],
+        color: ['#1a8dff', '#18c3e3', '#ed7b2f', '#ed7b2f'],
         tooltip: {
           trigger: 'axis',
           backgroundColor: 'rgba(15, 23, 42, 0.92)',
           borderWidth: 0,
-          textStyle: { color: '#f8fafc' },
+          textStyle: { color: 'var(--text-primary)' },
         },
         legend: {
           bottom: 0,
@@ -99,7 +99,7 @@ export default function ForecastChart({ result }) {
             data: [...series.historical.map(() => null), ...series.q10],
             stack: 'confidence-band',
             areaStyle: {
-              color: '#ffffff',
+              color: 'var(--surface-0)',
             },
           },
         ],

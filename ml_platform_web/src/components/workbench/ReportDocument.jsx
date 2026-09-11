@@ -12,7 +12,7 @@
  * dataset named `<img onerror=…>` stays text.
  */
 import React, { useMemo } from 'react'
-import { Collapse, Table, Typography } from 'antd'
+import { Collapse, Table, Typography } from '../../ui'
 import { CustomChart } from 'echarts/charts'
 import { MarkAreaComponent } from 'echarts/components'
 

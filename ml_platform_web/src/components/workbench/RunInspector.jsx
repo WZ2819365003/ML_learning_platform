@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import {
   Drawer, Descriptions, Tag, Space, Table, Tabs, Empty, Spin,
   Typography, Divider, Alert, Tooltip,
-} from 'antd'
+} from '../../ui'
 import {
   CheckCircleFilled, CloseCircleFilled, ClockCircleFilled,
   DatabaseOutlined, ExperimentOutlined, LineChartOutlined,
@@ -34,14 +34,14 @@ function MetricsGrid({ metrics }) {
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
       {entries.map(([k, v]) => (
         <div key={k} style={{
-          padding: '8px 12px', borderRadius: 6,
+          padding: '8px 12px', borderRadius: 4,
           background: 'rgba(37, 99, 235, 0.04)', border: '1px solid rgba(37, 99, 235, 0.1)',
           minWidth: 0,
         }}>
           <Tooltip title={k}>
             <div style={{
               fontSize: 11,
-              color: '#64748b',
+              color: 'var(--text-secondary)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
@@ -49,7 +49,7 @@ function MetricsGrid({ metrics }) {
               {k}
             </div>
           </Tooltip>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', fontFamily: 'monospace' }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
             {typeof v === 'number' ? v.toFixed(4) : String(v)}
           </div>
         </div>
@@ -70,7 +70,7 @@ function ParamsTable({ params }) {
         { title: '参数', dataIndex: 'key', width: '40%',
           render: (v) => <code style={{ fontSize: 12 }}>{v}</code> },
         { title: '取值', dataIndex: 'value',
-          render: (v) => <code style={{ fontSize: 12, color: '#2563eb' }}>
+          render: (v) => <code style={{ fontSize: 12, color: '#1a8dff' }}>
             {typeof v === 'object' ? JSON.stringify(v) : String(v)}
           </code> },
       ]}
@@ -176,7 +176,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
     <Drawer
       title={
         <Space>
-          <LineChartOutlined style={{ color: '#2563eb' }} />
+          <LineChartOutlined style={{ color: '#1a8dff' }} />
           <span>Run 诊断</span>
           {run && <Text type="secondary" style={{ fontSize: 12 }}>#{run.id?.slice(0, 8)}</Text>}
           {run && STATUS_TAG[run.status]}
@@ -235,16 +235,16 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                           description={
                             <div style={{ fontSize: 13 }}>
                               本次 Run 在实验
-                              <code style={{ margin: '0 4px', color: '#2563eb' }}>{exp?.name || '未命名'}</code>
+                              <code style={{ margin: '0 4px', color: '#1a8dff' }}>{exp?.name || '未命名'}</code>
                               下以
                               <Tag color="blue" style={{ margin: '0 4px' }}>{strategy}</Tag>
                               策略
-                              <Text strong style={{ color: run.status === 'SUCCESS' ? '#16a34a' : run.status === 'FAILED' ? '#dc2626' : '#2563eb' }}>
+                              <Text strong style={{ color: run.status === 'SUCCESS' ? '#00a870' : run.status === 'FAILED' ? '#e34d59' : '#1a8dff' }}>
                                 {statusCN}
                               </Text>
                               {objVal != null && (
                                 <span>
-                                  ，<code>{objective}</code> = <code style={{ color: '#2563eb' }}>
+                                  ，<code>{objective}</code> = <code style={{ color: '#1a8dff' }}>
                                     {typeof objVal === 'number' ? objVal.toFixed(4) : String(objVal)}
                                   </code>
                                   （{exp?.objective_direction === 'min' ? '越低越好' : '越高越好'}）
@@ -261,16 +261,16 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                     })()}
 
                     <Descriptions size="small" column={2} bordered
-                      labelStyle={{ background: '#f8fafc', width: 110 }}>
+                      labelStyle={{ background: 'var(--surface-1)', width: 110 }}>
                       <Descriptions.Item label="Trial 号">{run?.trial_no ?? '-'}</Descriptions.Item>
                       <Descriptions.Item label={
                         <Tooltip title="本 Run 在所属建模任务排行榜上的名次 —— 按任务的目标指标，跨该任务下的所有实验排序。未成功或没有目标指标值的 Run 不参与排名。">
-                          <span>排名 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+                          <span>排名 <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 11 }} /></span>
                         </Tooltip>
                       }>{taskRank}</Descriptions.Item>
                       <Descriptions.Item label={
                         <Tooltip title="本 Run 在它自己那一个实验内部的名次，范围比上面的「排名」窄。两者不同是正常的。">
-                          <span>实验内排名 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+                          <span>实验内排名 <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 11 }} /></span>
                         </Tooltip>
                       }>{experimentRank}</Descriptions.Item>
                       <Descriptions.Item label="建模任务">{modelingTaskName}</Descriptions.Item>
@@ -280,12 +280,12 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                       </Descriptions.Item>
                       <Descriptions.Item label={
                         <Tooltip title="本次实验用于挑选最优 Run 的指标；Run 的 metrics 里对应的值就是它的 'score'。">
-                          <span>优化指标 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+                          <span>优化指标 <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 11 }} /></span>
                         </Tooltip>
                       }>{exp?.objective_metric}</Descriptions.Item>
                       <Descriptions.Item label={
                         <Tooltip title="max = 越大越好（accuracy/f1/r2 等）；min = 越小越好（rmse/mae 等）。">
-                          <span>方向 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+                          <span>方向 <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 11 }} /></span>
                         </Tooltip>
                       }>{exp?.objective_direction}</Descriptions.Item>
                       <Descriptions.Item label="开始时间">
@@ -307,8 +307,8 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                       <div>
                         <Text strong style={{ fontSize: 13 }}>搜索元数据</Text>
                         <pre style={{
-                          marginTop: 4, fontSize: 11, padding: 8, borderRadius: 6,
-                          background: '#f8fafc', border: '1px solid #e2e8f0',
+                          marginTop: 4, fontSize: 11, padding: 8, borderRadius: 4,
+                          background: 'var(--surface-1)', border: '1px solid var(--border)',
                           maxHeight: 140, overflow: 'auto',
                         }}>
                           {JSON.stringify(run.search_meta, null, 2)}
@@ -427,7 +427,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                           to 无数据集记录 in exactly the case the fallback is for. */}
                       {(ds || datasetFile !== DASH) ? (
                         <Descriptions size="small" column={2} style={{ marginTop: 6 }} bordered
-                          labelStyle={{ background: '#f8fafc', width: 100 }}>
+                          labelStyle={{ background: 'var(--surface-1)', width: 100 }}>
                           <Descriptions.Item label="名称">{ds?.name || datasetFile}</Descriptions.Item>
                           <Descriptions.Item label="行数">{ds?.row_count ?? '-'}</Descriptions.Item>
                           <Descriptions.Item label="列数">{ds?.column_count ?? '-'}</Descriptions.Item>
@@ -442,7 +442,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                       <Text strong><ExperimentOutlined /> 训练任务</Text>
                       {ttask ? (
                         <Descriptions size="small" column={2} style={{ marginTop: 6 }} bordered
-                          labelStyle={{ background: '#f8fafc', width: 100 }}>
+                          labelStyle={{ background: 'var(--surface-1)', width: 100 }}>
                           <Descriptions.Item label="模型">{ttask.model_type}</Descriptions.Item>
                           <Descriptions.Item label="状态">{STATUS_TAG[ttask.status] || ttask.status}</Descriptions.Item>
                           <Descriptions.Item label="进度">{progressLabel}</Descriptions.Item>
@@ -481,7 +481,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                   <Table
                     size="small"
                     rowKey="id"
-                    pagination={{ pageSize: 10, size: 'small' }}
+                    pagination={{showTotal: total => `共 ${total} 条`, showSizeChanger: false,  pageSize: 10, size: 'small' }}
                     dataSource={siblings}
                     columns={[
                       { title: '#', dataIndex: 'trial_no', width: 50 },
@@ -494,7 +494,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                           const m = exp?.objective_metric
                           const v = m && r.metrics?.[m]
                           return <Tooltip title={JSON.stringify(r.metrics)}>
-                            <code style={{ color: '#2563eb' }}>{typeof v === 'number' ? v.toFixed(4) : '-'}</code>
+                            <code style={{ color: '#1a8dff' }}>{typeof v === 'number' ? v.toFixed(4) : '-'}</code>
                           </Tooltip>
                         } },
                     ]}

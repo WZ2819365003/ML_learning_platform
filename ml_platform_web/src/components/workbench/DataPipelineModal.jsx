@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Modal, Input, Alert, Typography, message } from 'antd'
+import { Modal, Input, Alert, Typography, message } from '../../ui'
 import { CodeOutlined } from '@ant-design/icons'
 import { dataApi } from '../../services/api'
 
@@ -46,7 +46,7 @@ export default function DataPipelineModal({ open, datasetId, onClose, onCreated 
 
   return (
     <Modal
-      title={<span><CodeOutlined style={{ marginRight: 8, color: '#2563eb' }} />数据 Pipeline（Python）</span>}
+      title={<span><CodeOutlined style={{ marginRight: 8, color: '#1a8dff' }} />数据 Pipeline（Python）</span>}
       open={open} onCancel={onClose} onOk={run} confirmLoading={running}
       okText="运行并生成数据集" cancelText="取消" width={720} destroyOnClose
     >

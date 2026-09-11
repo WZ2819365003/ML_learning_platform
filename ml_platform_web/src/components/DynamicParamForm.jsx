@@ -1,3 +1,4 @@
+import React from 'react';
 /**
  * DynamicParamForm — renders a list of ParamSpec objects as Ant Design Form fields.
  *
@@ -8,8 +9,8 @@
  *
  * Usage: place inside an Ant Design <Form> — reads/writes via Form context.
  */
-import React from 'react';
-import { Form, InputNumber, Select, Switch, Input, Tooltip } from 'antd';
+
+import { Form, InputNumber, Select, Switch, Input, Tooltip } from '../ui';
 import { QuestionCircleOutlined } from '@ant-design/icons';
 
 const { Option } = Select;
@@ -20,7 +21,7 @@ function ParamLabel({ displayName, description }) {
       {displayName}
       {description && (
         <Tooltip title={description}>
-          <QuestionCircleOutlined style={{ marginLeft: 4, color: '#999', fontSize: 12 }} />
+          <QuestionCircleOutlined style={{ marginLeft: 4, color: 'var(--text-muted)', fontSize: 12 }} />
         </Tooltip>
       )}
     </span>

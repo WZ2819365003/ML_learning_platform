@@ -11,7 +11,8 @@ React 18 + Vite + Ant Design 5 + ECharts。界面语言简体中文。
 后端已经部署在服务器上，你**不需要在本地跑后端**，只要把 Vite 的代理指过去。
 
 ```bash
-npm install
+nvm use                              # Node 20.20.2（见 .nvmrc）
+npm ci --include=optional
 cp .env.local.example .env.local     # 里面已填好服务器地址
 npm run dev                          # http://localhost:3000
 ```
@@ -22,7 +23,7 @@ npm run dev                          # http://localhost:3000
 VITE_API_TARGET=http://203.176.93.249:18081
 ```
 
-`vite.config.js` 读这个变量，把 `/api`、`/inference`、`/ws` 三类请求都转发到它。**代理是在 Node 侧转发的，不走浏览器跨域**，所以不用管 CORS。
+`vite.config.js` 读这个变量，把 `/api`、`/inference`、`/ws` 和 `/health` 请求都转发到它。**代理是在 Node 侧转发的，不走浏览器跨域**，所以不用管 CORS。
 
 改完这个变量要重启 `npm run dev` 才生效。
 
@@ -55,6 +56,7 @@ npm run build        # 生产构建，输出 dist/
 npm run preview      # 预览构建产物
 npm run test:unit    # 单元测试（vitest）
 npm run lint         # ESLint，--max-warnings 0
+npm run dev:integrity # 隔离浏览器验证：前端 3300 + 内存模拟 API 3901
 ```
 
 改完样式**至少跑一遍** `npm run test:unit` 和 `npm run build`。测试是 node 环境的纯函数测试（见第五节），跑得很快。
@@ -65,21 +67,25 @@ npm run lint         # ESLint，--max-warnings 0
 
 ```
 src/
-  App.jsx                    路由表（见下）
+  App.jsx                    主题 Provider、登录路由与应用框架
+  navigation/                页面路由、菜单、页签身份、缓存与状态上下文
+  theme/                     dark tokens、Ant Design 配置与图表外观适配
+  ui/                        Ant Design 兼容包装（表单与弹层归属）
   main.jsx                   入口
   pages/                     19 个页面组件，一个路由一个
   components/
-    layout/                  Header / Sidebar / ErrorBoundary
+    layout/                  Header / Sidebar
     workbench/               40 个文件 —— V3 建模工作台，本项目的主体
     viz/                     16 个文件 —— 可视化组件与注册表
     results/                 统一结果页的面板与注册表
   services/api.js            唯一的 axios 客户端，所有接口都在这里
   utils/                     格式化、路由推导、比较逻辑等纯函数
-  styles/global.css          850 行，全部全局样式（见第四节）
+  styles/global.css          基础样式、组件几何、报告样式
+  styles/workspace.css       应用框架、菜单页签、响应式与纸张配色
   hooks/                     自定义 hook
 ```
 
-### 路由表（`App.jsx`）
+### 路由表（`src/navigation/PageRoutes.jsx`）
 
 当前主线是 `/v3/*`，其余多为历史路由的重定向。
 
@@ -94,67 +100,30 @@ src/
 | `/data` | `DataManagement` | 数据集上传与预览 |
 | `/models` `/deploy` | `ModelManagement` / `ModelDeploy` | 模型管理与部署（含多模型加权融合） |
 | `/ts/*` | 时序任务 | 独立一套 |
-| `/training/*` `/dl/*` | 旧流水线 | **已废弃**，勿在此投入 |
+| `/training/*` `/dl/*` | ML/DL 配置、监控与结果 | 保留兼容，支持任务 ID 隔离页签 |
 
 ---
 
-## 四、样式改在哪里
+## 四、样式与页签
 
-### 1. `src/styles/global.css`（850 行）
+界面只使用 dark 风格，参考 `power-trade` 的真实组件和基座 tokens。
 
-按注释分区，从上到下：
+- `src/theme/tokens.js` / `antd.js`：颜色和 Ant Design 组件主题。
+- `src/styles/global.css` / `workspace.css`：表格、弹窗尺寸、报告排版及 64px 顶栏、28px 页签栏等框架布局。
+- `src/ui/index.jsx`：业务组件使用的 Ant Design 导出，保留 Form API，补充草稿保护和弹层归属。
+- `src/navigation/routes.js`：统一菜单、标题、地址规范化、任务/family 缓存身份。
+- `src/navigation/Workspace.jsx`：每个缓存页使用独立 location，保留滚动和组件状态；关闭时卸载。
+- `src/hooks/useActiveEffect.js`：轮询、WebSocket 等在页签隐藏时清理，激活后恢复。
 
-| 区块 | 行数附近 | 内容 |
-|---|---|---|
-| Design tokens | 5 | CSS 变量：色板、圆角、阴影、间距 |
-| Base | 54 | 全局重置、滚动条 |
-| Animations | 78 | 过渡与关键帧 |
-| **AI report** | 88–304 | 报告阅读器：正文排版、封面、图表区、附录折叠 |
-| **Ant Design overrides** | 305–476 | 卡片 / 按钮 / 标签 / 表格 / 表单 / 弹窗 / 布局 |
-| Premium utility classes | 477+ | 项目自用工具类 |
+图表仍由原业务渲染器生成数据和 option。`src/utils/echarts.js` 统一初始化 dark 主题、尺寸观察和外观适配；`src/theme/chartOptions.js` 保留数据、格式化回调与业务语义。`reportCharts.js` 保留原来的 7 种语义图规格和旧归档透传；打印副本使用原纸张配色，且只在当前活动页签存在。
 
-**改全局观感优先动 Design tokens**，比逐个组件覆盖干净。
+## 五、验证
 
-### 2. Tailwind
+当前共有 **29 个测试文件、250 个用例**，使用 Vitest node 环境，涵盖纯函数和 `react-dom/server` 渲染。改动后运行单元测试、ESLint 和构建；涉及缓存、表单、弹层或图表尺寸时也要做浏览器验证。
 
-`tailwind.config.js` 存在，`global.css` 顶部有 `@tailwind base/components/utilities`。工具类可以直接用，但现有代码**主要靠 Ant Design + 手写 CSS**，Tailwind 用得很少。新增时保持一致，别在同一个组件里混两套。
+[本次改造与完整性验证报告](docs/DARK_UI_VALIDATION.md) 记录具体页面、状态、请求和验证边界。
 
-### 3. 图表样式：`components/workbench/reportCharts.js`
-
-报告里所有图表的样式**只在这一个文件里定义**——`REPORT_CHART_THEME` 里的配色、字号、边距、悬停格式、高度。
-
-```js
-export const REPORT_CHART_THEME = Object.freeze({
-  colors: { primary, primaryLight, muted, accent, accentLight, ink, text, subtle, grid, axis, shade, onFill },
-  palette: [...],
-  fontSize, fontFamily, labelMargin, ...
-})
-```
-
-这是刻意设计的：后端只发**语义图规格**（`{kind, title, caption, tooltip_fields, rows, ...}`，7 种 `kind`：`hbar` / `dots` / `hist` / `stacked` / `lines` / `scatter_pair` / `matrix`），前端 `renderReportChart(spec)` 把它映射成 ECharts option。
-
-> **改图表样式请改这里，不要在组件里补 `grid.left` 或 `itemStyle`。**
-> 之前就是一张图一张图地补，导致轴标签被裁、图例翻页、柱子高度为 0 之类的问题反复出现。现在改一处、全部图受益。
->
-> 后端**不允许**出现任何 ECharts 字段，有测试卡着。
-
----
-
-## 五、测试
-
-`vitest.config.js` 用的是 `environment: 'node'`，**没有 jsdom、没有 testing-library**。所以现有测试全是**纯函数测试**：给一个规格，断言产出的 option / 视图模型 / 格式化结果。
-
-26 个测试文件、228 个用例。渲染层的验证用 `react-dom/server` 的 `renderToStaticMarkup`（见 `ReportPrintDocument.test.js`），只验"能不能渲染出正确的标记"，不做交互测试。
-
-改样式一般不会碰这些测试；改结构（比如动 `renderReportChart` 或视图模型）就会，跑一下就知道。
-
-### E2E
-
-包里带了 `tests-e2e/` 下的 4 个 Playwright 用例（任务中心层级、方案创建与套用、Run 抽屉、清理回归）和 `playwright.config.js`。
-
-它们默认打 `http://localhost:3000`，需要你的 dev server 已经在跑（配置文件里写明了不自动拉起）。因为代理指向服务器后端，这些用例会**读写服务器上的真实数据**——跑之前先跟后端同事确认一声。
-
-改样式一般用不上它们，跑单元测试就够。
+`npm run dev:integrity` 启动隔离的本机模拟环境，创建/上传等操作不转发到真实后端。原有 `tests-e2e/` 下 4 个 Playwright 文件默认访问 3000 并写入其配置的后端；本次使用隔离模拟 API 和 CUA 浏览器交互验证，没有直接运行这组真实数据测试。
 
 ---
 
@@ -170,7 +139,7 @@ export const REPORT_CHART_THEME = Object.freeze({
 
 4. **`services/api.js` 是唯一的接口层**，新增请求写在这里，别在组件里直接 `axios`。注意 `/inference` 路由**不带 `/api` 前缀**，是后端设计如此，代理里单独配了规则。
 
-5. **`components/workbench/` 有 40 个文件**，是主体。`TrainingViz.jsx` / `ShapView.jsx` / `StrategyCompareTab.jsx` 里还有历史遗留的内联 ECharts 样式，没纳入统一主题——如果你要顺手统一，那是独立一件事，改动面不小。
+5. **图表统一从 `utils/echarts.js` 初始化**。不要绕过此入口，否则 dark 适配和页签恢复后的尺寸观察不会生效。
 
 6. **不要提交 `.env.local`**（已在 `.gitignore`）。
 

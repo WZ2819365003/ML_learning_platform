@@ -5,7 +5,7 @@
  * content is escaped by construction. Do not replace this with raw HTML.
  */
 import React from 'react'
-import { Alert, Empty, Table, Typography } from 'antd'
+import { Alert, Empty, Table, Typography } from '../../ui'
 
 import { parseMarkdown, parseInline } from '../../utils/markdown'
 

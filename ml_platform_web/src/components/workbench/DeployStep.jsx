@@ -3,7 +3,7 @@ import {
   Card, Select, Input, Button, Space, Tag, Typography, Alert, Descriptions,
   message, Empty, Divider, Tooltip, Tabs, Table, InputNumber, Progress, Row, Col,
   Collapse,
-} from 'antd'
+} from '../../ui'
 import {
   CloudUploadOutlined, DownloadOutlined, ThunderboltOutlined, TrophyOutlined,
   CopyOutlined, ApiOutlined, BlockOutlined, ReloadOutlined,
@@ -77,7 +77,7 @@ function JsonBlock({ title, value, extra, height = 170 }) {
           onClick={() => copyText(text, title)}>复制</Button>
       </div>
       <pre style={{
-        margin: 0, padding: 10, borderRadius: 6, background: '#0f172a', color: '#e2e8f0',
+        margin: 0, padding: 10, borderRadius: 4, background: 'var(--code-bg)', color: 'var(--code-text)',
         fontSize: 11.5, lineHeight: 1.55, height, overflow: 'auto',
         fontFamily: 'ui-monospace, Menlo, Monaco, monospace',
       }}>{text}</pre>
@@ -89,13 +89,13 @@ function JsonBlock({ title, value, extra, height = 170 }) {
 function RunLabel({ run, bestRunId, objectiveMetric }) {
   return (
     <Space size={6}>
-      {run.run_id === bestRunId && <TrophyOutlined style={{ color: '#f59e0b' }} />}
+      {run.run_id === bestRunId && <TrophyOutlined style={{ color: '#ed7b2f' }} />}
       <span>{run.params?.model_type || run.family || 'model'}</span>
-      <Tag color="blue" style={{ fontSize: 10, margin: 0 }}>{run.strategy_type}</Tag>
+      <Tag color="blue" style={{ margin: 0 }}>{run.strategy_type}</Tag>
       <Text type="secondary" style={{ fontSize: 11 }}>
         {objectiveMetric}={typeof run.objective_value === 'number' ? run.objective_value.toFixed(4) : '-'}
       </Text>
-      <Tag style={{ fontSize: 10, margin: 0 }}>{run.family || 'ml'}</Tag>
+      <Tag style={{ margin: 0 }}>{run.family || 'ml'}</Tag>
     </Space>
   )
 }
@@ -237,7 +237,7 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
               ) : (
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   <Descriptions column={{ xs: 1, lg: 3 }} size="small" bordered
-                    labelStyle={{ background: '#f8fafc' }}>
+                    labelStyle={{ background: 'var(--surface-1)' }}>
                     <Descriptions.Item label="请求方法"><code>POST</code></Descriptions.Item>
                     <Descriptions.Item label="端点" span={2}>
                       <code style={{ fontSize: 12 }}>{predictUrl(deployment?.deployment_id)}</code>
@@ -264,7 +264,7 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
                   <div>
                     <Text strong style={{ fontSize: 12 }}>部署说明</Text>
                     <ul style={{
-                      margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: '#475569',
+                      margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: 'var(--text-secondary)',
                       lineHeight: 1.85,
                     }}>
                       {schema.notes.map((n, i) => <li key={i}>{n}</li>)}
@@ -291,9 +291,9 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
       </Card>
 
       {deployment && (
-        <Card size="small" title={<span><ThunderboltOutlined style={{ color: '#10b981' }} /> 已上线 · 试调用</span>}
+        <Card size="small" title={<span><ThunderboltOutlined style={{ color: '#00a870' }} /> 已上线 · 试调用</span>}
           styles={{ body: { padding: 16 } }}>
-          <Descriptions column={1} size="small" bordered labelStyle={{ width: 110, background: '#f8fafc' }}>
+          <Descriptions column={1} size="small" bordered labelStyle={{ width: 110, background: 'var(--surface-1)' }}>
             <Descriptions.Item label="部署 ID"><code>{deployment.deployment_id}</code></Descriptions.Item>
             <Descriptions.Item label="状态"><Tag color="green">{deployment.status || 'active'}</Tag></Descriptions.Item>
           </Descriptions>
@@ -544,8 +544,8 @@ function MultiDeployTab({ task, successRuns, bestRunId, schema }) {
 
       {ensemble && (
         <Card size="small" styles={{ body: { padding: 16 } }}
-          title={<span><ThunderboltOutlined style={{ color: '#10b981' }} /> 已上线 · 融合推理</span>}>
-          <Descriptions column={1} size="small" bordered labelStyle={{ width: 110, background: '#f8fafc' }}>
+          title={<span><ThunderboltOutlined style={{ color: '#00a870' }} /> 已上线 · 融合推理</span>}>
+          <Descriptions column={1} size="small" bordered labelStyle={{ width: 110, background: 'var(--surface-1)' }}>
             <Descriptions.Item label="部署 ID"><code>{ensemble.id}</code></Descriptions.Item>
             <Descriptions.Item label="端点">
               <code style={{ fontSize: 12 }}>

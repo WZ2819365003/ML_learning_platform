@@ -1,7 +1,8 @@
+import { useActiveEffect } from '../../hooks/useActiveEffect'
 /**
  * ShapView — professional SHAP visualisation for a single Run.
  *
- * Three views toggled by a segmented control:
+ * Three views toggled by a radio button group:
  *   1. 重要度条形 (bar)   — mean(|SHAP|) per feature, sorted descending.
  *   2. Beeswarm              — each dot is one sample; color = feature value, x = SHAP.
  *   3. 依赖散点 (dependence)  — feature value vs SHAP value for a selected feature.
@@ -16,8 +17,8 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Empty, message, Segmented, Select, Skeleton, Space, Tag, Typography,
-} from 'antd'
+  Alert, Button, Empty, message, Radio, Select, Skeleton, Space, Tag, Typography,
+} from '../../ui'
 import { ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons'
 import { platformRunsApi, platformExperimentsApi } from '../../services/api'
 import EChart from '../EChart'
@@ -107,8 +108,8 @@ function buildBarOption(importances) {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
       valueFormatter: (v) => (typeof v === 'number' ? v.toFixed(6) : v) },
     xAxis: { type: 'value', name: 'mean(|SHAP|)', nameGap: 22,
-      nameTextStyle: { color: '#64748b' }, axisLabel: { color: '#475569' } },
-    yAxis: { type: 'category', data: features, axisLabel: { color: '#0f172a', fontSize: 12 } },
+      nameTextStyle: { color: 'var(--text-secondary)' }, axisLabel: { color: 'var(--text-secondary)' } },
+    yAxis: { type: 'category', data: features, axisLabel: { color: 'var(--text-primary)', fontSize: 12 } },
     series: [{
       type: 'bar',
       data: values,
@@ -122,7 +123,7 @@ function buildBarOption(importances) {
         },
       },
       barWidth: 14,
-      label: { show: true, position: 'right', color: '#2563eb',
+      label: { show: true, position: 'right', color: '#1a8dff',
         formatter: (p) => p.value.toFixed(4), fontSize: 11 },
     }],
   }
@@ -171,7 +172,7 @@ function buildBeeswarmOption(samples, featureNames, importances) {
           return `rgba(${r},${g},${b},0.65)`
         },
       },
-      emphasis: { itemStyle: { borderColor: '#0f172a', borderWidth: 1 } },
+      emphasis: { itemStyle: { borderColor: 'var(--text-primary)', borderWidth: 1 } },
     }
   }).filter(Boolean)
 
@@ -187,14 +188,14 @@ function buildBeeswarmOption(samples, featureNames, importances) {
     },
     xAxis: {
       type: 'value', name: 'SHAP value', nameGap: 28,
-      axisLine: { show: true, lineStyle: { color: '#94a3b8' } },
-      splitLine: { lineStyle: { color: '#e2e8f0' } },
-      axisLabel: { color: '#475569' },
+      axisLine: { show: true, lineStyle: { color: 'var(--text-muted)' } },
+      splitLine: { lineStyle: { color: 'var(--code-text)' } },
+      axisLabel: { color: 'var(--text-secondary)' },
     },
     yAxis: {
       type: 'category',
       data: ranked.map(([f]) => f),
-      axisLabel: { color: '#0f172a', fontSize: 12 },
+      axisLabel: { color: 'var(--text-primary)', fontSize: 12 },
     },
     // Colour legend (feature-value low → high)
     visualMap: {
@@ -203,12 +204,12 @@ function buildBeeswarmOption(samples, featureNames, importances) {
       min: 0,
       max: 1,
       text: ['high', 'low'],
-      textStyle: { color: '#64748b' },
+      textStyle: { color: 'var(--text-secondary)' },
       itemWidth: 10,
       itemHeight: 160,
       right: 10,
       top: 40,
-      inRange: { color: ['#3b82f6', '#e0e7ff', '#ef4444'] },
+      inRange: { color: ['#1a8dff', '#e0e7ff', '#e34d59'] },
       calculable: false,
       // We drive colour ourselves via itemStyle; visualMap here is legend-only.
       dimension: 2,
@@ -245,13 +246,13 @@ function buildDependenceOption(samples, featureNames, importances, selected) {
     },
     xAxis: {
       type: 'value', name: selected, nameGap: 28,
-      axisLabel: { color: '#475569' },
-      splitLine: { lineStyle: { color: '#e2e8f0' } },
+      axisLabel: { color: 'var(--text-secondary)' },
+      splitLine: { lineStyle: { color: 'var(--code-text)' } },
     },
     yAxis: {
       type: 'value', name: 'SHAP value',
-      axisLabel: { color: '#475569' },
-      splitLine: { lineStyle: { color: '#e2e8f0' } },
+      axisLabel: { color: 'var(--text-secondary)' },
+      splitLine: { lineStyle: { color: 'var(--code-text)' } },
     },
     series: [{
       type: 'scatter',
@@ -280,6 +281,8 @@ export default function ShapView({ runId, experimentId, runStatus }) {
   const [depFeature, setDepFeature] = useState(null)
   const [triggering, setTriggering] = useState(false)
   const pollRef = useRef(null)
+  const [polling, setPolling] = useState(false)
+  const pollTicks = useRef(0)
 
   const fetchPayload = React.useCallback(() => {
     if (!runId) return Promise.resolve(null)
@@ -291,12 +294,27 @@ export default function ShapView({ runId, experimentId, runStatus }) {
       .finally(() => setLoading(false))
   }, [runId])
 
-  useEffect(() => {
+  useActiveEffect(() => {
     void fetchPayload()
     return () => {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
     }
   }, [fetchPayload])
+
+  useActiveEffect(() => {
+    if (!polling) return
+    let cancelled = false
+    pollRef.current = setInterval(async () => {
+      const result = await fetchPayload()
+      if (cancelled) return
+      pollTicks.current += 1
+      if ((result && result.status !== 'pending') || pollTicks.current >= 40) {
+        setPolling(false)
+        if (pollTicks.current >= 40) message.warning('SHAP 计算仍在进行中，请稍后手动刷新')
+      }
+    }, 3000)
+    return () => { cancelled = true; clearInterval(pollRef.current) }
+  }, [fetchPayload, polling])
 
   const handleTrigger = async () => {
     if (!experimentId || !runId) {
@@ -316,18 +334,8 @@ export default function ShapView({ runId, experimentId, runStatus }) {
         return
       }
       message.success('已提交 SHAP 任务 — 结果就绪后自动刷新')
-      // Poll every 3s up to ~2 min
-      let ticks = 0
-      pollRef.current = setInterval(async () => {
-        ticks += 1
-        const p = await fetchPayload()
-        if (p && p.status !== 'pending') {
-          clearInterval(pollRef.current); pollRef.current = null
-        } else if (ticks >= 40) {
-          clearInterval(pollRef.current); pollRef.current = null
-          message.warning('SHAP 计算仍在进行中，请稍后手动刷新')
-        }
-      }, 3000)
+      pollTicks.current = 0
+      setPolling(true)
     } catch (err) {
       message.error(err?.response?.data?.detail || '触发 SHAP 失败')
     } finally {
@@ -431,7 +439,7 @@ export default function ShapView({ runId, experimentId, runStatus }) {
               </Button>
             </Space>
             {!canTrigger && runStatus && runStatus !== 'SUCCESS' && (
-              <div style={{ marginTop: 8, fontSize: 11, color: '#f59e0b' }}>
+              <div style={{ marginTop: 8, fontSize: 11, color: '#ed7b2f' }}>
                 仅成功完成的 Run 支持计算 SHAP（当前状态 {runStatus}）
               </div>
             )}
@@ -475,20 +483,20 @@ export default function ShapView({ runId, experimentId, runStatus }) {
           message="模型解释速览"
           description={
             <div>
-              <div style={{ marginBottom: 6, fontSize: 13, color: '#0f172a' }}>
+              <div style={{ marginBottom: 6, fontSize: 13, color: 'var(--text-primary)' }}>
                 对该模型预测结果影响最大的 Top-{narrative.length} 特征：
               </div>
               <ol style={{ margin: '0 0 6px 18px', padding: 0, fontSize: 13, lineHeight: 1.9 }}>
                 {narrative.map(({ feature, absImp, direction }) => (
                   <li key={feature}>
-                    <code style={{ color: '#2563eb' }}>{feature}</code>
+                    <code style={{ color: '#1a8dff' }}>{feature}</code>
                     <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
                       mean(|SHAP|)={absImp.toFixed(4)}
                     </Text>
                     {direction && (
                       <Tag
                         color={direction === '推高' ? 'red' : 'blue'}
-                        style={{ marginLeft: 6, fontSize: 11 }}
+                        style={{ marginLeft: 6 }}
                       >
                         平均{direction}预测值
                       </Tag>
@@ -506,10 +514,13 @@ export default function ShapView({ runId, experimentId, runStatus }) {
         />
       )}
 
-      <Segmented
+      <Radio.Group
+        optionType="button"
+        buttonStyle="solid"
+        aria-label="特征解释视图"
         size="small"
         value={view}
-        onChange={setView}
+        onChange={e => setView(e.target.value)}
         options={[
           { label: '重要度', value: 'bar' },
           { label: 'Beeswarm', value: 'swarm', disabled: !hasSamples },

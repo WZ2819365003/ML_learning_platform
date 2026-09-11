@@ -8,7 +8,7 @@
  * A well-calibrated model's curve hugs the diagonal — deviations above
  * mean under-confidence, below mean over-confidence.
  */
-import { Card, Empty, Space, Statistic, Typography } from 'antd'
+import { Card, Empty, Space, Statistic, Typography } from '../../ui'
 import EChart from '../EChart'
 
 const { Text } = Typography
@@ -46,7 +46,7 @@ export default function CalibrationCurveChart({ payload, height = 360 }) {
         data: diagonal,
         smooth: false,
         showSymbol: false,
-        lineStyle: { type: 'dashed', color: '#9ca3af', width: 1 },
+        lineStyle: { type: 'dashed', color: 'var(--text-muted)', width: 1 },
       },
       {
         name: '模型',
@@ -55,8 +55,8 @@ export default function CalibrationCurveChart({ payload, height = 360 }) {
         smooth: true,
         symbol: 'circle',
         symbolSize: 6,
-        lineStyle: { color: '#2563eb', width: 2 },
-        itemStyle: { color: '#2563eb' },
+        lineStyle: { color: '#1a8dff', width: 2 },
+        itemStyle: { color: '#1a8dff' },
       },
     ],
   }
@@ -69,7 +69,7 @@ export default function CalibrationCurveChart({ payload, height = 360 }) {
             title="ECE (期望校准误差)"
             value={payload.ece ?? 0}
             precision={4}
-            valueStyle={{ fontSize: 18, color: (payload.ece ?? 0) < 0.05 ? '#10b981' : '#f59e0b' }}
+            valueStyle={{ fontSize: 18, color: (payload.ece ?? 0) < 0.05 ? '#00a870' : '#ed7b2f' }}
           />
           <Statistic
             title="Brier Score"

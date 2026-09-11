@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -22,19 +23,8 @@ import {
   Tag,
   Typography,
   message,
-} from 'antd';
-import {
-  ApiOutlined,
-  BarChartOutlined,
-  CloudUploadOutlined,
-  CopyOutlined,
-  DeleteOutlined,
-  DownloadOutlined,
-  EyeOutlined,
-  PlayCircleOutlined,
-  TagOutlined,
-  TrophyOutlined,
-} from '@ant-design/icons';
+} from '../ui';
+import { ApiOutlined, BarChartOutlined, CloudUploadOutlined, CopyOutlined, DownloadOutlined, PlayCircleOutlined, TagOutlined, TrophyOutlined } from '@ant-design/icons'
 import echarts from '../utils/echarts';
 import api, { dataApi, deployApi, dlApi, modelApi, timesfmApi, trainingApi } from '../services/api';
 import { formatBytes, formatDateTime, formatMetricByKey, metricLabels } from '../utils/formatters';
@@ -192,7 +182,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
   const [predictionResult, setPredictionResult] = useState('');
   const [predictionRunning, setPredictionRunning] = useState(false);
 
-  useEffect(() => { void loadModels(page); }, [page]);
+  useActiveEffect(() => { void loadModels(page); }, [page]);
 
   useEffect(() => {
     if (!compareOpen || !compareChartRef.current || compareData.length === 0) return undefined;
@@ -304,7 +294,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
       ellipsis: true,
     },
     { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id, width: 190, ellipsis: true },
-    { title: '模型', dataIndex: 'model_type', render: (v) => <Tag color="blue">{v}</Tag>, width: 180, ellipsis: true },
+    { title: '模型', dataIndex: 'model_type', render: (v) => <Tag color="blue" title={v}>{v}</Tag>, width: 180, ellipsis: true },
     {
       title: '标签',
       dataIndex: 'tags',
@@ -312,7 +302,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
       responsive: ['xxl'],
       render: (tags) =>
         tags?.length
-          ? tags.map((t) => <Tag key={t} color="geekblue" style={{ marginBottom: 2 }}>{t}</Tag>)
+          ? tags.map((t) => <Tag key={t} title={t} color="geekblue" style={{ marginBottom: 2 }}>{t}</Tag>)
           : <Text type="secondary">—</Text>,
     },
     {
@@ -337,11 +327,11 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
       width: 200,
       fixed: isNarrow ? undefined : 'right',
       render: (_, r) => (
-        <Space size={4} onClick={(e) => e.stopPropagation()}>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => void openDetail(r)}>详情</Button>
-          <Button size="small" icon={<TagOutlined />} onClick={() => openTagsModal(r, 'ml')}>标签</Button>
-          <Button size="small" icon={<CloudUploadOutlined />} onClick={() => openDeployModal({ ...r, runtime_type: 'ml' })} />
-          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => void handleDelete(r.task_id)} />
+        <Space onClick={(e) => e.stopPropagation()} size={16} className="table-actions">
+          <Button size="small" onClick={() => void openDetail(r)} type="link" className="table-action">详情</Button>
+          <Button size="small" onClick={() => openTagsModal(r, 'ml')} type="link" className="table-action">标签</Button>
+          <Button size="small" onClick={() => openDeployModal({ ...r, runtime_type: 'ml' })} type="link" className="table-action">部署</Button>
+          <Button size="small" danger onClick={() => void handleDelete(r.task_id)} type="link" className="table-action">删除</Button>
         </Space>
       ),
     },
@@ -483,8 +473,8 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
                 <Text strong>预测结果</Text>
                 <pre
                   style={{
-                    margin: 0, padding: 12, borderRadius: 8,
-                    background: '#0f172a', color: '#e2e8f0',
+                    margin: 0, padding: 12, borderRadius: 4,
+                    background: 'var(--code-bg)', color: 'var(--code-text)',
                     minHeight: 80, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12,
                   }}
                 >
@@ -532,7 +522,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
   const [predictionResult, setPredictionResult] = useState('');
   const [predictionRunning, setPredictionRunning] = useState(false);
 
-  useEffect(() => { void loadModels(page); }, [page]);
+  useActiveEffect(() => { void loadModels(page); }, [page]);
 
   async function loadModels(p) {
     setLoading(true);
@@ -615,8 +605,9 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
       ellipsis: true,
     },
     { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id, width: 190, ellipsis: true },
-    { title: '架构', dataIndex: 'model_type', render: (v) => <Tag color="purple">{v}</Tag>, width: 120, ellipsis: true },
-    { title: '任务类型', dataIndex: 'task_type', width: 100 },
+    { title: '架构', dataIndex: 'model_type', render: (v) => <Tag color="purple" title={v}>{v}</Tag>, width: 120, ellipsis: true },
+    { title: '任务类型', dataIndex: 'task_type', width: 100,
+      render: v => <Tag color={v === 'regression' ? 'geekblue' : 'cyan'} title={v}>{({ regression: '回归', classification: '分类' })[v] ?? v}</Tag> },
     {
       title: '标签',
       dataIndex: 'tags',
@@ -624,7 +615,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
       responsive: ['xxl'],
       render: (tags) =>
         tags?.length
-          ? tags.map((t) => <Tag key={t} color="geekblue" style={{ marginBottom: 2 }}>{t}</Tag>)
+          ? tags.map((t) => <Tag key={t} title={t} color="geekblue" style={{ marginBottom: 2 }}>{t}</Tag>)
           : <Text type="secondary">—</Text>,
     },
     {
@@ -649,11 +640,11 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
       width: 200,
       fixed: isNarrow ? undefined : 'right',
       render: (_, r) => (
-        <Space size={4} onClick={(e) => e.stopPropagation()}>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => void openDetail(r)}>详情</Button>
-          <Button size="small" icon={<TagOutlined />} onClick={() => openTagsModal(r, 'dl')}>标签</Button>
-          <Button size="small" icon={<CloudUploadOutlined />} onClick={() => openDeployModal(r)} />
-          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => void handleDelete(r.task_id)} />
+        <Space onClick={(e) => e.stopPropagation()} size={16} className="table-actions">
+          <Button size="small" onClick={() => void openDetail(r)} type="link" className="table-action">详情</Button>
+          <Button size="small" onClick={() => openTagsModal(r, 'dl')} type="link" className="table-action">标签</Button>
+          <Button size="small" onClick={() => openDeployModal(r)} type="link" className="table-action">部署</Button>
+          <Button size="small" danger onClick={() => void handleDelete(r.task_id)} type="link" className="table-action">删除</Button>
         </Space>
       ),
     },
@@ -785,8 +776,8 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
                 <Text strong>预测结果</Text>
                 <pre
                   style={{
-                    margin: 0, padding: 12, borderRadius: 8,
-                    background: '#0f172a', color: '#e2e8f0',
+                    margin: 0, padding: 12, borderRadius: 4,
+                    background: 'var(--code-bg)', color: 'var(--code-text)',
                     minHeight: 80, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12,
                   }}
                 >
@@ -813,7 +804,7 @@ function UniversalModelTab() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState(null);
 
-  useEffect(() => { void fetchTasks(1, null); }, []);
+  useActiveEffect(() => { void fetchTasks(page, statusFilter); }, [page, statusFilter]);
 
   async function fetchTasks(p, sf) {
     setLoading(true);
@@ -861,13 +852,13 @@ function UniversalModelTab() {
     {
       title: '频率',
       dataIndex: 'frequency',
-      render: (v) => FREQ_LABELS[v] ?? v,
+      render: (v) => <Tag title={FREQ_LABELS[v] ?? v}>{FREQ_LABELS[v] ?? v}</Tag>,
       width: 80,
     },
     {
       title: '模型',
       dataIndex: 'model_name',
-      render: (v) => <Tag color="purple">{v?.split('/').pop() ?? v}</Tag>,
+      render: (v) => <Tag color="purple" title={v}>{v?.split('/').pop() ?? v}</Tag>,
     },
     {
       title: '状态',
@@ -894,21 +885,16 @@ function UniversalModelTab() {
       key: 'actions',
       width: 130,
       render: (_, r) => (
-        <Space size={4} onClick={(e) => e.stopPropagation()}>
-          <Button
-            size="small"
-            icon={<EyeOutlined />}
-            disabled={r.status !== 'SUCCESS'}
-            onClick={() => navigate(`/ts/tasks/${r.id}`)}
-          >
+        <Space onClick={(e) => e.stopPropagation()} size={16} className="table-actions">
+          <Button size="small" disabled={r.status !== 'SUCCESS'} onClick={() => navigate(`/ts/tasks/${r.id}`)} type="link" className="table-action">
             查看结果
           </Button>
-          <Popconfirm
+          <Popconfirm okButtonProps={{ danger: true }}
             title="确认删除此预测记录？"
             onConfirm={() => void handleDelete(r.id)}
             disabled={r.status === 'RUNNING'}
           >
-            <Button size="small" danger icon={<DeleteOutlined />} disabled={r.status === 'RUNNING'} />
+            <Button size="small" danger disabled={r.status === 'RUNNING'} type="link" className="table-action">删除</Button>
           </Popconfirm>
         </Space>
       ),
@@ -937,7 +923,7 @@ function UniversalModelTab() {
               placeholder="状态"
               allowClear
               value={statusFilter}
-              onChange={(v) => { setStatusFilter(v ?? null); void fetchTasks(1, v ?? null); }}
+              onChange={(v) => { setStatusFilter(v ?? null); setPage(1); }}
               options={[
                 { value: 'SUCCESS', label: '完成' },
                 { value: 'RUNNING', label: '运行中' },
@@ -959,7 +945,7 @@ function UniversalModelTab() {
             current: page,
             pageSize: PAGE_SIZE,
             total,
-            onChange: (p) => void fetchTasks(p, statusFilter),
+            onChange: setPage,
             showTotal: (t) => `共 ${t} 条`,
             showSizeChanger: false,
           }}
@@ -991,7 +977,7 @@ export default function ModelManagement() {
   const [mlReloadKey, setMlReloadKey] = useState(0);
   const [dlReloadKey, setDlReloadKey] = useState(0);
 
-  useEffect(() => { void fetchTagLibrary(); }, []);
+  useActiveEffect(() => { void fetchTagLibrary(); }, []);
 
   async function fetchTagLibrary() {
     try {

@@ -1,3 +1,4 @@
+import { useActiveEffect } from '../hooks/useActiveEffect'
 /**
  * TrainingPlans — list + editor for reusable training-plan templates.
  *
@@ -12,17 +13,13 @@
  *   - Modal create/edit: select models -> generated config table -> per-model
  *     parameter modal (loads tuning-spaces registry; no hard-coded model list)
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import {
   Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select,
-  Switch, InputNumber, Divider, message, Typography, Tooltip, Empty, Segmented,
+  Switch, InputNumber, Divider, message, Typography, Tooltip, Empty, Radio,
   Row, Col,
-} from 'antd'
-import {
-  PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined,
-  ThunderboltOutlined, InfoCircleOutlined, CopyOutlined,
-  CheckCircleOutlined, UndoOutlined, SaveOutlined,
-} from '@ant-design/icons'
+} from '../ui'
+import { PlusOutlined, ReloadOutlined, ThunderboltOutlined, InfoCircleOutlined, CheckCircleOutlined, UndoOutlined, SaveOutlined } from '@ant-design/icons'
 import { trainingPlansApi, modelingTaskApi, dlApi } from '../services/api'
 import DLConfigPanel from '../components/workbench/DLConfigPanel'
 
@@ -188,14 +185,14 @@ function MLParamsPanel({ modelId, meta, strategyType = 'baseline', value, onChan
             : null
           return (
             <Col key={k} xs={24} sm={12}>
-              <div style={{ fontSize: 12, color: '#475569', marginBottom: 4 }}>
-                <code style={{ fontSize: 11, color: '#0f172a' }}>{k}</code>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                <code style={{ fontSize: 11, color: 'var(--text-primary)' }}>{k}</code>
                 {overridden && (
-                  <Tag color="orange" style={{ marginLeft: 6, fontSize: 10 }}>已修改</Tag>
+                  <Tag color="orange" style={{ marginLeft: 6 }}>已修改</Tag>
                 )}
                 {rangeHint && (
                   <Tooltip title={rangeHint}>
-                    <InfoCircleOutlined style={{ marginLeft: 6, color: '#94a3b8', fontSize: 11 }} />
+                    <InfoCircleOutlined style={{ marginLeft: 6, color: 'var(--text-muted)', fontSize: 11 }} />
                   </Tooltip>
                 )}
               </div>
@@ -354,7 +351,7 @@ export default function TrainingPlans() {
         <Space>
           <Tag color="blue" style={{ margin: 0 }}>ML</Tag>
           <span>{meta?.display_name || key}</span>
-          <code style={{ fontSize: 10, color: '#64748b' }}>{key}</code>
+          <code style={{ fontSize: 10, color: 'var(--text-secondary)' }}>{key}</code>
         </Space>
       ),
     }))
@@ -364,7 +361,7 @@ export default function TrainingPlans() {
         <Space>
           <Tag color="purple" style={{ margin: 0 }}>DL</Tag>
           <span>{m.display_name || m.id}</span>
-          <code style={{ fontSize: 10, color: '#64748b' }}>{m.id}</code>
+          <code style={{ fontSize: 10, color: 'var(--text-secondary)' }}>{m.id}</code>
         </Space>
       ),
     }))
@@ -443,9 +440,9 @@ export default function TrainingPlans() {
     } catch {/* non-fatal — DL just won't appear in the picker */}
   }, [])
 
-  useEffect(() => { loadPlans() }, [loadPlans])
-  useEffect(() => { loadSpaces() }, [loadSpaces])
-  useEffect(() => { loadDlRegistry() }, [loadDlRegistry])
+  useActiveEffect(() => { loadPlans() }, [loadPlans])
+  useActiveEffect(() => { loadSpaces() }, [loadSpaces])
+  useActiveEffect(() => { loadDlRegistry() }, [loadDlRegistry])
 
   const handleCreate = () => {
     setEditingId(null)
@@ -568,12 +565,12 @@ export default function TrainingPlans() {
 
   const columns = useMemo(() => [
     {
-      title: '方案名称', dataIndex: 'name', key: 'name',
+      title: '方案名称', dataIndex: 'name', key: 'name', width: 220,
       render: (v, row) => (
         <div>
-          <div style={{ fontWeight: 600, color: '#0f172a' }}>{v}</div>
+          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{v}</div>
           {row.description && (
-            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{row.description}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>{row.description}</div>
           )}
         </div>
       ),
@@ -600,23 +597,23 @@ export default function TrainingPlans() {
       title: '策略', dataIndex: 'strategy_type', width: 180,
       render: (v) => {
         const m = STRATEGY_LABELS[v] || { label: v, color: 'default' }
-        return <Tag color={m.color}>{m.label}</Tag>
+        return <Tag color={m.color} title={m.label}>{m.label}</Tag>
       },
     },
     {
-      title: '模型', dataIndex: 'selected_models', key: 'models',
+      title: '模型', dataIndex: 'selected_models', key: 'models', width: 200,
       render: (v) => (
         <Space wrap size={[4, 4]}>
-          {(v || []).map(m => <Tag key={m} style={{ fontSize: 11 }}>{m}</Tag>)}
+          {(v || []).map(m => <Tag key={m} title={m}>{m}</Tag>)}
         </Space>
       ),
     },
     {
-      title: '优化目标', dataIndex: 'default_objective_metric', width: 130,
+      title: '优化目标', dataIndex: 'default_objective_metric', width: 160,
       render: (v, row) => v ? (
         <Space size={4}>
           <code style={{ fontSize: 11 }}>{v}</code>
-          <Tag color={row.default_objective_direction === 'min' ? 'orange' : 'green'} style={{ fontSize: 10 }}>
+          <Tag color={row.default_objective_direction === 'min' ? 'orange' : 'green'}>
             {row.default_objective_direction === 'min' ? '越低越好' : '越高越好'}
           </Tag>
         </Space>
@@ -629,13 +626,11 @@ export default function TrainingPlans() {
     {
       title: '操作', key: 'actions', width: 200, fixed: 'right',
       render: (_, row) => (
-        <Space size={4}>
-          <Tooltip title="编辑"><Button size="small" type="text" icon={<EditOutlined />}
-            onClick={() => handleEdit(row)} /></Tooltip>
-          <Tooltip title="复制"><Button size="small" type="text" icon={<CopyOutlined />}
-            onClick={() => handleDuplicate(row)} /></Tooltip>
-          <Popconfirm title="删除此方案？" onConfirm={() => handleDelete(row)} okText="删除" cancelText="取消">
-            <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+        <Space size={16} className="table-actions">
+          <Tooltip title="编辑"><Button size="small" onClick={() => handleEdit(row)} type="link" className="table-action">编辑</Button></Tooltip>
+          <Tooltip title="复制"><Button size="small" onClick={() => handleDuplicate(row)} type="link" className="table-action">复制</Button></Tooltip>
+          <Popconfirm okButtonProps={{ danger: true }} title="删除此方案？" onConfirm={() => handleDelete(row)} okText="删除" cancelText="取消">
+            <Button size="small" danger type="link" className="table-action">删除</Button>
           </Popconfirm>
         </Space>
       ),
@@ -646,28 +641,31 @@ export default function TrainingPlans() {
     <div style={{ padding: '20px 4px' }}>
       <Card
         variant="borderless"
-        style={{ borderRadius: 16, boxShadow: '0 1px 4px rgba(15,23,42,0.06)' }}
+        style={{ borderRadius: 4, boxShadow: '0 1px 4px rgba(15,23,42,0.06)' }}
         styles={{ body: { padding: 0 } }}
       >
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--surface-2)' }}>
           <Row justify="space-between" align="middle">
             <Col>
               <Space size={12}>
-                <ThunderboltOutlined style={{ fontSize: 22, color: '#2563eb' }} />
+                <ThunderboltOutlined style={{ fontSize: 22, color: '#1a8dff' }} />
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: '#0f172a' }}>训练方案</div>
-                  <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                  <h1 style={{ margin: 0, fontSize: 18, lineHeight: '28px', fontWeight: 600 }}>训练方案</h1>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
                     预设训练配置（模型 + 超参搜索空间 + 评估指标），建模任务可直接套用
                   </div>
                 </div>
               </Space>
             </Col>
             <Col>
-              <Space>
-                <Segmented
+              <Space wrap>
+                <Radio.Group
+                  optionType="button"
+                  buttonStyle="solid"
+                  aria-label="任务类型筛选"
                   size="middle"
                   value={taskType}
-                  onChange={setTaskType}
+                  onChange={e => setTaskType(e.target.value)}
                   options={[
                     { label: '全部', value: 'all' },
                     { label: '分类', value: 'classification' },
@@ -688,7 +686,8 @@ export default function TrainingPlans() {
           loading={loading}
           dataSource={data.items}
           columns={columns}
-          pagination={{ pageSize: 10, showSizeChanger: true }}
+          scroll={{ x: 1220 }}
+          pagination={{showTotal: total => `共 ${total} 条`,  defaultPageSize: 10, showSizeChanger: true }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
             description="暂无训练方案 — 点击右上角新建一个" /> }}
           style={{ padding: '0 4px' }}
@@ -731,7 +730,7 @@ export default function TrainingPlans() {
                     : planEstimate.tone === 'warning' ? 'orange'
                     : 'blue'
                 }
-                style={{ fontSize: 12, padding: '2px 10px' }}
+
               >
                 预估：{planEstimate.label}
               </Tag>
@@ -791,7 +790,7 @@ export default function TrainingPlans() {
                 <Space size={4}>
                   <span>调优策略</span>
                   <Tooltip title="baseline=只跑默认超参；grid_search=网格遍历；bayesian_search=Optuna 贝叶斯搜索">
-                    <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+                    <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 12 }} />
                   </Tooltip>
                 </Space>
               } rules={[{ required: true }]}>
@@ -806,13 +805,16 @@ export default function TrainingPlans() {
             <Space size={4}>
               <span>模型族</span>
               <Tooltip title="ML=sklearn/XGB/LGB 等经典模型；DL=基于 PyTorch 的深度模型；混合=同时包含两类。DL 当前仅支持 baseline 策略。">
-                <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+                <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 12 }} />
               </Tooltip>
             </Space>
           } rules={[{ required: true }]}>
-            <Segmented
+            <Radio.Group
+              optionType="button"
+              buttonStyle="solid"
               options={FAMILY_OPTIONS}
-              onChange={(nextFamily) => {
+              onChange={(event) => {
+                const nextFamily = event.target.value
                 // When family narrows, drop tokens that no longer belong.
                 const currentSelected = form.getFieldValue('selected_models') || []
                 const currentDlCfg    = form.getFieldValue('dl_config') || {}
@@ -886,7 +888,7 @@ export default function TrainingPlans() {
               rowKey="token"
               dataSource={selectedModelRows}
               pagination={false}
-              style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}
+              style={{ border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}
               locale={{
                 emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
                   description="先选择候选模型，系统会在这里生成配置表" />,
@@ -933,25 +935,17 @@ export default function TrainingPlans() {
                   key: 'actions',
                   width: 210,
                   render: (_, row) => (
-                    <Space size={4}>
-                      <Button
-                        size="small"
-                        icon={<EditOutlined />}
-                        onClick={() => {
+                    <Space size={16} className="table-actions">
+                      <Button size="small" onClick={() => {
                           setEditingModelToken(row.token)
                           setParamModalOpen(true)
-                        }}
-                      >
+                        }} type="link" className="table-action">
                         编辑参数
                       </Button>
-                      <Button
-                        size="small"
-                        icon={<SaveOutlined />}
-                        onClick={() => {
+                      <Button size="small" onClick={() => {
                           setSavedParamTokens(prev => ({ ...prev, [row.token]: true }))
                           message.success(`${row.name} 参数已保存到当前方案草稿`)
-                        }}
-                      >
+                        }} type="link" className="table-action">
                         保存
                       </Button>
                     </Space>
@@ -1047,9 +1041,9 @@ export default function TrainingPlans() {
           <Space direction="vertical" size={14} style={{ width: '100%' }}>
             <div style={{
               padding: 16,
-              borderRadius: 16,
-              border: '1px solid #dbeafe',
-              background: 'linear-gradient(135deg, #eff6ff 0%, #ffffff 100%)',
+              borderRadius: 4,
+              border: '1px solid var(--border)',
+              background: 'var(--surface-1)',
             }}>
               <Space direction="vertical" size={6}>
                 <Space wrap>
@@ -1059,7 +1053,7 @@ export default function TrainingPlans() {
                   <Text strong style={{ fontSize: 16 }}>
                     {editingModelMeta?.display_name || editingModelToken}
                   </Text>
-                  <code style={{ fontSize: 11, color: '#64748b' }}>{editingModelToken}</code>
+                  <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{editingModelToken}</code>
                 </Space>
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   {editingModelMeta?.description || '编辑该模型在当前训练方案中的参数配置。'}

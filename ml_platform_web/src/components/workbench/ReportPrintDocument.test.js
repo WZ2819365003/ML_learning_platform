@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import ReportPrintDocument from './ReportPrintDocument'
+import { TabContext } from '../../navigation/TabContext'
 import { resolveReportSource } from './reportViewModel'
 import { legacyReport, overviewReport } from './__fixtures__/reportCharts.fixtures'
 
@@ -15,6 +16,11 @@ const render = (source) => renderToStaticMarkup(
 const count = (html, needle) => html.split(needle).length - 1
 
 describe('ReportPrintDocument', () => {
+  it('never prints a report owned by an inactive workspace tab', () => {
+    const html = renderToStaticMarkup(createElement(TabContext.Provider, { value: { active: false } },
+      createElement(ReportPrintDocument, { source: resolveReportSource({ archivedAiReport: overviewReport }), taskName: '隐藏任务' })))
+    expect(html).toBe('')
+  })
   it('draws every figure of the overview and of each sub-report', () => {
     const html = render(resolveReportSource({ archivedAiReport: overviewReport }))
 

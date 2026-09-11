@@ -1,11 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useActiveEffect } from '../../hooks/useActiveEffect'
+import React, { useCallback, useMemo, useState } from 'react'
 import {
   Alert, Button, Space, Tag, Tooltip, Select, Popconfirm, Table, Typography, message,
-} from 'antd'
-import {
-  CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined,
-  ExclamationCircleOutlined, EyeOutlined, RedoOutlined, SyncOutlined,
-} from '@ant-design/icons'
+} from '../../ui'
+import { CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined, ExclamationCircleOutlined, RedoOutlined, SyncOutlined } from '@ant-design/icons'
 import { platformTasksApi } from '../../services/api'
 import OrphanTaskDetailDrawer from './OrphanTaskDetailDrawer'
 import { formatDateTime, parseServerDate } from '../../utils/formatters'
@@ -13,16 +11,16 @@ import { formatDateTime, parseServerDate } from '../../utils/formatters'
 const { Text } = Typography
 
 const STATUS_CONFIG = {
-  SUCCESS:   { color: '#10b981', bg: 'rgba(16,185,129,0.10)',  icon: <CheckCircleOutlined />,       label: '成功' },
-  COMPLETED: { color: '#10b981', bg: 'rgba(16,185,129,0.10)',  icon: <CheckCircleOutlined />,       label: '已完成' },
-  RUNNING:   { color: '#3b82f6', bg: 'rgba(59,130,246,0.10)',  icon: <SyncOutlined spin />,         label: '运行中' },
-  QUEUED:    { color: '#6366f1', bg: 'rgba(99,102,241,0.10)',  icon: <ClockCircleOutlined />,       label: '已排队' },
-  PENDING:   { color: '#f59e0b', bg: 'rgba(245,158,11,0.10)',  icon: <ClockCircleOutlined />,       label: '等待中' },
-  CREATED:   { color: '#94a3b8', bg: 'rgba(148,163,184,0.10)', icon: <ClockCircleOutlined />,       label: '已创建' },
-  FAILED:    { color: '#ef4444', bg: 'rgba(239,68,68,0.10)',   icon: <ExclamationCircleOutlined />, label: '失败' },
-  RETRY:     { color: '#f97316', bg: 'rgba(249,115,22,0.10)',  icon: <RedoOutlined />,              label: '重试' },
-  CANCELLED: { color: '#94a3b8', bg: 'rgba(148,163,184,0.10)', icon: <CloseCircleOutlined />,       label: '已取消' },
-  ARCHIVED:  { color: '#94a3b8', bg: 'rgba(148,163,184,0.10)', icon: <CloseCircleOutlined />,       label: '已归档' },
+  SUCCESS:   { color: 'success',    icon: <CheckCircleOutlined />,       label: '成功' },
+  COMPLETED: { color: 'success',    icon: <CheckCircleOutlined />,       label: '已完成' },
+  RUNNING:   { color: 'processing', icon: <SyncOutlined spin />,         label: '运行中' },
+  QUEUED:    { color: 'purple',     icon: <ClockCircleOutlined />,       label: '已排队' },
+  PENDING:   { color: 'warning',    icon: <ClockCircleOutlined />,       label: '等待中' },
+  CREATED:   { color: 'default',    icon: <ClockCircleOutlined />,       label: '已创建' },
+  FAILED:    { color: 'error',      icon: <ExclamationCircleOutlined />, label: '失败' },
+  RETRY:     { color: 'warning',    icon: <RedoOutlined />,              label: '重试' },
+  CANCELLED: { color: 'default',    icon: <CloseCircleOutlined />,       label: '已取消' },
+  ARCHIVED:  { color: 'default',    icon: <CloseCircleOutlined />,       label: '已归档' },
 }
 
 const KIND_LABELS = {
@@ -30,17 +28,10 @@ const KIND_LABELS = {
   eval: '评估', predict: '预测', preprocess: '预处理', automl: 'AutoML',
 }
 
-function StatusBadge({ status }) {
+function StatusTag({ status }) {
   const key = status?.toUpperCase()
-  const cfg = STATUS_CONFIG[key] ?? { color: '#94a3b8', bg: 'rgba(148,163,184,0.1)', icon: null, label: status }
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 10px',
-      borderRadius: 99, fontSize: 11, fontWeight: 600, background: cfg.bg, color: cfg.color,
-    }}>
-      {cfg.icon} {cfg.label}
-    </span>
-  )
+  const cfg = STATUS_CONFIG[key] ?? { color: 'default', icon: null, label: status }
+  return <Tag color={cfg.color} icon={cfg.icon} title={cfg.label}>{cfg.label}</Tag>
 }
 
 function formatDuration(startIso, endIso) {
@@ -93,7 +84,7 @@ export default function OrphanTasksPanel() {
     }
   }, [filterKind, filterStatus])
 
-  useEffect(() => { fetchTasks(1) }, [filterKind, filterStatus]) // eslint-disable-line
+  useActiveEffect(() => { fetchTasks(page) }, [page, fetchTasks])
 
   const handleRetry = async (id) => {
     try { await platformTasksApi.retry(id); message.success('任务已重新提交'); fetchTasks(page) }
@@ -130,30 +121,30 @@ export default function OrphanTasksPanel() {
     { title: '任务 ID', dataIndex: 'id', width: 120,
       render: v => <Tooltip title={v}><Text code style={{ fontSize: 11 }}>{v.slice(0, 8)}…</Text></Tooltip> },
     { title: '类型', dataIndex: 'kind', width: 100,
-      render: v => <Tag color="blue" style={{ fontSize: 11 }}>{KIND_LABELS[v] ?? v}</Tag> },
-    { title: '状态', dataIndex: 'status', width: 110, render: v => <StatusBadge status={v} /> },
-    { title: '耗时', width: 90, render: (_, r) => <Text style={{ fontSize: 12, color: '#64748b' }}>{formatDuration(r.started_at, r.finished_at)}</Text> },
+      render: v => <Tag color="blue">{KIND_LABELS[v] ?? v}</Tag> },
+    { title: '状态', dataIndex: 'status', width: 110, render: v => <StatusTag status={v} /> },
+    { title: '耗时', width: 90, render: (_, r) => <Text style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{formatDuration(r.started_at, r.finished_at)}</Text> },
     { title: '进度', dataIndex: 'progress', width: 70, render: v => <Text style={{ fontSize: 12 }}>{((v ?? 0) * 100).toFixed(0)}%</Text> },
     { title: '关联', dataIndex: 'payload_ref', ellipsis: true,
-      render: v => v ? <Tooltip title={v}><Text style={{ fontSize: 11, color: '#94a3b8' }}>{v}</Text></Tooltip> : '—' },
+      render: v => v ? <Tooltip title={v}><Text style={{ fontSize: 11, color: 'var(--text-muted)' }}>{v}</Text></Tooltip> : '—' },
     { title: '入队', dataIndex: 'queued_at', width: 140,
-      render: v => v ? <Text style={{ fontSize: 11, color: '#94a3b8' }}>{formatDateTime(v)}</Text> : '—' },
+      render: v => v ? <Text style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatDateTime(v)}</Text> : '—' },
     { title: '操作', width: 180, render: (_, r) => {
       const s = r.status?.toUpperCase()
       return (
-        <Space size={4}>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailTaskId(r.id)}>详情</Button>
+        <Space size={16} className="table-actions">
+          <Button size="small" onClick={() => setDetailTaskId(r.id)} type="link" className="table-action">详情</Button>
           {(s === 'FAILED' || s === 'RETRY') && (
-            <Button size="small" icon={<RedoOutlined />} onClick={() => handleRetry(r.id)}>重试</Button>
+            <Button size="small" onClick={() => handleRetry(r.id)} type="link" className="table-action">重试</Button>
           )}
           {(s === 'PENDING' || s === 'QUEUED') && (
-            <Popconfirm title="确认取消？" onConfirm={() => handleCancel(r.id)}>
-              <Button size="small" danger>取消</Button>
+            <Popconfirm okButtonProps={{ danger: true }} title="确认取消？" onConfirm={() => handleCancel(r.id)}>
+              <Button size="small" danger type="link" className="table-action">取消</Button>
             </Popconfirm>
           )}
           {(s === 'SUCCESS' || s === 'FAILED' || s === 'CANCELLED') && (
-            <Popconfirm title="确认删除？" onConfirm={() => handleDelete(r.id)}>
-              <Button size="small" type="text" danger>删除</Button>
+            <Popconfirm okButtonProps={{ danger: true }} title="确认删除？" onConfirm={() => handleDelete(r.id)}>
+              <Button size="small" danger type="link" className="table-action">删除</Button>
             </Popconfirm>
           )}
         </Space>
@@ -164,17 +155,16 @@ export default function OrphanTasksPanel() {
   return (
     <div>
       <Alert type="info" showIcon style={{ marginBottom: 12 }}
-        message="孤立任务视图"
-        description={
+        message={
           <span>
-            这里只显示<strong>未关联到建模任务</strong>的平台调度任务（例如独立的预测、SHAP 解释、数据预处理）。
-            训练类任务请到<strong>「任务列表」</strong>查看完整的 ModelingTask → 实验批次 → Run 层级。
+            此处显示<strong>未关联建模任务</strong>的平台任务（预测、SHAP 解释、数据预处理等）。
+            训练任务请在<strong>「任务列表」</strong>查看完整的建模任务 → 实验批次 → Run。
           </span>
         } />
       <Space style={{ marginBottom: 12 }} wrap>
-        <Select allowClear placeholder="任务类型" style={{ width: 120 }} value={filterKind} onChange={setFilterKind}
+        <Select allowClear placeholder="任务类型" style={{ width: 120 }} value={filterKind} onChange={value => { setFilterKind(value); setPage(1) }}
           options={Object.entries(KIND_LABELS).map(([k, v]) => ({ value: k, label: v }))} />
-        <Select allowClear placeholder="状态筛选" style={{ width: 120 }} value={filterStatus} onChange={setFilterStatus}
+        <Select allowClear placeholder="状态筛选" style={{ width: 120 }} value={filterStatus} onChange={value => { setFilterStatus(value); setPage(1) }}
           options={Object.entries(STATUS_CONFIG).map(([k, v]) => ({ value: k, label: v.label }))} />
         <Popconfirm title={`确认重试选中的 ${retriableSelectedCount} 个任务？`} onConfirm={handleBatchRetry} disabled={retriableSelectedCount === 0}>
           <Button icon={<RedoOutlined />} type="primary" disabled={retriableSelectedCount === 0} loading={batchRetrying}>
@@ -190,7 +180,7 @@ export default function OrphanTasksPanel() {
           selectedRowKeys, onChange: setSelectedRowKeys,
           getCheckboxProps: (r) => ({ disabled: !['FAILED', 'RETRY'].includes(r.status?.toUpperCase()) }),
         }}
-        pagination={{ total, current: page, pageSize: PAGE_SIZE, onChange: fetchTasks, showTotal: t => `共 ${t} 条`, showSizeChanger: false }} />
+        pagination={{ total, current: page, pageSize: PAGE_SIZE, onChange: setPage, showTotal: t => `共 ${t} 条`, showSizeChanger: false }} />
       <OrphanTaskDetailDrawer
         taskId={detailTaskId}
         open={!!detailTaskId}

@@ -1,3 +1,4 @@
+import { useActiveEffect } from '../../hooks/useActiveEffect'
 /**
  * StrategyCompareTab — baseline vs grid_search vs bayesian_search.
  *
@@ -16,10 +17,10 @@
  *     so clicking a row opens RunInspector on the SHAP tab (matches the
  *     navigation pattern introduced in v3.1.2 for drill-down).
  */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import {
   Alert, Card, Col, Empty, Row, Space, Spin, Statistic, Tag, Typography,
-} from 'antd'
+} from '../../ui'
 import { TrophyOutlined, ReloadOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { modelingTaskApi } from '../../services/api'
 import { buildStrategyCardVM } from '../../utils/comparison'
@@ -34,9 +35,9 @@ const CANONICAL = ['baseline', 'grid_search', 'bayesian_search']
 const STRATEGY_CARD_BODY_HEIGHT = 150
 
 const STRATEGY_META = {
-  baseline:        { label: 'Baseline',        color: '#10b981', desc: '默认超参，一轮快速建模' },
-  grid_search:     { label: 'Grid Search',     color: '#2563eb', desc: '笛卡尔积穷举超参' },
-  bayesian_search: { label: 'Bayesian (TPE)',  color: '#8b5cf6', desc: 'Optuna TPE 自适应采样' },
+  baseline:        { label: 'Baseline',        color: '#00a870', desc: '默认超参，一轮快速建模' },
+  grid_search:     { label: 'Grid Search',     color: '#1a8dff', desc: '笛卡尔积穷举超参' },
+  bayesian_search: { label: 'Bayesian (TPE)',  color: '#8e7cff', desc: 'Optuna TPE 自适应采样' },
 }
 
 function fmt(v, digits = 4) {
@@ -63,7 +64,7 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
     }
   }, [taskId])
 
-  useEffect(() => { void load() }, [load])
+  useActiveEffect(() => { void load() }, [load])
 
   const strategyMap = useMemo(() => {
     const out = {}
@@ -113,7 +114,7 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
           name: '分布（箱线）',
           type: 'boxplot',
           data: boxSeriesData,
-          itemStyle: { borderColor: '#2563eb', color: 'rgba(37, 99, 235, 0.2)' },
+          itemStyle: { borderColor: '#1a8dff', color: 'rgba(37, 99, 235, 0.2)' },
         },
         {
           name: '单个 Run',
@@ -123,7 +124,7 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
           itemStyle: {
             color: p => {
               const strat = p.data.strategy_type
-              return STRATEGY_META[strat]?.color || '#94a3b8'
+              return STRATEGY_META[strat]?.color || 'var(--text-muted)'
             },
             opacity: 0.75,
           },
@@ -182,7 +183,7 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
                 style={{ width: '100%' }}
                 title={
                   <Space>
-                    <Tag color={meta.color} style={{ fontWeight: 500 }}>{meta.label}</Tag>
+                    <Tag color={meta.color}>{meta.label}</Tag>
                     <Text type="secondary" style={{ fontSize: 11 }}>{meta.desc}</Text>
                   </Space>
                 }
@@ -205,7 +206,7 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
                       valueStyle={{ fontSize: 22, color: meta.color }}
                       prefix={<TrophyOutlined style={{ fontSize: 16 }} />}
                     />
-                    <div style={{ fontSize: 12, color: '#475569' }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                       <Text type="secondary">模型: </Text>
                       <Text code>{best?.model_type || '-'}</Text>
                       <br />

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Alert, Spin } from 'antd'
+import { Alert, Spin } from '../../ui'
 
 import LogViewer from '../workbench/LogViewer'
 import { dlApi, logsApi } from '../../services/api'

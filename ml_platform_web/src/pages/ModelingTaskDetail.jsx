@@ -1,16 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react'
-import {
-  Card, Button, Tabs, Tag, Space, Table, Descriptions, Typography, Empty,
-  Row, Col, Spin, Alert, Statistic, Breadcrumb, Modal, List, message,
-} from 'antd'
-import {
-  ArrowLeftOutlined, ReloadOutlined, PlusOutlined, TrophyOutlined,
-  NodeIndexOutlined, LineChartOutlined, ExperimentOutlined,
-  CheckCircleFilled, CloseCircleFilled, ClockCircleFilled, FireOutlined,
-  FileTextOutlined,
-  ThunderboltOutlined, BulbOutlined, HistoryOutlined,
-} from '@ant-design/icons'
-import { useNavigate, useParams } from 'react-router-dom'
+import DetailHeader from '../components/layout/DetailHeader'
+import MetricCard from '../components/layout/MetricCard'
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import React, { useCallback, useState, useEffect } from 'react'
+import { Card, Button, Tabs, Tag, Space, Table, Descriptions, Typography, Empty, Row, Col, Spin, Alert, Statistic, Modal, List, message } from '../ui'
+import { ReloadOutlined, PlusOutlined, TrophyOutlined, NodeIndexOutlined, LineChartOutlined, ExperimentOutlined, CheckCircleFilled, CloseCircleFilled, ClockCircleFilled, FileTextOutlined, ThunderboltOutlined, BulbOutlined, HistoryOutlined } from '@ant-design/icons'
+import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { modelingTaskApi } from '../services/api'
 import ExperimentBatchModal from '../components/workbench/ExperimentBatchModal'
 import RunInspector from '../components/workbench/RunInspector'
@@ -46,6 +40,7 @@ function renderStatus(status) {
 export default function ModelingTaskDetail() {
   const { taskId } = useParams()
   const navigate = useNavigate()
+  const requestedTab = useLocation().state?.tab
 
   const [loading, setLoading] = useState(false)
   const [task, setTask] = useState(null)
@@ -56,6 +51,9 @@ export default function ModelingTaskDetail() {
   const [runs, setRuns] = useState([])
   const [runsLoading, setRunsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
+  useEffect(() => {
+    if (['overview', 'experiments', 'compare', 'report'].includes(requestedTab)) setActiveTab(requestedTab)
+  }, [requestedTab])
 
   // Modals
   const [batchOpen, setBatchOpen] = useState(false)
@@ -115,12 +113,12 @@ export default function ModelingTaskDetail() {
     }
   }, [taskId])
 
-  useEffect(() => { loadTask() }, [loadTask])
+  useActiveEffect(() => { loadTask() }, [loadTask])
   // Always load the leaderboard once on mount so Overview's "最佳 Run" card
   // has data; Runs/Explain tabs trigger a refresh on their own.
-  useEffect(() => { loadLeaderboard() }, [loadLeaderboard])
-  useEffect(() => { loadRuns() }, [loadRuns])
-  useEffect(() => {
+  useActiveEffect(() => { loadLeaderboard() }, [loadLeaderboard])
+  useActiveEffect(() => { loadRuns() }, [loadRuns])
+  useActiveEffect(() => {
     if (activeTab === 'compare') {
       loadLeaderboard()
       loadRuns()
@@ -128,7 +126,7 @@ export default function ModelingTaskDetail() {
   }, [activeTab, loadLeaderboard, loadRuns])
 
   // Auto-refresh when task is running
-  useEffect(() => {
+  useActiveEffect(() => {
     if (task?.status !== 'RUNNING') return
     const id = setInterval(() => { loadTask(); loadLeaderboard(); loadRuns() }, 5000)
     return () => clearInterval(id)
@@ -222,7 +220,7 @@ export default function ModelingTaskDetail() {
             column={2}
             size="small"
             bordered
-            styles={{ label: { background: '#f8fafc', width: 110 } }}
+            styles={{ label: { background: 'var(--surface-1)', width: 110 } }}
           >
             <Descriptions.Item label="任务 ID" span={2}>
               <code style={{ fontSize: 12 }}>{task.id}</code>
@@ -251,7 +249,7 @@ export default function ModelingTaskDetail() {
       </Col>
 
       <Col span={8}>
-        <Card size="small" title={<span><TrophyOutlined style={{ color: '#f59e0b' }} /> 最佳 Run</span>}
+        <Card size="small" title={<span><TrophyOutlined style={{ color: '#ed7b2f' }} /> 最佳 Run</span>}
           styles={{ body: { padding: 14 } }}>
           {task.best_run_id ? (
             <>
@@ -259,7 +257,7 @@ export default function ModelingTaskDetail() {
                 title={task.objective_metric}
                 value={bestRun?.objective_value ?? '-'}
                 precision={4}
-                valueStyle={{ color: '#10b981' }}
+                valueStyle={{ color: '#00a870' }}
               />
               <Space direction="vertical" size={4} style={{ marginTop: 8, width: '100%' }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>
@@ -289,33 +287,23 @@ export default function ModelingTaskDetail() {
         <ProgressTree modelingTaskId={task.id} />
       </Col>
 
-      <Col span={6}>
-        <Card size="small" styles={{ body: { padding: 14 } }}>
-          <Statistic title="实验批次数" value={experiments.length} prefix={<NodeIndexOutlined />} />
-        </Card>
+      <Col xs={12} md={6}>
+        <MetricCard label="实验批次数" value={experiments.length} icon={<NodeIndexOutlined />} />
       </Col>
-      <Col span={6}>
-        <Card size="small" styles={{ body: { padding: 14 } }}>
-          <Statistic title="Run 总数" value={runStats.total || 0} prefix={<LineChartOutlined />} />
-        </Card>
+      <Col xs={12} md={6}>
+        <MetricCard label="Run 总数" value={runStats.total || 0} icon={<LineChartOutlined />} color="var(--info)" />
       </Col>
-      <Col span={6}>
-        <Card size="small" styles={{ body: { padding: 14 } }}>
-          <Statistic title="成功 Run" value={runStats.success || 0}
-            valueStyle={{ color: '#10b981' }} prefix={<CheckCircleFilled />} />
-        </Card>
+      <Col xs={12} md={6}>
+        <MetricCard label="成功 Run" value={runStats.success || 0} icon={<CheckCircleFilled />} color="var(--success)" />
       </Col>
-      <Col span={6}>
-        <Card size="small" styles={{ body: { padding: 14 } }}>
-          <Statistic title="失败 Run" value={runStats.failed || 0}
-            valueStyle={{ color: '#ef4444' }} prefix={<CloseCircleFilled />} />
-        </Card>
+      <Col xs={12} md={6}>
+        <MetricCard label="失败 Run" value={runStats.failed || 0} icon={<CloseCircleFilled />} color="var(--error)" />
       </Col>
 
       {task.summary_snapshot && Object.keys(task.summary_snapshot).length > 0 && (
         <Col span={24}>
           <Card size="small" title="任务快照" styles={{ body: { padding: 14 } }}>
-            <pre style={{ margin: 0, fontSize: 11, background: '#f8fafc',
+            <pre style={{ margin: 0, fontSize: 11, background: 'var(--surface-1)',
               padding: 8, borderRadius: 4, maxHeight: 220, overflow: 'auto' }}>
               {JSON.stringify(task.summary_snapshot, null, 2)}
             </pre>
@@ -368,14 +356,14 @@ export default function ModelingTaskDetail() {
     {
       title: '操作', key: 'actions', width: 120,
       render: () => (
-        <Button size="small" type="link" onClick={() => setActiveTab('compare')}>查看对比 →</Button>
+        <Button size="small" onClick={() => setActiveTab('compare')} type="link" className="table-action">查看对比 →</Button>
       ),
     },
   ]
 
   const experimentsTab = (
     <Card size="small" styles={{ body: { padding: 0 } }}>
-      <div style={{ padding: '10px 14px', borderBottom: '1px solid #f1f5f9',
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--surface-2)',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Space>
           <Text strong>实验批次</Text>
@@ -415,53 +403,18 @@ export default function ModelingTaskDetail() {
 
   return (
     <div className="modeling-task-detail" style={{ padding: 16 }}>
-      {/* ── Header strip ────────────────────────────────────────────────── */}
-      <Card variant="borderless" styles={{ body: { padding: '12px 16px' } }}
-        style={{ marginBottom: 12, boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)' }}>
-        <div className="task-detail-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
-          <div className="task-detail-heading" style={{ flex: 1, minWidth: 0 }}>
-            <Breadcrumb style={{ fontSize: 12, marginBottom: 6 }}
-              items={[
-                { title: <a onClick={() => navigate('/v3/tasks')}>建模工作台</a> },
-                { title: task.name },
-              ]}
-            />
-            <Space align="center" size={10} wrap className="task-detail-title-row">
-              <FireOutlined style={{ color: '#2563eb', fontSize: 22 }} />
-              <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>{task.name}</h2>
-              {renderStatus(task.status)}
-              <Tag color="blue">{task.task_type === 'regression' ? '回归' : '分类'}</Tag>
-              <Tag>
-                <code>{task.objective_metric}</code> · {task.objective_direction}
-              </Tag>
-            </Space>
-            {task.description && (
-              <div style={{ color: '#64748b', fontSize: 12, marginTop: 4 }}>{task.description}</div>
-            )}
-          </div>
-          <Space wrap className="task-detail-actions">
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/v3/tasks')}>返回</Button>
-            <Button icon={<ReloadOutlined />} onClick={refreshAll}>刷新</Button>
-            <Button icon={<BulbOutlined />} onClick={openNewAiReport}>
-              AI 报告
-            </Button>
-            <Button icon={<HistoryOutlined />} onClick={() => void openAiReportArchives()}>
-              报告归档
-            </Button>
-            <Button
-              icon={<ThunderboltOutlined />}
-              loading={automlLoading}
-              onClick={() => void handleAutoml()}
-            >
-              AutoML 一键调优
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} disabled={finalizationLocked}
-              onClick={() => setBatchOpen(true)}>
-              启动新批次
-            </Button>
-          </Space>
-        </div>
-      </Card>
+      <DetailHeader onBack={() => navigate('/v3/tasks')} backLabel="返回建模任务"
+        title={task.name} subtitle={task.description}
+        tags={<>{renderStatus(task.status)}
+          <Tag color="blue">{task.task_type === 'regression' ? '回归' : '分类'}</Tag>
+          <Tag><code>{task.objective_metric}</code> · {task.objective_direction}</Tag></>}
+        actions={<>
+          <Button icon={<ReloadOutlined />} onClick={refreshAll}>刷新</Button>
+          <Button icon={<BulbOutlined />} onClick={openNewAiReport}>AI 报告</Button>
+          <Button icon={<HistoryOutlined />} onClick={() => void openAiReportArchives()}>报告归档</Button>
+          <Button icon={<ThunderboltOutlined />} loading={automlLoading} onClick={() => void handleAutoml()}>AutoML 一键调优</Button>
+          <Button type="primary" icon={<PlusOutlined />} disabled={finalizationLocked} onClick={() => setBatchOpen(true)}>启动新批次</Button>
+        </>} />
 
       {/* ── Tabs ────────────────────────────────────────────────────────── */}
       <Card variant="borderless" styles={{ body: { padding: '0 16px 16px' } }}

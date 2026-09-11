@@ -1,8 +1,11 @@
+import DetailHeader from '../components/layout/DetailHeader'
+import { useMarkTabSaved, useTabGuard } from '../navigation/TabContext'
+import { useActiveEffect } from '../hooks/useActiveEffect'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card, Steps, Button, Space, Select, Input, Upload, Form, Row, Col, Tag, Tabs,
   Typography, message, Divider,
-} from 'antd'
+} from '../ui'
 import {
   DatabaseOutlined, ExperimentOutlined, ThunderboltOutlined,
   CloudUploadOutlined, InboxOutlined, PlusOutlined,
@@ -19,7 +22,7 @@ import ModelComparison from '../components/workbench/ModelComparison'
 import DeployStep from '../components/workbench/DeployStep'
 import DataPipelineModal from '../components/workbench/DataPipelineModal'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 
 const OBJECTIVE_PRESETS = {
   classification: [
@@ -49,6 +52,7 @@ const STEP_ITEMS = [
 ]
 
 export default function ModelingWorkflow() {
+  const markSaved = useMarkTabSaved()
   const { taskId } = useParams()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -57,6 +61,10 @@ export default function ModelingWorkflow() {
   const initialStep = isNew ? 0 : Math.min(3, Math.max(0, Number(searchParams.get('step')) || 0))
   const [trainingTab, setTrainingTab] = useState('progress')
   const [current, setCurrent] = useState(initialStep)
+  const requestedStep = searchParams.get('step')
+  useEffect(() => {
+    if (!isNew && requestedStep !== null) setCurrent(Math.min(3, Math.max(0, Number(requestedStep) || 0)))
+  }, [isNew, requestedStep])
   const [task, setTask] = useState(null)
   const [runs, setRuns] = useState([])
   const [leaderboard, setLeaderboard] = useState([])
@@ -66,6 +74,7 @@ export default function ModelingWorkflow() {
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [form] = Form.useForm()
+  useTabGuard({ busy: saving || uploading })
 
   const loadDatasets = useCallback(async () => {
     try {
@@ -79,7 +88,7 @@ export default function ModelingWorkflow() {
     try {
       const t = await modelingTaskApi.get(taskId)
       setTask(t)
-      form.setFieldsValue({
+      if (!form.isFieldsTouched()) form.setFieldsValue({
         dataset_id: t.dataset_id, target_column: t.target_column,
         task_type: t.task_type, objective_metric: t.objective_metric,
         name: t.name,
@@ -101,12 +110,12 @@ export default function ModelingWorkflow() {
     } catch {/* non-fatal */}
   }, [taskId, isNew])
 
-  useEffect(() => { loadDatasets() }, [loadDatasets])
-  useEffect(() => { loadTask() }, [loadTask])
-  useEffect(() => { loadRuns() }, [loadRuns])
+  useActiveEffect(() => { loadDatasets() }, [loadDatasets])
+  useActiveEffect(() => { loadTask() }, [loadTask])
+  useActiveEffect(() => { loadRuns() }, [loadRuns])
 
   // Poll while task running so 训练/可视化 stay fresh
-  useEffect(() => {
+  useActiveEffect(() => {
     if (isNew || task?.status !== 'RUNNING') return
     const id = setInterval(() => { loadTask(); loadRuns() }, 5000)
     return () => clearInterval(id)
@@ -130,7 +139,7 @@ export default function ModelingWorkflow() {
     return Object.entries(columnInfo).map(([col, meta]) => ({
       value: col,
       label: <Space size={6}><span>{col}</span>
-        <Tag style={{ fontSize: 10, margin: 0 }}>{meta.dtype}</Tag></Space>,
+        <Tag style={{ margin: 0 }}>{meta.dtype}</Tag></Space>,
     }))
   }, [columnInfo])
 
@@ -165,12 +174,14 @@ export default function ModelingWorkflow() {
       }
       if (isNew) {
         const created = await modelingTaskApi.create(payload)
+        markSaved(form)
         message.success('任务已创建')
-        navigate(`/v3/tasks/${created.id}/workflow`, { replace: true })
+        navigate(`/v3/tasks/${created.id}/workflow?step=1`, { replace: true })
         setTask(created)
         setCurrent(1)
       } else {
         await modelingTaskApi.update(taskId, payload)
+        markSaved(form)
         message.success('已保存')
         await loadTask()
         setCurrent(1)
@@ -360,18 +371,11 @@ export default function ModelingWorkflow() {
 
   return (
     <div style={{ padding: 16 }}>
-      <Card bordered={false} bodyStyle={{ padding: '14px 20px' }}
-        style={{ marginBottom: 12, boxShadow: '0 1px 2px rgba(15,23,42,0.04)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, marginBottom: 14 }}>
-          <Space align="center">
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/v3/tasks')}>返回工作台</Button>
-            <Title level={4} style={{ margin: 0 }}>
-              {isNew ? '新建建模任务' : (task?.name || '建模工作流')}
-            </Title>
-            {task && <Tag color={task.task_type === 'regression' ? 'geekblue' : 'cyan'}>
-              {task.task_type === 'regression' ? '回归' : '分类'}</Tag>}
-          </Space>
-        </div>
+      <DetailHeader onBack={() => navigate('/v3/tasks')} backLabel="返回建模任务"
+        title={isNew ? '新建建模任务' : (task?.name || '建模工作流')}
+        tags={task && <Tag color={task.task_type === 'regression' ? 'geekblue' : 'cyan'}>
+          {task.task_type === 'regression' ? '回归' : '分类'}</Tag>} />
+      <Card bordered={false} styles={{ body: { padding: '16px 0 24px' } }} style={{ marginBottom: 16 }}>
         <Steps current={current} items={STEP_ITEMS}
           onChange={(c) => { if (!isNew || c === 0) setCurrent(c) }} />
       </Card>

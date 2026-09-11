@@ -16,7 +16,7 @@
  * including ones trained before that changed, with nobody having to retrain.
  */
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Card, Col, Empty, Row, Space, Spin, Statistic, Tooltip, Typography } from 'antd'
+import { Alert, Card, Col, Empty, Row, Space, Spin, Statistic, Tooltip, Typography } from '../../ui'
 import { InfoCircleOutlined, LineChartOutlined, DotChartOutlined } from '@ant-design/icons'
 
 import EChart from '../EChart'
@@ -57,12 +57,12 @@ export function buildResidualOption(actual = [], predicted = []) {
     xAxis: { type: 'value', name: '预测值', scale: true, nameLocation: 'middle', nameGap: 26 },
     yAxis: { type: 'value', name: '残差（实际−预测）', scale: true },
     series: [
-      { type: 'scatter', symbolSize: 5, data: points, itemStyle: { color: '#8b5cf6', opacity: 0.5 } },
+      { type: 'scatter', symbolSize: 5, data: points, itemStyle: { color: '#8e7cff', opacity: 0.5 } },
       // A flat line at zero: residuals fanning out or curving away from it is
       // the pattern worth catching.
       { type: 'line', symbol: 'none', markLine: {
           silent: true, symbol: 'none',
-          lineStyle: { type: 'dashed', color: '#94a3b8' },
+          lineStyle: { type: 'dashed', color: 'var(--text-muted)' },
           data: [{ yAxis: 0 }],
         }, data: [] },
     ],
@@ -81,10 +81,10 @@ export function buildScatterOption(actual = [], predicted = []) {
     xAxis: { type: 'value', name: '实际值', scale: true, nameLocation: 'middle', nameGap: 26 },
     yAxis: { type: 'value', name: '预测值', scale: true },
     series: [
-      { type: 'scatter', symbolSize: 5, data: points, itemStyle: { color: '#2563eb', opacity: 0.55 } },
+      { type: 'scatter', symbolSize: 5, data: points, itemStyle: { color: '#1a8dff', opacity: 0.55 } },
       {
         name: '理想预测', type: 'line', symbol: 'none', data: [[min, min], [max, max]],
-        lineStyle: { type: 'dashed', color: '#94a3b8', width: 1.4 },
+        lineStyle: { type: 'dashed', color: 'var(--text-muted)', width: 1.4 },
       },
     ],
   }
@@ -136,7 +136,7 @@ function ClassificationBacktest({ taskId }) {
             <Space size={6}>
               <span>混淆矩阵</span>
               <Tooltip title="对角线是预测正确的样本。非对角线上的大数字指出模型把哪一类错认成了哪一类。">
-                <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+                <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 12 }} />
               </Tooltip>
             </Space>
           }>
@@ -151,7 +151,7 @@ function ClassificationBacktest({ taskId }) {
             <Space size={6}>
               <span>ROC 曲线</span>
               <Tooltip title="越贴近左上角越好。模型不支持 predict_proba 时无法绘制。">
-                <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+                <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 12 }} />
               </Tooltip>
             </Space>
           }>
@@ -165,12 +165,10 @@ function ClassificationBacktest({ taskId }) {
   )
 }
 
-export default function BacktestPanel({ family, taskId, taskType }) {
+export default function BacktestPanel({ taskId, taskType }) {
   const [payload, setPayload] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-
-  const isDl = family === 'dl'
 
   useEffect(() => {
     if (!taskId) return undefined
@@ -186,8 +184,8 @@ export default function BacktestPanel({ family, taskId, taskType }) {
     return () => { cancelled = true }
   }, [taskId])
 
-  const actual = Array.isArray(payload?.actual) ? payload.actual : []
-  const predicted = Array.isArray(payload?.predicted) ? payload.predicted : []
+  const actual = useMemo(() => Array.isArray(payload?.actual) ? payload.actual : [], [payload?.actual])
+  const predicted = useMemo(() => Array.isArray(payload?.predicted) ? payload.predicted : [], [payload?.predicted])
 
   const stats = useMemo(() => backtestStats(actual, predicted), [actual, predicted])
   const scatterOption = useMemo(() => buildScatterOption(actual, predicted), [actual, predicted])
@@ -224,10 +222,10 @@ export default function BacktestPanel({ family, taskId, taskType }) {
       <Card size="small" variant="outlined"
           title={
             <Space size={6}>
-              <LineChartOutlined style={{ color: '#2563eb' }} />
+              <LineChartOutlined style={{ color: '#1a8dff' }} />
               <span>预测值 vs 实际值（曲线）</span>
               <Tooltip title="两条线贴合越紧越好。看峰值是否被削平、预测是否整体滞后。">
-                <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+                <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 12 }} />
               </Tooltip>
             </Space>
           }>
@@ -237,10 +235,10 @@ export default function BacktestPanel({ family, taskId, taskType }) {
       <Card size="small" variant="outlined"
         title={
           <Space size={6}>
-            <DotChartOutlined style={{ color: '#f59e0b' }} />
+            <DotChartOutlined style={{ color: '#ed7b2f' }} />
             <span>预测值 vs 实际值（散点）</span>
             <Tooltip title="点越贴近虚线越好。整体偏在一侧说明模型系统性高估或低估。">
-              <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+              <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 12 }} />
             </Tooltip>
           </Space>
         }>
@@ -250,10 +248,10 @@ export default function BacktestPanel({ family, taskId, taskType }) {
       <Card size="small" variant="outlined"
         title={
           <Space size={6}>
-            <DotChartOutlined style={{ color: '#8b5cf6' }} />
+            <DotChartOutlined style={{ color: '#8e7cff' }} />
             <span>残差分布</span>
             <Tooltip title="残差应随机散布在 0 线两侧。呈喇叭状或弯曲，说明模型漏掉了某种结构。">
-              <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+              <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 12 }} />
             </Tooltip>
           </Space>
         }>

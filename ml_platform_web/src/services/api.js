@@ -4,7 +4,12 @@ import axios from 'axios';
 const TOKEN_KEY = 'ml_platform_token';
 export const getAuthToken = () => localStorage.getItem(TOKEN_KEY) || '';
 export const setAuthToken = (token) => localStorage.setItem(TOKEN_KEY, token);
-export const clearAuthToken = () => localStorage.removeItem(TOKEN_KEY);
+export const clearAuthToken = () => {
+  localStorage.removeItem(TOKEN_KEY);
+  try { sessionStorage.removeItem('ml_platform_workspace_v1'); } catch { /* Storage can be unavailable. */ }
+  // Auth expiry/logout must not be blocked by a draft's beforeunload prompt.
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('ml-platform:session-ended'));
+};
 /** Append ?token= for WebSocket URLs (browsers can't set WS headers). */
 export const withWsToken = (url) => {
   const token = getAuthToken();

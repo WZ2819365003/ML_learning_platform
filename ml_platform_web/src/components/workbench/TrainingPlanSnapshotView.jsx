@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Alert, Button, Card, Descriptions, Modal, Space, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Descriptions, Modal, Space, Tag, Typography } from '../../ui'
 import { FileTextOutlined, WarningOutlined, SnippetsOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
@@ -23,10 +23,10 @@ export default function TrainingPlanSnapshotView({ snapshot, status }) {
     return (
       <Card size="small" style={{ borderStyle: 'dashed' }}>
         <Space align="start">
-          <FileTextOutlined style={{ color: '#94a3b8' }} />
+          <FileTextOutlined style={{ color: 'var(--text-muted)' }} />
           <div>
             <Text type="secondary">本任务未绑定训练方案</Text>
-            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
               使用的是创建时的即时配置，无可追溯的方案引用。
             </div>
           </div>
@@ -129,8 +129,8 @@ export default function TrainingPlanSnapshotView({ snapshot, status }) {
         width={720}
       >
         <pre style={{
-          background: '#0f172a', color: '#e2e8f0',
-          padding: 16, borderRadius: 8, fontSize: 12,
+          background: 'var(--code-bg)', color: 'var(--code-text)',
+          padding: 16, borderRadius: 4, fontSize: 12,
           maxHeight: 480, overflow: 'auto',
         }}>
           {JSON.stringify(snapshot, null, 2)}

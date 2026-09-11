@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useRef } from 'react'
 import {
   Form, Input, Select, Radio, InputNumber, Row, Col, Tabs, Tag,
   Space, Divider, Typography, Alert, message, Tooltip, Button,
-} from 'antd'
+} from '../../ui'
 import {
   ThunderboltOutlined, NodeIndexOutlined, FunctionOutlined,
   InfoCircleOutlined, BookOutlined, RocketOutlined,
@@ -16,19 +16,19 @@ const STRATEGY_META = {
     label: '基线 (Baseline)',
     icon: <ThunderboltOutlined />,
     description: '每个模型跑一次默认超参，用最少成本拿到基准指标。适合快速验证数据通路。',
-    color: '#10b981',
+    color: '#00a870',
   },
   grid_search: {
     label: '网格搜索 (Grid)',
     icon: <NodeIndexOutlined />,
     description: '枚举离散候选的笛卡尔积，解释性最强但组合数会指数膨胀。建议每个模型 ≤ 30 组合。',
-    color: '#2563eb',
+    color: '#1a8dff',
   },
   bayesian_search: {
     label: '贝叶斯寻优 (Optuna TPE)',
     icon: <FunctionOutlined />,
     description: '基于 TPE 顺序采样，每次利用历史反馈选下一组参数。少量 Trial 就能逼近好解。',
-    color: '#8b5cf6',
+    color: '#8e7cff',
   },
 }
 
@@ -50,7 +50,7 @@ function ModelTuningPanel({ strategy, modelKey, spec, value, onChange }) {
           const isNum = typeof first === 'number'
           return (
             <div key={param}>
-              <div style={{ fontSize: 12, color: '#475569', marginBottom: 4 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
                 {param} <Text type="secondary" style={{ fontSize: 11 }}>(默认 {JSON.stringify(first)})</Text>
               </div>
               {isNum ? (
@@ -82,7 +82,7 @@ function ModelTuningPanel({ strategy, modelKey, spec, value, onChange }) {
           const current = grid[param] ?? defaults
           return (
             <div key={param}>
-              <div style={{ fontSize: 12, color: '#475569', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
                 <span>{param}</span>
                 <Text type="secondary" style={{ fontSize: 11 }}>默认 {defaults.length} 个候选 · 当前 {current.length}</Text>
               </div>
@@ -121,10 +121,10 @@ function ModelTuningPanel({ strategy, modelKey, spec, value, onChange }) {
             ? `${d.type} [${d.low}, ${d.high}]${d.log ? ' (log)' : ''}${d.step ? ` step=${d.step}` : ''}`
             : `categorical (${(d.choices || []).length} 选项)`
           return (
-            <div key={param} style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(139, 92, 246, 0.06)', border: '1px solid rgba(139, 92, 246, 0.15)' }}>
+            <div key={param} style={{ padding: '8px 12px', borderRadius: 4, background: 'rgba(139, 92, 246, 0.06)', border: '1px solid rgba(139, 92, 246, 0.15)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: 12, fontWeight: 500 }}>{param}</span>
-                <Tag color="purple" style={{ fontSize: 11 }}>{summary}</Tag>
+                <Tag color="purple">{summary}</Tag>
               </div>
               {(d.type === 'float' || d.type === 'int') && (
                 <Row gutter={8} style={{ marginTop: 6 }}>
@@ -169,9 +169,14 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
   const [appliedPlanId, setAppliedPlanId] = useState(null)
   const [appliedPlanPayload, setAppliedPlanPayload] = useState(null)
 
+  const initialized = useRef(null)
+
   // Reset when the surface becomes active (or resetKey changes).
   useEffect(() => {
-    if (active && task) {
+    if (!active) { initialized.current = null; return }
+    const identity = `${task?.id}:${resetKey}`
+    if (active && task && initialized.current !== identity) {
+      initialized.current = identity
       form.resetFields()
       form.setFieldsValue({
         name: `${task.name}-${new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[/\s:]/g, '')}`,
@@ -307,10 +312,10 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
         message={<Space><strong>{strategyMeta?.label}</strong><Text type="secondary" style={{ fontSize: 12 }}>{strategyMeta?.description}</Text></Space>} />
 
       {plans.length > 0 && (
-        <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 6, background: 'rgba(37,99,235,0.04)', border: '1px dashed rgba(37,99,235,0.25)' }}>
+        <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 4, background: 'rgba(37,99,235,0.04)', border: '1px dashed rgba(37,99,235,0.25)' }}>
           <Space align="center" size={10} style={{ width: '100%' }}>
-            <BookOutlined style={{ color: '#2563eb' }} />
-            <Text style={{ fontSize: 12, color: '#475569' }}>从已保存方案快速套用：</Text>
+            <BookOutlined style={{ color: '#1a8dff' }} />
+            <Text style={{ fontSize: 12, color: 'var(--text-secondary)' }}>从已保存方案快速套用：</Text>
             <Select placeholder="选择方案（覆盖策略 · 模型 · 预算）" style={{ flex: 1, minWidth: 260 }} allowClear
               value={appliedPlanId} onChange={applyPlan}
               options={plans.map(p => ({
@@ -318,7 +323,7 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
                 label: (
                   <Space>
                     <span style={{ fontWeight: 500 }}>{p.name}</span>
-                    <Tag color="blue" style={{ fontSize: 10 }}>{p.strategy_type}</Tag>
+                    <Tag color="blue">{p.strategy_type}</Tag>
                     <Text type="secondary" style={{ fontSize: 11 }}>{(p.selected_models || []).length} 个模型</Text>
                   </Space>
                 ),
@@ -336,10 +341,10 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
           </Col>
           <Col span={10}>
             <Form.Item name="strategy_type" label="策略" rules={[{ required: true }]}>
-              <Radio.Group optionType="button" buttonStyle="solid" style={{ width: '100%' }}>
-                <Radio.Button value="baseline" style={{ width: '33.33%', textAlign: 'center' }}>基线</Radio.Button>
-                <Radio.Button value="grid_search" style={{ width: '33.33%', textAlign: 'center' }}>网格</Radio.Button>
-                <Radio.Button value="bayesian_search" style={{ width: '33.33%', textAlign: 'center' }}>贝叶斯</Radio.Button>
+              <Radio.Group optionType="button" buttonStyle="solid" className="radio-group-fill">
+                <Radio.Button value="baseline">基线</Radio.Button>
+                <Radio.Button value="grid_search">网格</Radio.Button>
+                <Radio.Button value="bayesian_search">贝叶斯</Radio.Button>
               </Radio.Group>
             </Form.Item>
           </Col>
@@ -353,7 +358,7 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
 
         <Row gutter={12}>
           <Col span={strategy === 'bayesian_search' ? 6 : 8}>
-            <Form.Item name="max_trials" label={<Tooltip title="整个批次的最大训练次数上限（安全阀）"><span>最大 Trial 数 <InfoCircleOutlined style={{ color: '#94a3b8' }} /></span></Tooltip>}>
+            <Form.Item name="max_trials" label={<Tooltip title="整个批次的最大训练次数上限（安全阀）"><span>最大 Trial 数 <InfoCircleOutlined style={{ color: 'var(--text-muted)' }} /></span></Tooltip>}>
               <InputNumber min={1} max={500} style={{ width: '100%' }} />
             </Form.Item>
           </Col>

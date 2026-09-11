@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react'
+import { useTabGuard } from '../navigation/TabContext'
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import React, { useState } from 'react'
 import {
   Badge,
   Button,
@@ -20,17 +22,8 @@ import {
   Tooltip,
   Typography,
   Upload,
-} from 'antd'
-import {
-  BranchesOutlined,
-  CheckCircleOutlined,
-  DeleteOutlined,
-  EyeOutlined,
-  FileTextOutlined,
-  InboxOutlined,
-  PlusOutlined,
-  TagOutlined,
-} from '@ant-design/icons'
+} from '../ui'
+import { BranchesOutlined, CheckCircleOutlined, FileTextOutlined, InboxOutlined, PlusOutlined, TagOutlined } from '@ant-design/icons'
 import { dataApi, dataVersionsApi } from '../services/api'
 import { formatDateTime } from '../utils/formatters'
 
@@ -67,9 +60,10 @@ const DataManagement = () => {
   const [versions, setVersions]             = useState([])
   const [versionsLoading, setVersionsLoading] = useState(false)
   const [createVersionLoading, setCreateVersionLoading] = useState(false)
+  useTabGuard({ busy: uploading || createVersionLoading })
   const [versionDescInput, setVersionDescInput] = useState('')
 
-  useEffect(() => { fetchDatasets() }, [])
+  useActiveEffect(() => { fetchDatasets() }, [])
 
   const fetchDatasets = async () => {
     setLoading(true)
@@ -186,7 +180,7 @@ const DataManagement = () => {
       key: 'name',
       render: (name) => (
         <Space>
-          <FileTextOutlined style={{ color: '#1890ff' }} />
+          <FileTextOutlined style={{ color: '#1a8dff' }} />
           <Text strong>{name}</Text>
         </Space>
       ),
@@ -218,30 +212,22 @@ const DataManagement = () => {
       title: '操作',
       key: 'action',
       render: (_, record) => (
-        <Space size="middle">
-          <Button
-            type="text"
-            icon={<EyeOutlined />}
-            onClick={() => handlePreview(record)}
-          >
+        <Space size={16} className="table-actions">
+          <Button onClick={() => handlePreview(record)} type="link" className="table-action">
             预览
           </Button>
           <Tooltip title="数据版本快照">
-            <Button
-              type="text"
-              icon={<BranchesOutlined />}
-              onClick={() => handleVersions(record)}
-            >
+            <Button onClick={() => handleVersions(record)} type="link" className="table-action">
               版本
             </Button>
           </Tooltip>
-          <Popconfirm
+          <Popconfirm okButtonProps={{ danger: true }}
             title="确认删除该数据集？"
             onConfirm={() => handleDelete(record.id)}
             okText="删除"
             cancelText="取消"
           >
-            <Button type="text" danger icon={<DeleteOutlined />}>
+            <Button danger type="link" className="table-action">
               删除
             </Button>
           </Popconfirm>
@@ -287,7 +273,7 @@ const DataManagement = () => {
           showUploadList={false}
         >
           <p className="ant-upload-drag-icon">
-            <InboxOutlined style={{ fontSize: 48, color: '#1890ff' }} />
+            <InboxOutlined style={{ fontSize: 48, color: '#1a8dff' }} />
           </p>
           <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
           <p className="ant-upload-hint">支持 CSV、Parquet、Excel 文件，单个文件最大 200MB</p>
@@ -305,7 +291,7 @@ const DataManagement = () => {
           dataSource={datasets}
           columns={columns}
           loading={loading}
-          pagination={{ pageSize: 10 }}
+          pagination={{showTotal: total => `共 ${total} 条`, showSizeChanger: false,  pageSize: 10 }}
         />
       </Card>
 
@@ -336,7 +322,7 @@ const DataManagement = () => {
               dataSource={(previewData.rows || []).map((r, i) => ({ ...r, _key: i }))}
               rowKey="_key"
               columns={previewColumns}
-              pagination={{ pageSize: 5, size: 'small' }}
+              pagination={{showTotal: total => `共 ${total} 条`, showSizeChanger: false,  pageSize: 5, size: 'small' }}
               size="small"
               loading={previewLoading}
               scroll={{ x: 'max-content' }}
@@ -371,7 +357,7 @@ const DataManagement = () => {
       <Modal
         title={
           <Space>
-            <BranchesOutlined style={{ color: '#1890ff' }} />
+            <BranchesOutlined style={{ color: '#1a8dff' }} />
             <span>数据版本 — {selectedVersionDs?.name}</span>
             <Tag color="blue">{versions.length} 个快照</Tag>
           </Space>
@@ -388,7 +374,7 @@ const DataManagement = () => {
             value={versionDescInput}
             onChange={e => setVersionDescInput(e.target.value)}
             onPressEnter={handleCreateVersion}
-            prefix={<TagOutlined style={{ color: '#94a3b8' }} />}
+            prefix={<TagOutlined style={{ color: 'var(--text-muted)' }} />}
             allowClear
           />
           <Button
@@ -403,7 +389,7 @@ const DataManagement = () => {
         </div>
 
         {versionsLoading ? (
-          <div style={{ textAlign: 'center', padding: '32px 0', color: '#94a3b8' }}>加载中…</div>
+          <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>加载中…</div>
         ) : versions.length === 0 ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -421,14 +407,14 @@ const DataManagement = () => {
             mode="left"
             items={versions.map((v, idx) => ({
               dot: idx === 0
-                ? <CheckCircleOutlined style={{ fontSize: 16, color: '#10b981' }} />
-                : <BranchesOutlined style={{ fontSize: 14, color: '#6b7280' }} />,
+                ? <CheckCircleOutlined style={{ fontSize: 16, color: '#00a870' }} />
+                : <BranchesOutlined style={{ fontSize: 14, color: 'var(--text-secondary)' }} />,
               color: idx === 0 ? 'green' : 'gray',
-              label: <span style={{ fontSize: 11, color: '#94a3b8' }}>{formatDate(v.created_at)}</span>,
+              label: <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatDate(v.created_at)}</span>,
               children: (
                 <div style={{ marginBottom: 4 }}>
                   <Space wrap>
-                    <Tag color={idx === 0 ? 'green' : 'default'} style={{ fontWeight: 700 }}>
+                    <Tag color={idx === 0 ? 'green' : 'default'}>
                       v{v.version}
                     </Tag>
                     {v.row_count != null && (
@@ -439,11 +425,11 @@ const DataManagement = () => {
                     {idx === 0 && <Badge status="success" text="最新" />}
                   </Space>
                   {v.description && (
-                    <div style={{ marginTop: 4, color: '#374151', fontSize: 13 }}>{v.description}</div>
+                    <div style={{ marginTop: 4, color: 'var(--text-primary)', fontSize: 13 }}>{v.description}</div>
                   )}
                   {v.schema_hash && (
                     <Tooltip title={`SHA-256: ${v.schema_hash}`}>
-                      <span style={{ fontSize: 11, color: '#94a3b8', cursor: 'help' }}>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', cursor: 'help' }}>
                         #{v.schema_hash.slice(0, 8)}
                       </span>
                     </Tooltip>

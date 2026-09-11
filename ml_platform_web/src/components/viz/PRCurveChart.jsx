@@ -9,10 +9,10 @@
  *   multiclass: { multiclass: true, curves: [{class, precision, recall,
  *                 average_precision}, ...] }
  */
-import { Card, Empty, Space, Statistic, Tag } from 'antd'
+import { Card, Empty, Space, Statistic, Tag } from '../../ui'
 import EChart from '../EChart'
 
-const PALETTE = ['#2563eb', '#10b981', '#f97316', '#8b5cf6', '#ef4444', '#eab308', '#06b6d4']
+const PALETTE = ['#1a8dff', '#00a870', '#f97316', '#8e7cff', '#e34d59', '#eab308', '#06b6d4']
 
 export default function PRCurveChart({ payload, height = 380 }) {
   if (!payload) return <Empty description="暂无 PR 曲线数据" />
@@ -62,7 +62,7 @@ export default function PRCurveChart({ payload, height = 380 }) {
         smooth: true,
         showSymbol: false,
         data: recall.map((r, i) => [r, precision[i]]),
-        lineStyle: { color: '#2563eb', width: 2 },
+        lineStyle: { color: '#1a8dff', width: 2 },
         areaStyle: { color: 'rgba(37, 99, 235, 0.1)' },
       },
     ],
@@ -77,7 +77,7 @@ export default function PRCurveChart({ payload, height = 380 }) {
           <Statistic title="Best F1" value={payload.best_f1 ?? 0} precision={4} valueStyle={{ fontSize: 18 }} />
           {payload.positive_label != null && (
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>正类</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>正类</div>
               <Tag color="blue">{String(payload.positive_label)}</Tag>
             </div>
           )}

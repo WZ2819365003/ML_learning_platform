@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import {
   Tabs, Form, Select, InputNumber, Input, Switch, Button, Space, Divider,
   Typography, Tooltip, message, Alert, Card, Modal,
-} from 'antd'
+} from '../../ui'
 import {
   RocketOutlined, CodeOutlined, QuestionCircleOutlined, ThunderboltOutlined,
   SettingOutlined,
@@ -49,7 +49,7 @@ function DlParamGroup({ params = [], prefix, advancedMode }) {
       {visible.map(p => (
         <Form.Item key={p.name} name={[prefix, p.name]} initialValue={p.default ?? undefined}
           valuePropName={p.type === 'bool' ? 'checked' : 'value'}
-          label={<span>{p.display_name}{p.description && <Tooltip title={p.description}><QuestionCircleOutlined style={{ marginLeft: 4, color: '#999', fontSize: 12 }} /></Tooltip>}</span>}>
+          label={<span>{p.display_name}{p.description && <Tooltip title={p.description}><QuestionCircleOutlined style={{ marginLeft: 4, color: 'var(--text-muted)', fontSize: 12 }} /></Tooltip>}</span>}>
           {renderDlField(p)}
         </Form.Item>
       ))}
@@ -235,7 +235,7 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
         <Select placeholder="请选择深度学习模型" options={dlModelOptions} />
       </Form.Item>
       {dlSpec?.description && (
-        <Card size="small" style={{ marginBottom: 12, background: '#f8fafc' }}>
+        <Card size="small" style={{ marginBottom: 12, background: 'var(--surface-1)' }}>
           <Text type="secondary" style={{ fontSize: 12 }}>{dlSpec.description}</Text>
         </Card>
       )}

@@ -12,7 +12,7 @@
  * rung — the user can trust whether they're looking at real SHAP or a
  * fallback.
  */
-import { Alert, Card, Empty, Space, Statistic, Tag, Typography, Spin } from 'antd'
+import { Alert, Card, Empty, Space, Statistic, Tag, Typography, Spin } from '../../ui'
 import EChart from '../EChart'
 
 const { Text, Paragraph } = Typography
@@ -20,17 +20,17 @@ const { Text, Paragraph } = Typography
 const METHOD_META = {
   tree: {
     label: 'TreeExplainer',
-    color: '#10b981',
+    color: '#00a870',
     description: '基于树模型结构的精确 SHAP 值，每个样本的特征贡献都已计算。',
   },
   kernel: {
     label: 'KernelExplainer',
-    color: '#2563eb',
+    color: '#1a8dff',
     description: '基于采样近似的 SHAP 值，可能略慢于 Tree 但同样提供逐样本解释。',
   },
   permutation: {
     label: 'Permutation Importance',
-    color: '#f59e0b',
+    color: '#ed7b2f',
     description:
       'SHAP 不可用（numpy 兼容或模型不支持），降级为置换重要度：只衡量整体影响，不提供单样本方向。',
   },
@@ -95,7 +95,7 @@ export default function ShapView({ payload, loading, onRetry }) {
       <Card variant="outlined" size="small">
         <Space wrap size={[24, 12]}>
           <div>
-            <Tag color={meta.color} style={{ fontSize: 13, padding: '4px 10px' }}>
+            <Tag color={meta.color}>
               {meta.label}
             </Tag>
             <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>

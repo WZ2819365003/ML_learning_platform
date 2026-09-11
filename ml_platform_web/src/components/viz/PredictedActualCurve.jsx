@@ -11,7 +11,7 @@
  * no extra request is needed when both are shown.
  */
 import React, { useMemo, useState } from 'react'
-import { Empty, Radio, Space, Typography } from 'antd'
+import { Empty, Radio, Space, Typography } from '../../ui'
 
 import EChart from '../EChart'
 
@@ -44,14 +44,14 @@ export function buildPredictedActualOption(actual = [], predicted = [], windowSi
         // once the two lines overlapped, which is most of the chart.
         name: '实际值', type: 'line', showSymbol: false, smooth: false,
         data: actual.slice(from, from + size),
-        lineStyle: { width: 1.8, color: '#dc2626' },
-        itemStyle: { color: '#dc2626' },
+        lineStyle: { width: 1.8, color: '#e34d59' },
+        itemStyle: { color: '#e34d59' },
       },
       {
         name: '预测值', type: 'line', showSymbol: false, smooth: false,
         data: predicted.slice(from, from + size),
-        lineStyle: { width: 1.8, color: '#2563eb' },
-        itemStyle: { color: '#2563eb' },
+        lineStyle: { width: 1.8, color: '#1a8dff' },
+        itemStyle: { color: '#1a8dff' },
       },
     ],
   }

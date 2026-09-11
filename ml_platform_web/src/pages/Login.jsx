@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Button, Form, Input, Typography, message } from 'antd'
+import { Button, Form, Input, Typography, message } from '../ui'
 import { LockOutlined, UserOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { authApi, setAuthToken } from '../services/api'
@@ -18,7 +18,7 @@ function BrandMark({ size = 48 }) {
       <defs>
         <linearGradient id="lgrad" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
           <stop stopColor="#1d4ed8" />
-          <stop offset="1" stopColor="#3b82f6" />
+          <stop offset="1" stopColor="#1a8dff" />
         </linearGradient>
       </defs>
     </svg>
@@ -50,7 +50,7 @@ export default function Login() {
       padding: 16,
     }}>
       <div className="login-card" style={{
-        width: 380, maxWidth: '100%', background: '#fff', borderRadius: 16,
+        width: 380, maxWidth: '100%', background: 'var(--surface-0)', borderRadius: 4,
         boxShadow: '0 24px 64px rgba(9, 15, 30, 0.45)', padding: '40px 36px 28px',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 28 }}>
@@ -65,13 +65,13 @@ export default function Login() {
 
         <Form name="login" size="large" onFinish={onFinish} requiredMark={false}>
           <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input prefix={<UserOutlined style={{ color: '#94a3b8' }} />} placeholder="用户名" autoFocus />
+            <Input prefix={<UserOutlined style={{ color: 'var(--text-muted)' }} />} placeholder="用户名" autoFocus />
           </Form.Item>
           <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password prefix={<LockOutlined style={{ color: '#94a3b8' }} />} placeholder="密码" />
+            <Input.Password prefix={<LockOutlined style={{ color: 'var(--text-muted)' }} />} placeholder="密码" />
           </Form.Item>
           <Form.Item style={{ marginBottom: 8 }}>
-            <Button type="primary" htmlType="submit" block loading={submitting} style={{ height: 44, fontWeight: 600 }}>
+            <Button type="primary" size="large" htmlType="submit" block loading={submitting}>
               登 录
             </Button>
           </Form.Item>

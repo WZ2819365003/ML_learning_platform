@@ -1,3 +1,6 @@
+import DetailHeader from '../components/layout/DetailHeader'
+import MetricCard from '../components/layout/MetricCard'
+import { useActiveEffect } from '../hooks/useActiveEffect'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -21,26 +24,20 @@ import {
   Tag,
   Typography,
   message,
-} from 'antd'
-import {
-  ArrowLeftOutlined,
-  DeleteOutlined,
-  EditOutlined,
-  LineChartOutlined,
-  ReloadOutlined,
-} from '@ant-design/icons'
+} from '../ui'
+import { DatabaseOutlined, DeleteOutlined, EditOutlined, InfoCircleOutlined, LineChartOutlined, ReloadOutlined, RiseOutlined } from '@ant-design/icons'
 import ForecastChart from '../components/timeseries/ForecastChart'
 import { modelApi, tsApi } from '../services/api'
 import { formatDateTime } from '../utils/formatters'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { TextArea } = Input
 
 const STATUS_META = {
-  PENDING: { badge: 'default', label: '待执行', color: '#8c8c8c' },
-  RUNNING: { badge: 'processing', label: '运行中', color: '#faad14' },
-  SUCCESS: { badge: 'success', label: '已完成', color: '#52c41a' },
-  FAILED: { badge: 'error', label: '失败', color: '#ff4d4f' },
+  PENDING: { badge: 'default', label: '待执行', color: 'var(--text-muted)' },
+  RUNNING: { badge: 'processing', label: '运行中', color: '#ed7b2f' },
+  SUCCESS: { badge: 'success', label: '已完成', color: '#00a870' },
+  FAILED: { badge: 'error', label: '失败', color: '#e34d59' },
 }
 
 const FREQ_LABELS = {
@@ -143,12 +140,12 @@ export default function TSResults() {
     }
   }, [taskId])
 
-  useEffect(() => {
+  useActiveEffect(() => {
     void fetchTask()
     return () => window.clearInterval(pollTimer.current)
   }, [fetchTask])
 
-  useEffect(() => {
+  useActiveEffect(() => {
     window.clearInterval(pollTimer.current)
     if (!task || !['PENDING', 'RUNNING'].includes(task.status)) {
       return undefined
@@ -172,7 +169,7 @@ export default function TSResults() {
     }
   }
 
-  const meta = STATUS_META[task?.status] ?? { badge: 'default', label: task?.status ?? '未知', color: '#8c8c8c' }
+  const meta = STATUS_META[task?.status] ?? { badge: 'default', label: task?.status ?? '未知', color: 'var(--text-muted)' }
   const result = task?.result ?? null
   const historical = result?.historical_values ?? result?.historical ?? []
   const predictionCount = (result?.predictions ?? result?.point_forecast ?? []).length
@@ -214,60 +211,28 @@ export default function TSResults() {
 
   return (
     <Space direction="vertical" size={20} style={{ width: '100%' }}>
-      <Row align="middle" justify="space-between" wrap={false}>
-        <Col>
-          <Space align="center" size={12}>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/ts/tasks')}>
-              返回列表
-            </Button>
-            <div>
-              <Title level={3} style={{ margin: 0 }}>{task.name || task.dataset_name || '时序任务'}</Title>
-              <Space size={8} style={{ marginTop: 4 }}>
-                <Badge status={meta.badge} text={<Text style={{ color: meta.color }}>{meta.label}</Text>} />
-                {(task.tags ?? []).map((tag) => (
-                  <Tag key={tag} color="gold">{tag}</Tag>
-                ))}
-              </Space>
-            </div>
-          </Space>
-        </Col>
-        <Col>
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={() => void fetchTask()}>
-              刷新
-            </Button>
-            <Button icon={<EditOutlined />} onClick={() => setEditOpen(true)}>
-              编辑
-            </Button>
-            <Popconfirm
-              title="确认删除这个任务？"
-              onConfirm={() => void handleDelete()}
-              okButtonProps={{ danger: true }}
-              disabled={task.status === 'RUNNING'}
-            >
-              <Button danger icon={<DeleteOutlined />} disabled={task.status === 'RUNNING'}>
-                删除
-              </Button>
-            </Popconfirm>
-          </Space>
-        </Col>
-      </Row>
+      <DetailHeader onBack={() => navigate('/ts/tasks')} backLabel="返回时序任务"
+        title={task.name || task.dataset_name || '时序任务'}
+        tags={<><Badge status={meta.badge} text={<Text style={{ color: meta.color }}>{meta.label}</Text>} />
+          {(task.tags ?? []).map(tag => <Tag key={tag} color="gold">{tag}</Tag>)}</>}
+        actions={<>
+          <Button icon={<ReloadOutlined />} onClick={() => void fetchTask()}>刷新</Button>
+          <Button icon={<EditOutlined />} onClick={() => setEditOpen(true)}>编辑</Button>
+          <Popconfirm title="确认删除这个任务？" onConfirm={() => void handleDelete()}
+            okButtonProps={{ danger: true }} disabled={task.status === 'RUNNING'}>
+            <Button danger icon={<DeleteOutlined />} disabled={task.status === 'RUNNING'}>删除</Button>
+          </Popconfirm>
+        </>} />
 
       <Row gutter={[12, 12]}>
         {[
-          { label: '状态', value: meta.label, color: meta.color },
-          { label: '目标列', value: task.value_column ?? '—', color: '#1890ff' },
-          { label: '预测步长', value: `${task.horizon ?? '—'} 步`, color: '#722ed1' },
-          { label: '频率档位', value: FREQ_LABELS[task.frequency] ?? task.frequency ?? '—', color: '#13c2c2' },
+          { label: '状态', value: meta.label, color: meta.color, icon: <InfoCircleOutlined /> },
+          { label: '目标列', value: task.value_column ?? '—', color: 'var(--brand-500)', icon: <DatabaseOutlined /> },
+          { label: '预测步长', value: `${task.horizon ?? '—'} 步`, color: 'var(--brand-400)', icon: <RiseOutlined /> },
+          { label: '频率档位', value: FREQ_LABELS[task.frequency] ?? task.frequency ?? '—', color: 'var(--info)', icon: <LineChartOutlined /> },
         ].map((item) => (
           <Col xs={12} sm={6} key={item.label}>
-            <Card size="small" style={{ textAlign: 'center', borderTop: `3px solid ${item.color}` }}>
-              <Statistic
-                title={<Text type="secondary" style={{ fontSize: 12 }}>{item.label}</Text>}
-                value={item.value}
-                valueStyle={{ color: item.color, fontSize: 16, fontWeight: 700 }}
-              />
-            </Card>
+            <MetricCard label={item.label} value={item.value} color={item.color} icon={item.icon} />
           </Col>
         ))}
       </Row>
@@ -329,7 +294,7 @@ export default function TSResults() {
             <Table
               rowKey="key"
               dataSource={resultRows}
-              pagination={{ pageSize: 12, showSizeChanger: false }}
+              pagination={{showTotal: total => `共 ${total} 条`,  pageSize: 12, showSizeChanger: false }}
               columns={[
                 { title: '步数', dataIndex: 'step', width: 90 },
                 {
@@ -351,7 +316,7 @@ export default function TSResults() {
             />
           )}
 
-          <Row gutter={16} style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #f0f0f0' }}>
+          <Row gutter={16} style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
             <Col span={8}>
               <Statistic
                 title={<Text type="secondary" style={{ fontSize: 11 }}>历史点数</Text>}

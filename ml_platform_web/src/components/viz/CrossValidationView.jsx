@@ -32,7 +32,7 @@
  *   - height: chart height (default 320)
  */
 import { useMemo } from 'react'
-import { Card, Col, Empty, Row, Space, Statistic, Table, Typography } from 'antd'
+import { Card, Col, Empty, Row, Space, Statistic, Table, Typography } from '../../ui'
 import EChart from '../EChart'
 
 const { Text, Paragraph } = Typography
@@ -41,16 +41,16 @@ const { Text, Paragraph } = Typography
 // so the summary card can color-code the value.
 const METRIC_PRESETS = {
   classification: [
-    { key: 'accuracy', name: 'Accuracy', color: '#10b981', direction: 'max' },
-    { key: 'f1',       name: 'F1',       color: '#2563eb', direction: 'max' },
-    { key: 'roc_auc',  name: 'ROC AUC',  color: '#8b5cf6', direction: 'max' },
-    { key: 'precision',name: 'Precision',color: '#f59e0b', direction: 'max' },
+    { key: 'accuracy', name: 'Accuracy', color: '#00a870', direction: 'max' },
+    { key: 'f1',       name: 'F1',       color: '#1a8dff', direction: 'max' },
+    { key: 'roc_auc',  name: 'ROC AUC',  color: '#8e7cff', direction: 'max' },
+    { key: 'precision',name: 'Precision',color: '#ed7b2f', direction: 'max' },
     { key: 'recall',   name: 'Recall',   color: '#06b6d4', direction: 'max' },
   ],
   regression: [
-    { key: 'r2',   name: 'R²',   color: '#10b981', direction: 'max' },
-    { key: 'rmse', name: 'RMSE', color: '#ef4444', direction: 'min' },
-    { key: 'mae',  name: 'MAE',  color: '#f59e0b', direction: 'min' },
+    { key: 'r2',   name: 'R²',   color: '#00a870', direction: 'max' },
+    { key: 'rmse', name: 'RMSE', color: '#e34d59', direction: 'min' },
+    { key: 'mae',  name: 'MAE',  color: '#ed7b2f', direction: 'min' },
     { key: 'mse',  name: 'MSE',  color: '#7c3aed', direction: 'min' },
   ],
 }
@@ -198,7 +198,7 @@ export default function CrossValidationView({ payload, taskKind = 'classificatio
         if (typeof v !== 'number') return '-'
         const d = v - ref.mean
         const sign = d >= 0 ? '+' : ''
-        const color = Math.abs(d) > ref.std ? '#ef4444' : '#64748b'
+        const color = Math.abs(d) > ref.std ? '#e34d59' : 'var(--text-secondary)'
         return <Text style={{ color, fontSize: 12 }}>{sign}{fmt(d)}</Text>
       },
     },
@@ -234,7 +234,7 @@ export default function CrossValidationView({ payload, taskKind = 'classificatio
               <Card
                 size="small"
                 styles={{ body: { padding: '12px 16px' } }}
-                style={{ borderTop: `3px solid ${m.color}`, borderRadius: 8 }}
+                style={{ borderTop: `3px solid ${m.color}`, borderRadius: 4 }}
               >
                 <Statistic
                   title={<span style={{ fontSize: 12 }}>{m.name}（K-Fold 均值）</span>}
@@ -274,7 +274,7 @@ export default function CrossValidationView({ payload, taskKind = 'classificatio
           size="small"
           summary={() => (
             <Table.Summary fixed>
-              <Table.Summary.Row style={{ background: '#f8fafc', fontWeight: 600 }}>
+              <Table.Summary.Row style={{ background: 'var(--surface-1)', fontWeight: 600 }}>
                 <Table.Summary.Cell index={0} align="center">
                   <Text strong>均值 ± std</Text>
                 </Table.Summary.Cell>

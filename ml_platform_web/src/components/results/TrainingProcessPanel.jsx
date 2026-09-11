@@ -12,7 +12,7 @@
  * is missing.
  */
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Card, Col, Descriptions, Empty, Row, Space, Spin, Statistic, Tooltip, Typography } from 'antd'
+import { Alert, Card, Col, Descriptions, Empty, Row, Space, Spin, Statistic, Tooltip, Typography } from '../../ui'
 import { InfoCircleOutlined } from '@ant-design/icons'
 
 import EChart from '../EChart'
@@ -98,8 +98,8 @@ export function buildLossOption(history = []) {
     xAxis: { type: 'category', data: epochs, name: 'Epoch', nameLocation: 'middle', nameGap: 24 },
     yAxis: { type: 'value', scale: true, axisLabel: { formatter: compactChartNumber } },
     series: [
-      { name: '训练损失', type: 'line', data: train, showSymbol: false, lineStyle: { color: '#2563eb', width: 1.8 }, itemStyle: { color: '#2563eb' } },
-      { name: '验证损失', type: 'line', data: val, showSymbol: false, lineStyle: { color: '#dc2626', width: 1.8 }, itemStyle: { color: '#dc2626' } },
+      { name: '训练损失', type: 'line', data: train, showSymbol: false, lineStyle: { color: '#1a8dff', width: 1.8 }, itemStyle: { color: '#1a8dff' } },
+      { name: '验证损失', type: 'line', data: val, showSymbol: false, lineStyle: { color: '#e34d59', width: 1.8 }, itemStyle: { color: '#e34d59' } },
     ],
   }
 }
@@ -126,8 +126,8 @@ export function buildOverfitGapOption(history = []) {
     },
     series: [{
       type: 'line', data: gaps, showSymbol: false, smooth: true,
-      areaStyle: { opacity: 0.12 }, lineStyle: { color: '#d97706', width: 1.8 },
-      itemStyle: { color: '#d97706' },
+      areaStyle: { opacity: 0.12 }, lineStyle: { color: '#ed7b2f', width: 1.8 },
+      itemStyle: { color: '#ed7b2f' },
       markPoint: {
         symbolSize: 40,
         data: [{ name: '最大差距', coord: [worst, gaps[worst]], value: compactChartNumber(gaps[worst]) }],
@@ -150,7 +150,7 @@ export function buildLearningRateOption(history = []) {
     series: [{
       type: 'line', step: 'end', showSymbol: false,
       data: history.map(r => r.lr ?? null),
-      lineStyle: { color: '#8b5cf6', width: 1.8 }, itemStyle: { color: '#8b5cf6' },
+      lineStyle: { color: '#8e7cff', width: 1.8 }, itemStyle: { color: '#8e7cff' },
     }],
   }
 }
@@ -185,12 +185,12 @@ export function buildFoldScoresOption(folds = [], metricKey = null) {
     xAxis: { type: 'category', data: folds.map(f => `第 ${f.fold} 折`) },
     yAxis: { type: 'value', scale: true, name: key, axisLabel: { formatter: compactChartNumber } },
     series: [{
-      type: 'bar', data: values, itemStyle: { color: '#2563eb', borderRadius: [4, 4, 0, 0] },
+      type: 'bar', data: values, itemStyle: { color: '#1a8dff', borderRadius: [4, 4, 0, 0] },
       // The mean line is what turns five bars into a statement about spread.
       markLine: {
         silent: true, symbol: 'none',
         label: { formatter: `均值 ${mean.toFixed(4)}` },
-        lineStyle: { type: 'dashed', color: '#dc2626' },
+        lineStyle: { type: 'dashed', color: '#e34d59' },
         data: [{ yAxis: mean }],
       },
     }],
@@ -208,7 +208,7 @@ function ChartCard({ title, hint, option, emptyText }) {
             <span>{title}</span>
             {hint && (
               <Tooltip title={hint}>
-                <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+                <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 12 }} />
               </Tooltip>
             )}
           </Space>
@@ -278,12 +278,12 @@ export default function TrainingProcessPanel({ family, taskId, taskType, metrics
       yAxis: { type: 'value', name: '变异系数 %', max: v => Math.max(20, v.max) },
       series: [{
         type: 'bar', data: stability.map(r => (r.cv == null ? 0 : Number(r.cv.toFixed(2)))),
-        itemStyle: { color: ({ value }) => (value > 15 ? '#d97706' : '#10b981'), borderRadius: [4, 4, 0, 0] },
+        itemStyle: { color: ({ value }) => (value > 15 ? '#ed7b2f' : '#00a870'), borderRadius: [4, 4, 0, 0] },
         label: { show: true, position: 'top', formatter: ({ value }) => `${value}%` },
         markLine: {
           silent: true, symbol: 'none',
           label: { formatter: '15%' },
-          lineStyle: { type: 'dashed', color: '#94a3b8' },
+          lineStyle: { type: 'dashed', color: 'var(--text-muted)' },
           data: [{ yAxis: 15 }],
         },
       }],

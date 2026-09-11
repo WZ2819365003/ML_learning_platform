@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Modal, Input, Alert, Typography, message } from 'antd'
+import { Modal, Input, Alert, Typography, message } from '../../ui'
 import { CodeOutlined } from '@ant-design/icons'
 import { modelingTaskApi } from '../../services/api'
 
@@ -33,7 +33,7 @@ export default function CodeConfigModal({ open, task, defaultCode = '', onClose,
 
   return (
     <Modal
-      title={<span><CodeOutlined style={{ marginRight: 8, color: '#2563eb' }} />代码配置（Python）</span>}
+      title={<span><CodeOutlined style={{ marginRight: 8, color: '#1a8dff' }} />代码配置（Python）</span>}
       open={open}
       onCancel={onClose}
       onOk={run}

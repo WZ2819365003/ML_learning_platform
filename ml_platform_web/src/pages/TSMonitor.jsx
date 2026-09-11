@@ -1,3 +1,4 @@
+import { useActiveEffect } from '../hooks/useActiveEffect'
 /**
  * TSMonitor — 时序任务列表页
  * 路由: /ts/tasks
@@ -6,15 +7,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
-  Badge, Button, Card, Col, Descriptions, Empty, Form,
+  Button, Card, Col, Descriptions, Empty, Form,
   InputNumber, Modal, Popconfirm, Radio, Row,
-  Select, Space, Steps, Statistic, Table, Tag, Typography, message,
-} from 'antd'
-import {
-  DeleteOutlined, EyeOutlined,
-  LineChartOutlined, PlusOutlined, ReloadOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons'
+  Select, Space, Steps, Table, Tag, Typography, message,
+} from '../ui'
+import { AppstoreOutlined, CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined, LineChartOutlined, PlusOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import MetricCard from '../components/layout/MetricCard'
 import { dataApi, tsApi } from '../services/api'
 import { formatDateTime } from '../utils/formatters'
 
@@ -112,8 +110,8 @@ function CreateTaskModal({ open, onClose, onCreated }) {
 
       const task = await tsApi.createTask(payload)
       message.success('预测任务已提交！')
+      onClose(true)
       onCreated(task)
-      onClose()
     } catch (err) {
       const detail = err?.response?.data?.detail
       // Pydantic 422 returns detail as an array — format it nicely
@@ -246,20 +244,20 @@ export default function TSMonitor() {
     }
   }, [location.search])
 
-  const closeCreate = () => {
+  const closeCreate = (created = false) => {
     setCreate(false)
-    if (new URLSearchParams(location.search).get('drawer') === 'create') {
+    if (created !== true && new URLSearchParams(location.search).get('drawer') === 'create') {
       navigate('/ts/tasks', { replace: true })
     }
   }
   const refreshTimer            = useRef(null)
 
-  useEffect(() => {
-    void fetchTasks(1, statusFilter)
+  useActiveEffect(() => {
+    void fetchTasks(page, statusFilter)
     return () => clearInterval(refreshTimer.current)
-  }, [statusFilter])
+  }, [page, statusFilter])
 
-  useEffect(() => {
+  useActiveEffect(() => {
     clearInterval(refreshTimer.current)
     const hasActive = tasks.some(t => t.status === 'RUNNING' || t.status === 'PENDING')
     if (hasActive) {
@@ -306,7 +304,7 @@ export default function TSMonitor() {
         <Space direction="vertical" size={2}>
           <Text strong style={{ fontSize: 13 }}>{r.dataset_name ?? r.dataset_id?.slice(0, 8)}</Text>
           <Space size={4}>
-            <Tag style={{ fontSize: 11, margin: 0 }}>{r.value_column}</Tag>
+            <Tag style={{ margin: 0 }}>{r.value_column}</Tag>
             <Text type="secondary" style={{ fontSize: 11 }}>
               {r.horizon}步 · {FREQ_LABELS[r.frequency] ?? r.frequency}
             </Text>
@@ -321,7 +319,7 @@ export default function TSMonitor() {
       render: (_, r) => (
         <Space direction="vertical" size={2}>
           <Text style={{ fontSize: 12 }}>{r.deployment_name ?? '默认'}</Text>
-          <Tag color="blue" style={{ fontSize: 10 }}>
+          <Tag color="blue">
             {r.backend_label?.split('/').pop() ?? r.model_name?.split('/').pop() ?? '—'}
           </Tag>
         </Space>
@@ -333,7 +331,7 @@ export default function TSMonitor() {
       width: 95,
       render: s => {
         const m = STATUS_META[s] ?? { badge: 'default', label: s }
-        return <Badge status={m.badge} text={m.label} />
+        return <Tag color={m.badge}>{m.label}</Tag>
       },
     },
     {
@@ -347,15 +345,14 @@ export default function TSMonitor() {
       key: 'action',
       width: 110,
       render: (_, r) => (
-        <Space size={4} onClick={e => e.stopPropagation()}>
-          <Button size="small" icon={<EyeOutlined />}
-            onClick={() => navigate(`/ts/tasks/${r.id}`)}>
+        <Space onClick={e => e.stopPropagation()} size={16} className="table-actions">
+          <Button size="small" onClick={() => navigate(`/ts/tasks/${r.id}`)} type="link" className="table-action">
             详情
           </Button>
-          <Popconfirm
+          <Popconfirm okButtonProps={{ danger: true }}
             title="确认删除此任务？" disabled={r.status === 'RUNNING'}
             onConfirm={() => void handleDelete(r.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} disabled={r.status === 'RUNNING'} />
+            <Button size="small" danger disabled={r.status === 'RUNNING'} type="link" className="table-action">删除</Button>
           </Popconfirm>
         </Space>
       ),
@@ -381,19 +378,13 @@ export default function TSMonitor() {
       {/* Stats */}
       <Row gutter={[12, 12]}>
         {[
-          { label: '任务总数', value: counts.total,   color: '#1890ff' },
-          { label: '进行中',   value: counts.running,  color: '#faad14' },
-          { label: '已完成',   value: counts.success,  color: '#52c41a' },
-          { label: '失败',     value: counts.failed,   color: '#ff4d4f' },
-        ].map(({ label, value, color }) => (
+          { label: '任务总数', value: counts.total,   icon: <AppstoreOutlined />, color: 'var(--brand-500)' },
+          { label: '进行中',   value: counts.running, icon: <ClockCircleOutlined />, color: 'var(--warning)' },
+          { label: '已完成',   value: counts.success, icon: <CheckCircleOutlined />, color: 'var(--success)' },
+          { label: '失败',     value: counts.failed,  icon: <CloseCircleOutlined />, color: 'var(--error)' },
+        ].map(({ label, value, color, icon }) => (
           <Col xs={12} sm={6} key={label}>
-            <Card size="small" style={{ textAlign: 'center', borderTop: `3px solid ${color}` }}>
-              <Statistic
-                title={<Text type="secondary" style={{ fontSize: 12 }}>{label}</Text>}
-                value={value}
-                valueStyle={{ color, fontSize: 22, fontWeight: 700 }}
-              />
-            </Card>
+            <MetricCard label={label} value={value} color={color} icon={icon} />
           </Col>
         ))}
       </Row>
@@ -404,7 +395,7 @@ export default function TSMonitor() {
         extra={
           <Select size="small" style={{ width: 110 }} placeholder="全部状态" allowClear
             value={statusFilter}
-            onChange={v => { setFilter(v ?? null); void fetchTasks(1, v ?? null) }}
+            onChange={v => { setFilter(v ?? null); setPage(1) }}
             options={Object.entries(STATUS_META).map(([v, m]) => ({ value: v, label: m.label }))} />
         }
       >
@@ -416,7 +407,7 @@ export default function TSMonitor() {
           size="middle"
           pagination={{
             current: page, pageSize: PAGE_SIZE, total,
-            onChange: p => { setPage(p); void fetchTasks(p, statusFilter) },
+            onChange: setPage,
             showTotal: t => `共 ${t} 条`, showSizeChanger: false,
           }}
           locale={{ emptyText: <Empty description="暂无任务，点击「新建任务」开始预测" /> }}

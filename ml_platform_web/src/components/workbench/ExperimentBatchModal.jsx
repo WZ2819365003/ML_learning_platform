@@ -1,5 +1,5 @@
 import React from 'react'
-import { Modal } from 'antd'
+import { Modal } from '../../ui'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import ExperimentBatchForm from './ExperimentBatchForm'
 
@@ -13,7 +13,7 @@ import ExperimentBatchForm from './ExperimentBatchForm'
 export default function ExperimentBatchModal({ open, task, onClose, onSubmitted }) {
   return (
     <Modal
-      title={<span><ThunderboltOutlined style={{ marginRight: 8, color: '#2563eb' }} />启动新的实验批次</span>}
+      title={<span><ThunderboltOutlined style={{ marginRight: 8, color: '#1a8dff' }} />启动新的实验批次</span>}
       open={open}
       onCancel={onClose}
       footer={null}

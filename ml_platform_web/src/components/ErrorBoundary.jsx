@@ -1,5 +1,5 @@
 import React from 'react'
-import { Result, Button, Typography } from 'antd'
+import { Result, Button, Typography } from '../ui'
 import { ReloadOutlined, HomeOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 
@@ -69,7 +69,7 @@ export default class ErrorBoundary extends React.Component {
             </Link>,
           ]}
         >
-          <div style={{ background: '#f8fafc', padding: 16, borderRadius: 8, marginTop: 12 }}>
+          <div style={{ background: 'var(--surface-1)', padding: 16, borderRadius: 4, marginTop: 12 }}>
             <Paragraph>
               <Text strong style={{ fontSize: 13 }}>错误信息：</Text>
               <Text code copyable style={{ fontSize: 12, wordBreak: 'break-all' }}>
@@ -78,12 +78,12 @@ export default class ErrorBoundary extends React.Component {
             </Paragraph>
             {stack && (
               <details>
-                <summary style={{ cursor: 'pointer', color: '#64748b', fontSize: 12 }}>
+                <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 12 }}>
                   查看调用栈
                 </summary>
                 <pre style={{
-                  marginTop: 8, fontSize: 11, padding: 10, borderRadius: 6,
-                  background: '#0f172a', color: '#e2e8f0', overflow: 'auto',
+                  marginTop: 8, fontSize: 11, padding: 10, borderRadius: 4,
+                  background: 'var(--code-bg)', color: 'var(--code-text)', overflow: 'auto',
                   maxHeight: 320,
                 }}>
                   {stack}

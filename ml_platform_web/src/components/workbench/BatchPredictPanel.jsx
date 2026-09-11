@@ -1,3 +1,4 @@
+import { useActiveEffect } from '../../hooks/useActiveEffect'
 /**
  * BatchPredictPanel — upload a CSV, watch the job, download the result (M3-2).
  *
@@ -8,7 +9,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Alert, Button, Descriptions, Progress, Space, Tag, Upload, message,
-} from 'antd'
+} from '../../ui'
 import {
   CloudUploadOutlined, DownloadOutlined, ReloadOutlined,
 } from '@ant-design/icons'
@@ -53,10 +54,12 @@ export default function BatchPredictPanel({ deploymentId }) {
     }
   }, [deploymentId, stopPolling])
 
-  const startPolling = useCallback((jobId) => {
-    stopPolling()
-    timer.current = setInterval(() => void poll(jobId), POLL_MS)
-  }, [poll, stopPolling])
+  useActiveEffect(() => {
+    if (!job?.job_id || TERMINAL.includes(job.status)) return
+    void poll(job.job_id)
+    timer.current = setInterval(() => void poll(job.job_id), POLL_MS)
+    return stopPolling
+  }, [job?.job_id, job?.status, poll, stopPolling])
 
   const handleUpload = async (file) => {
     setSubmitting(true)
@@ -65,7 +68,6 @@ export default function BatchPredictPanel({ deploymentId }) {
       const data = await deployApi.submitBatchPredict(deploymentId, file)
       setJob(data)
       message.success('已提交，正在后台预测')
-      startPolling(data.job_id)
     } catch (err) {
       setError(err?.response?.data?.detail || err?.message || '提交失败')
     } finally {

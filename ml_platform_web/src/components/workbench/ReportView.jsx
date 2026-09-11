@@ -14,7 +14,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Alert, Button, Card, Space, Spin, Tag, Typography, message,
-} from 'antd'
+} from '../../ui'
 import { DownloadOutlined, PrinterOutlined, ReloadOutlined } from '@ant-design/icons'
 
 import { modelingTaskApi } from '../../services/api'

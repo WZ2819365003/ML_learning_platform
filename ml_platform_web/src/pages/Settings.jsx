@@ -1,4 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import { useMarkTabSaved } from '../navigation/TabContext'
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import React, { useState } from 'react'
 import {
   Button,
   Card,
@@ -16,7 +18,7 @@ import {
   Tag,
   Typography,
   message,
-} from 'antd'
+} from '../ui'
 import { PlusOutlined, SaveOutlined, SettingOutlined, TagOutlined } from '@ant-design/icons'
 import { modelApi } from '../services/api'
 
@@ -42,7 +44,7 @@ function TagLibrarySection() {
   const [addForm] = Form.useForm()
   const [adding, setAdding] = useState(false)
 
-  useEffect(() => { void fetchTags() }, [])
+  useActiveEffect(() => { void fetchTags() }, [])
 
   async function fetchTags() {
     setLoading(true)
@@ -99,7 +101,7 @@ function TagLibrarySection() {
 
   return (
     <Card
-      title={<Space><TagOutlined style={{ color: '#1890ff' }} /><span>标签库管理</span></Space>}
+      title={<Space><TagOutlined style={{ color: '#1a8dff' }} /><span>标签库管理</span></Space>}
       extra={
         <Space>
           <Button size="small" onClick={() => void fetchTags()}>刷新</Button>
@@ -138,7 +140,7 @@ function TagLibrarySection() {
                         color={tag.color ?? dim.color}
                         closable
                         onClose={e => { e.preventDefault(); void handleDeleteTag(tag.name) }}
-                        style={{ fontSize: 13, padding: '2px 8px' }}
+
                       >
                         {tag.name}
                       </Tag>
@@ -197,13 +199,14 @@ function TagLibrarySection() {
 // ── Main Settings Page ────────────────────────────────────────────────────────
 const Settings = () => {
   const [form] = Form.useForm()
+  const markSaved = useMarkTabSaved()
   const [loading, setLoading] = useState(false)
 
   const defaultSettings = {
     apiBaseUrl: 'http://localhost:8000',
     websocketUrl: 'ws://localhost:8000',
     autoSave: true,
-    theme: 'light',
+    theme: 'dark',
     language: 'zh-CN',
     notification: true,
     maxUploadSize: 200,
@@ -216,6 +219,7 @@ const Settings = () => {
         setLoading(true)
         setTimeout(() => {
           setLoading(false)
+          markSaved(form)
           message.success('设置保存成功')
         }, 1000)
       })
@@ -261,11 +265,7 @@ const Settings = () => {
             label="主题"
             rules={[{ required: true, message: '请选择主题' }]}
           >
-            <Select placeholder="请选择主题">
-              <Option value="light">浅色主题</Option>
-              <Option value="dark">深色主题</Option>
-              <Option value="system">跟随系统</Option>
-            </Select>
+            <Select disabled options={[{ value: 'dark', label: '深色主题' }]} />
           </Form.Item>
 
           <Form.Item

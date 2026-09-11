@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { Card, Col, Empty, Row, Space } from 'antd'
+import { Card, Col, Empty, Row, Space } from '../../ui'
 import EChart from '../EChart'
 
 function chartSeries(name, data, color) {
@@ -24,7 +24,7 @@ export function buildLossHistoryOption(history = []) {
     yAxis: { type: 'value', name: 'Loss', scale: true },
     series: [
       chartSeries('训练损失', history.map(row => row?.train_loss ?? null), '#f97316'),
-      chartSeries('验证损失', history.map(row => row?.val_loss ?? null), '#ef4444'),
+      chartSeries('验证损失', history.map(row => row?.val_loss ?? null), '#e34d59'),
     ],
   }
 }
@@ -33,13 +33,13 @@ export function buildTaskMetricHistoryOption(history = [], taskType = 'classific
   const epochs = history.map((row, index) => row?.epoch ?? row?.step ?? index + 1)
   const candidates = taskType === 'regression'
     ? [
-        ['val_rmse', '验证 RMSE', '#2563eb', 0],
-        ['val_mae', '验证 MAE', '#8b5cf6', 0],
-        ['val_r2', '验证 R²', '#10b981', 1],
+        ['val_rmse', '验证 RMSE', '#1a8dff', 0],
+        ['val_mae', '验证 MAE', '#8e7cff', 0],
+        ['val_r2', '验证 R²', '#00a870', 1],
       ]
     : [
-        ['val_acc', '验证准确率', '#10b981', 0],
-        ['val_f1_macro', '验证 F1', '#2563eb', 0],
+        ['val_acc', '验证准确率', '#00a870', 0],
+        ['val_f1_macro', '验证 F1', '#1a8dff', 0],
       ]
   const active = candidates.filter(([key]) =>
     history.some(row => Number.isFinite(row?.[key])))
@@ -77,7 +77,7 @@ function buildConfusionMatrixOption(matrix) {
       orient: 'horizontal',
       left: 'center',
       bottom: 0,
-      inRange: { color: ['#e0f2fe', '#2563eb', '#1e3a8a'] },
+      inRange: { color: ['#e0f2fe', '#1a8dff', '#1e3a8a'] },
     },
     series: [{
       type: 'heatmap',
@@ -100,12 +100,12 @@ function buildRocOption(fpr, tpr, auc) {
         type: 'line',
         showSymbol: false,
         data: fpr.map((value, index) => [value, tpr[index]]),
-        lineStyle: { width: 2, color: '#2563eb' },
+        lineStyle: { width: 2, color: '#1a8dff' },
         areaStyle: { color: 'rgba(37,99,235,0.12)' },
       },
       {
         name: '随机基线', type: 'line', symbol: 'none',
-        data: [[0, 0], [1, 1]], lineStyle: { type: 'dashed', color: '#94a3b8' },
+        data: [[0, 0], [1, 1]], lineStyle: { type: 'dashed', color: 'var(--text-muted)' },
       },
     ],
   }
@@ -146,7 +146,7 @@ function buildPredictionScatterOption(scatter) {
       },
       {
         name: '理想预测', type: 'line', symbol: 'none', data: [[min, min], [max, max]],
-        lineStyle: { type: 'dashed', color: '#ef4444' },
+        lineStyle: { type: 'dashed', color: '#e34d59' },
       },
     ],
   }
@@ -171,7 +171,7 @@ export function buildResidualOption(scatter) {
         silent: true,
         symbol: 'none',
         data: [{ yAxis: 0 }],
-        lineStyle: { type: 'dashed', color: '#ef4444' },
+        lineStyle: { type: 'dashed', color: '#e34d59' },
       },
     }],
   }

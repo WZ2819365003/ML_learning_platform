@@ -1,3 +1,5 @@
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import { useTabActive } from '../navigation/TabContext'
 /**
  * /experiments/:experimentId is legacy — the dedicated ExperimentDetail page
  * has been retired.  A PlatformExperiment now always lives under a
@@ -8,19 +10,20 @@
  * If resolution fails, falls back to an Alert pointing at /v3/tasks so the
  * user isn't stranded (the standalone /experiments page has been retired).
  */
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import { useParams, Navigate } from 'react-router-dom'
-import { Alert, Skeleton, Space, Typography } from 'antd'
+import { Alert, Skeleton, Space, Typography } from '../ui'
 import { platformExperimentsApi } from '../services/api'
 
 const { Text } = Typography
 
 export default function ExperimentRedirect() {
+  const active = useTabActive()
   const { experimentId } = useParams()
   const [target, setTarget] = useState(null)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
+  useActiveEffect(() => {
     if (!experimentId) return
     let cancelled = false
     platformExperimentsApi.get(experimentId)
@@ -40,7 +43,7 @@ export default function ExperimentRedirect() {
     return () => { cancelled = true }
   }, [experimentId])
 
-  if (target) return <Navigate to={target} replace />
+  if (target && active) return <Navigate to={target} replace />
 
   if (error) {
     return (

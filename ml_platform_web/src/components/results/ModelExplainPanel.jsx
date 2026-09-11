@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Alert, Button, Card, Empty, Spin, Typography } from 'antd'
+import { Alert, Button, Card, Empty, Spin, Typography } from '../../ui'
 import { BulbOutlined } from '@ant-design/icons'
 
 import EChart from '../EChart'
@@ -23,7 +23,7 @@ function buildImportanceOption(payload) {
     yAxis: { type: 'category', data: pairs.map(p => p[0]), axisLabel: { fontSize: 11 } },
     series: [{
       type: 'bar', data: pairs.map(p => p[1]),
-      itemStyle: { color: '#8b5cf6', borderRadius: [0, 4, 4, 0] },
+      itemStyle: { color: '#8e7cff', borderRadius: [0, 4, 4, 0] },
     }],
   }
 }

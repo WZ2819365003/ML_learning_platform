@@ -1,13 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import React, { useCallback, useMemo, useState } from 'react'
 import {
   Card, Table, Tag, Space, Button, Input, Select, Tooltip, Empty, message,
   Typography, Tabs,
-} from 'antd'
-import {
-  ReloadOutlined, EyeOutlined, ExperimentOutlined, BranchesOutlined,
-  CheckCircleFilled, CloseCircleFilled, ClockCircleFilled, TrophyOutlined,
-  BulbOutlined, SafetyOutlined,
-} from '@ant-design/icons'
+} from '../ui'
+import { ReloadOutlined, ExperimentOutlined, BranchesOutlined, CheckCircleFilled, CloseCircleFilled, ClockCircleFilled, TrophyOutlined, SafetyOutlined } from '@ant-design/icons'
 import { v3RunsApi } from '../services/api'
 import RunInspector from '../components/workbench/RunInspector'
 import OrphanTasksPanel from '../components/workbench/OrphanTasksPanel'
@@ -102,7 +99,7 @@ export default function V3Runs() {
     }
   }, [filterStatus, filterStrategy, filterTaskType])
 
-  useEffect(() => { load() }, [load])
+  useActiveEffect(() => { load() }, [load])
 
   // Distinct model types from current result set, for the client-side filter.
   const modelOptions = useMemo(() => {
@@ -155,9 +152,9 @@ export default function V3Runs() {
         <Tooltip title={v}>
           <Space direction="vertical" size={2} style={{ lineHeight: 1.25 }}>
             <Text strong style={{ fontSize: 13 }}>{v || '-'}</Text>
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Tag color={row.task_type === 'regression' ? 'geekblue' : 'cyan'}>
               {row.task_type === 'regression' ? '回归' : '分类'}
-            </Text>
+            </Tag>
           </Space>
         </Tooltip>
       ),
@@ -171,7 +168,7 @@ export default function V3Runs() {
       render: (v, row) => (
         <Space direction="vertical" size={2} style={{ lineHeight: 1.25 }}>
           <Text style={{ fontSize: 12 }}>{v || '-'}</Text>
-          <Tag color={STRATEGY_COLOR[row.strategy_type] || 'default'} style={{ margin: 0, fontSize: 10 }}>
+          <Tag color={STRATEGY_COLOR[row.strategy_type] || 'default'} title={row.strategy_type} style={{ margin: 0 }}>
             {row.strategy_type || '-'}
           </Tag>
         </Space>
@@ -184,7 +181,7 @@ export default function V3Runs() {
       dataIndex: 'model_type',
       width: 120,
       render: (v) => v
-        ? <Tag style={{ margin: 0, fontFamily: 'monospace', fontSize: 11 }}>{v}</Tag>
+        ? <Tag title={v} style={{ margin: 0, fontFamily: 'monospace' }}>{v}</Tag>
         : <Text type="secondary" style={{ fontSize: 11 }}>-</Text>,
     },
     {
@@ -199,7 +196,7 @@ export default function V3Runs() {
     {
       title: (
         <Tooltip title="每行展示该 Run 所属建模任务的优化指标值；不同任务的指标可能不同">
-          <span>目标值 <SafetyOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+          <span>目标值 <SafetyOutlined style={{ color: 'var(--text-muted)', fontSize: 11 }} /></span>
         </Tooltip>
       ),
       dataIndex: 'objective_value',
@@ -210,7 +207,7 @@ export default function V3Runs() {
         const num = typeof val === 'number' ? val : Number(val)
         return (
           <Space direction="vertical" size={0} style={{ lineHeight: 1.2, alignItems: 'flex-end' }}>
-            <code style={{ fontSize: 13, fontWeight: 600, color: '#2563eb' }}>
+            <code style={{ fontSize: 13, fontWeight: 600, color: '#1a8dff' }}>
               {Number.isFinite(num) ? num.toFixed(4) : String(val)}
             </code>
             <Text type="secondary" style={{ fontSize: 10 }}>
@@ -259,34 +256,19 @@ export default function V3Runs() {
       width: 190,
       fixed: 'right',
       render: (_, row) => (
-        <Space size={4}>
+        <Space size={16} className="table-actions">
           <Tooltip title="查看解释 (SHAP 特征重要性)">
-            <Button
-              size="small"
-              type="primary"
-              ghost
-              icon={<BulbOutlined />}
-              onClick={() => openInspector(row.run_id, 'shap')}
-            >
+            <Button size="small" onClick={() => openInspector(row.run_id, 'shap')} type="link" className="table-action">
               解释
             </Button>
           </Tooltip>
           <Tooltip title="打开 Run 诊断 (自动过拟合/失败归因)">
-            <Button
-              size="small"
-              icon={<SafetyOutlined />}
-              onClick={() => openInspector(row.run_id, 'context')}
-            >
+            <Button size="small" onClick={() => openInspector(row.run_id, 'context')} type="link" className="table-action">
               诊断
             </Button>
           </Tooltip>
           <Tooltip title="打开 Run 详情概览">
-            <Button
-              size="small"
-              type="text"
-              icon={<EyeOutlined />}
-              onClick={() => openInspector(row.run_id, 'overview')}
-            />
+            <Button size="small" onClick={() => openInspector(row.run_id, 'overview')} type="link" className="table-action">详情</Button>
           </Tooltip>
         </Space>
       ),
@@ -307,7 +289,7 @@ export default function V3Runs() {
       <Card
         variant="borderless"
         styles={{ body: { padding: 20 } }}
-        style={{ borderRadius: 12, boxShadow: '0 1px 3px rgba(15, 23, 42, 0.06)' }}
+        style={{ borderRadius: 4, boxShadow: '0 1px 3px rgba(15, 23, 42, 0.06)' }}
       >
         {/* Header */}
         <div style={{
@@ -316,28 +298,28 @@ export default function V3Runs() {
         }}>
           <Space align="center">
             <div style={{
-              width: 40, height: 40, borderRadius: 10,
-              background: 'rgba(37, 99, 235, 0.1)', color: '#2563eb',
+              width: 40, height: 40, borderRadius: 4,
+              background: 'rgba(37, 99, 235, 0.1)', color: '#1a8dff',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: 20,
             }}>
               <BranchesOutlined />
             </div>
             <div>
-              <Title level={4} style={{ margin: 0, color: '#0f172a' }}>运行诊断</Title>
+              <Title level={4} style={{ margin: 0, color: 'var(--text-primary)' }}>运行诊断</Title>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 跨所有建模任务的 Run 平铺列表 · 一键打开 SHAP 解释 / 自动诊断
               </Text>
             </div>
           </Space>
           <Space>
-            <Tag color="success" style={{ fontSize: 12, padding: '2px 10px' }}>
+            <Tag color="success">
               成功 {statsRow.SUCCESS}
             </Tag>
-            <Tag color="error" style={{ fontSize: 12, padding: '2px 10px' }}>
+            <Tag color="error">
               失败 {statsRow.FAILED}
             </Tag>
-            <Tag color="processing" style={{ fontSize: 12, padding: '2px 10px' }}>
+            <Tag color="processing">
               运行中 {statsRow.RUNNING}
             </Tag>
             <Text type="secondary" style={{ fontSize: 11 }}>
@@ -351,6 +333,8 @@ export default function V3Runs() {
         {/* Filters */}
         <Space wrap style={{ marginBottom: 14 }}>
           <Input.Search
+            className="workspace-search"
+            aria-label="搜索任务名、实验名或 Run ID"
             placeholder="搜索任务名 / 实验名 / Run ID"
             allowClear
             style={{ width: 260 }}
@@ -403,7 +387,7 @@ export default function V3Runs() {
           dataSource={filteredItems}
           scroll={{ x: 1200 }}
           pagination={{
-            pageSize: 20,
+            defaultPageSize: 20,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
             showTotal: (t) => `共 ${t} 条`,

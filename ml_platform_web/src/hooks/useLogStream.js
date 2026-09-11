@@ -1,3 +1,4 @@
+import { useActiveEffect } from './useActiveEffect'
 /**
  * useLogStream — React hook that merges historical log entries (loaded via
  * REST) with live entries streamed from `/ws/logs/{domainTaskId}`.
@@ -89,7 +90,7 @@ export function useLogStream({ domainTaskId, enabled = true, maxEntries = 2000 }
     setLogs(normalised)
   }, [])
 
-  useEffect(() => {
+  useActiveEffect(() => {
     if (!enabled || !domainTaskId) return undefined
 
     let disposed = false

@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useMarkTabSaved } from '../navigation/TabContext'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Alert, Button, Card, Divider, Form, InputNumber, Select, Space, Switch,
   Tag, Typography, message,
-} from 'antd';
+} from '../ui';
 import { RocketOutlined, SettingOutlined } from '@ant-design/icons';
 import { dataApi, trainingApi } from '../services/api';
 import ModelSelector from '../components/ModelSelector';
@@ -28,6 +29,7 @@ function parseHyperparameters(raw = {}) {
 const TrainingConfig = () => {
   const [form] = Form.useForm();
   const navigate = useNavigate();
+  const markSaved = useMarkTabSaved();
   const location = useLocation();
 
   const [datasets, setDatasets] = useState([]);
@@ -130,6 +132,7 @@ const TrainingConfig = () => {
       });
 
       message.success('训练任务已启动');
+      markSaved(form);
       navigate(`/training/monitor?taskId=${task.id}`);
     } catch (error) {
       console.error('启动训练失败:', error);

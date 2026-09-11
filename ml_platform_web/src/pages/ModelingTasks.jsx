@@ -1,16 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import React, { useState, useCallback } from 'react'
 import {
   Card, Button, Table, Tag, Space, Tooltip, message, Popconfirm, Empty,
-} from 'antd'
-import {
-  PlusOutlined, AppstoreOutlined, ExperimentOutlined, TrophyOutlined,
-  ReloadOutlined, DeleteOutlined, EyeOutlined, CheckCircleFilled,
-  ClockCircleFilled, CloseCircleFilled, FireOutlined, EditOutlined,
-  CloudUploadOutlined,
-} from '@ant-design/icons'
+} from '../ui'
+import { PlusOutlined, AppstoreOutlined, ExperimentOutlined, TrophyOutlined, ReloadOutlined, CheckCircleFilled, ClockCircleFilled, CloseCircleFilled } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
 import { modelingTaskApi } from '../services/api'
 import { formatDateTime } from '../utils/formatters'
+import MetricCard from '../components/layout/MetricCard'
 
 const STATUS_META = {
   CREATED:   { color: 'default', icon: <ClockCircleFilled />, label: '待启动' },
@@ -18,31 +15,6 @@ const STATUS_META = {
   COMPLETED: { color: 'success', icon: <CheckCircleFilled />, label: '已完成' },
   FAILED:    { color: 'error', icon: <CloseCircleFilled />, label: '失败' },
   ARCHIVED:  { color: 'default', icon: null, label: '已归档' },
-}
-
-// ── Inline stat chip (compact, lives in the card header strip) ───────────────
-function StatChip({ icon, label, value, color }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '6px 14px', borderRadius: 8,
-      background: 'rgba(148, 163, 184, 0.08)',
-      border: '1px solid rgba(148, 163, 184, 0.14)',
-      minWidth: 120,
-    }}>
-      <div style={{
-        width: 28, height: 28, borderRadius: 6,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: `${color}1a`, color,
-      }}>
-        {icon}
-      </div>
-      <div style={{ lineHeight: 1.15 }}>
-        <div style={{ fontSize: 11, color: '#64748b', fontWeight: 500 }}>{label}</div>
-        <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>{value}</div>
-      </div>
-    </div>
-  )
 }
 
 export default function ModelingTasks() {
@@ -66,7 +38,7 @@ export default function ModelingTasks() {
     }
   }, [pagination.page, pagination.pageSize])
 
-  useEffect(() => { load() }, [load])
+  useActiveEffect(() => { load() }, [load])
 
   const handleDelete = async (taskId) => {
     try {
@@ -104,11 +76,11 @@ export default function ModelingTasks() {
             {name}
           </Link>
           {row.description && (
-            <div style={{ color: '#64748b', fontSize: 12, marginTop: 2, lineHeight: 1.35 }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 2, lineHeight: 1.35 }}>
               {row.description}
             </div>
           )}
-          <div style={{ color: '#94a3b8', fontSize: 11, marginTop: 2 }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2 }}>
             {row.dataset_name && <>数据集: {row.dataset_name}</>}
             {row.target_column && <> · 目标: {row.target_column}</>}
           </div>
@@ -131,7 +103,7 @@ export default function ModelingTasks() {
       width: 140,
       render: (m, row) => (
         <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
-          {m} <span style={{ color: '#94a3b8' }}>({row.objective_direction})</span>
+          {m} <span style={{ color: 'var(--text-muted)' }}>({row.objective_direction})</span>
         </span>
       ),
     },
@@ -150,7 +122,7 @@ export default function ModelingTasks() {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 100,
+      width: 110,
       render: (s) => {
         const meta = STATUS_META[s] || STATUS_META.CREATED
         return <Tag icon={meta.icon} color={meta.color}>{meta.label}</Tag>
@@ -171,25 +143,22 @@ export default function ModelingTasks() {
       render: (_, row) => {
         const canDeploy = (row.successful_run_count ?? 0) > 0
         return (
-          <Space size={4}>
+          <Space size={16} className="table-actions">
             <Tooltip title="进入工作流（数据→配置→训练→可视化→部署）">
-              <Button size="small" type="primary" ghost icon={<EditOutlined />}
-                onClick={() => navigate(`/v3/tasks/${row.id}/workflow`)}>工作流</Button>
+              <Button size="small" onClick={() => navigate(`/v3/tasks/${row.id}/workflow`)} type="link" className="table-action">工作流</Button>
             </Tooltip>
             <Tooltip title={canDeploy ? '部署最佳模型' : '暂无成功的 Run，无法部署'}>
-              <Button size="small" icon={<CloudUploadOutlined />} disabled={!canDeploy}
-                onClick={() => navigate(`/v3/tasks/${row.id}/workflow?step=3`)} />
+              <Button size="small" disabled={!canDeploy} onClick={() => navigate(`/v3/tasks/${row.id}/workflow?step=3`)} type="link" className="table-action">部署</Button>
             </Tooltip>
             <Tooltip title="查看详情（Tab 视图）">
-              <Button size="small" icon={<EyeOutlined />}
-                onClick={() => navigate(`/v3/tasks/${row.id}`)} />
+              <Button size="small" onClick={() => navigate(`/v3/tasks/${row.id}`)} type="link" className="table-action">详情</Button>
             </Tooltip>
-            <Popconfirm
+            <Popconfirm okButtonProps={{ danger: true }}
               title="确认删除此建模任务？"
               description="其下所有实验与 Run 都会被级联清理。"
               onConfirm={() => handleDelete(row.id)}
             >
-              <Button size="small" danger icon={<DeleteOutlined />} disabled={row.status === 'RUNNING'} />
+              <Button size="small" danger disabled={row.status === 'RUNNING'} type="link" className="table-action">删除</Button>
             </Popconfirm>
           </Space>
         )
@@ -199,40 +168,17 @@ export default function ModelingTasks() {
 
   return (
     <div style={{ padding: 16 }}>
-      {/* ── Title bar + actions (compact, single row) ───────────────────── */}
-      <Card
-        bordered={false}
-        style={{ marginBottom: 12, boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)' }}
-        bodyStyle={{ padding: '12px 16px' }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-          <div style={{ minWidth: 260 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <FireOutlined style={{ color: '#2563eb', fontSize: 20 }} />
-              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, lineHeight: 1.2 }}>建模任务工作台</h2>
-              <Tag color="blue" style={{ marginLeft: 4 }}>V3</Tag>
-            </div>
-            <div style={{ color: '#64748b', fontSize: 12, marginTop: 4 }}>
-              以「任务」为单位组织建模流程：一个任务可挂多组实验（基线/网格/贝叶斯），自动汇总最佳 Run。
-            </div>
-          </div>
-
-          {/* Stats chips — inline, no wasted vertical space */}
-          <Space size={8} wrap>
-            <StatChip icon={<AppstoreOutlined />} label="总任务" value={stats.total} color="#2563eb" />
-            <StatChip icon={<ExperimentOutlined />} label="运行中" value={stats.running} color="#0ea5e9" />
-            <StatChip icon={<TrophyOutlined />} label="已完成" value={stats.completed} color="#10b981" />
-            <StatChip icon={<CloseCircleFilled />} label="失败" value={stats.failed} color="#ef4444" />
-          </Space>
-
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/v3/tasks/new/workflow')}>
-              新建建模任务
-            </Button>
-          </Space>
-        </div>
-      </Card>
+      <div className="page-heading">
+        <div><h1>建模任务工作台</h1><p>按任务组织数据、训练、评估与部署，查看各实验的运行结果。</p></div>
+        <Space><Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/v3/tasks/new/workflow')}>新建建模任务</Button></Space>
+      </div>
+      <div className="metric-grid">
+        <MetricCard icon={<AppstoreOutlined />} label="总任务" value={stats.total} />
+        <MetricCard icon={<ExperimentOutlined />} label="运行中（本页）" value={stats.running} color="var(--info)" />
+        <MetricCard icon={<TrophyOutlined />} label="已完成（本页）" value={stats.completed} color="var(--success)" />
+        <MetricCard icon={<CloseCircleFilled />} label="失败（本页）" value={stats.failed} color="var(--error)" />
+      </div>
 
       {/* ── Main table card ─────────────────────────────────────────────── */}
       <Card bordered={false} bodyStyle={{ padding: 0 }} style={{ boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)' }}>
@@ -246,7 +192,7 @@ export default function ModelingTasks() {
           locale={{
             emptyText: <div style={{ padding: '40px 0' }}>
               <Empty description={
-                <span style={{ color: '#64748b' }}>还没有建模任务，先点右上角「新建建模任务」开始</span>
+                <span style={{ color: 'var(--text-secondary)' }}>还没有建模任务，先点右上角「新建建模任务」开始</span>
               } />
             </div>
           }}
@@ -258,8 +204,7 @@ export default function ModelingTasks() {
             showQuickJumper: true,
             pageSizeOptions: ['10', '20', '50'],
             showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条 / 共 ${total} 条`,
-            onChange: (page, pageSize) => setPagination({ page, pageSize }),
-            style: { padding: '12px 16px', margin: 0 },
+            onChange: (page, pageSize) => setPagination({showTotal: total => `共 ${total} 条`, showSizeChanger: false,  page, pageSize }),
           }}
         />
       </Card>

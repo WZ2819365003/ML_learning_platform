@@ -24,7 +24,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card, Row, Col, Empty, Spin, Button, Space, Tag, Tooltip, Alert, Typography,
-} from 'antd'
+} from '../../ui'
 import {
   ReloadOutlined,
   HeatMapOutlined,
@@ -94,12 +94,12 @@ export function buildConfusionMatrixOption(cm) {
     visualMap: {
       min: 0, max: max || 1, calculable: true,
       orient: 'horizontal', left: 'center', bottom: 4,
-      inRange: { color: ['#e0f2fe', '#2563eb', '#1e3a8a'] },
+      inRange: { color: ['#e0f2fe', '#1a8dff', '#1e3a8a'] },
     },
     series: [{
       type: 'heatmap',
       data: cm.matrix.flatMap((row, ri) => row.map((v, ci) => [ci, ri, v])),
-      label: { show: true, color: '#0f172a' },
+      label: { show: true, color: 'var(--text-primary)' },
       emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } },
     }],
   }
@@ -110,7 +110,7 @@ export function buildRocCurveOption(roc) {
   const baseline = {
     name: '随机基线', type: 'line',
     data: [[0, 0], [1, 1]],
-    lineStyle: { type: 'dashed', color: '#94a3b8' }, symbol: 'none',
+    lineStyle: { type: 'dashed', color: 'var(--text-muted)' }, symbol: 'none',
     tooltip: { show: false },
   }
   const curves = roc.multiclass
@@ -123,7 +123,7 @@ export function buildRocCurveOption(roc) {
         name: `ROC (AUC ${Number(roc.auc).toFixed(3)})`,
         type: 'line', smooth: true, showSymbol: false,
         areaStyle: { color: 'rgba(37,99,235,0.12)' },
-        lineStyle: { color: '#2563eb', width: 2 },
+        lineStyle: { color: '#1a8dff', width: 2 },
         data: (roc.fpr || []).map((v, i) => [v, roc.tpr[i]]),
       }]
   return {
@@ -185,7 +185,7 @@ function buildLearningCurveOption(lc) {
       type: 'line', smooth: true,
       data: lc.steps.map((s) => s.metrics?.[k] ?? null),
       lineStyle: { width: 2 },
-      itemStyle: { color: ['#2563eb', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'][i % 5] },
+      itemStyle: { color: ['#1a8dff', '#00a870', '#ed7b2f', '#e34d59', '#8e7cff'][i % 5] },
     })),
   }
 }
@@ -202,7 +202,7 @@ function buildResidualOption(res) {
     xAxis: { type: 'value', name: '预测值', nameGap: 24, nameLocation: 'middle' },
     yAxis: {
       type: 'value', name: '残差',
-      axisLine: { lineStyle: { color: '#94a3b8' } },
+      axisLine: { lineStyle: { color: 'var(--text-muted)' } },
     },
     series: [
       {
@@ -214,7 +214,7 @@ function buildResidualOption(res) {
         // y=0 reference line
         type: 'line', markLine: {
           silent: true, symbol: 'none',
-          lineStyle: { color: '#ef4444', type: 'dashed' },
+          lineStyle: { color: '#e34d59', type: 'dashed' },
           data: [{ yAxis: 0 }],
         },
       },
@@ -223,7 +223,7 @@ function buildResidualOption(res) {
       type: 'text', right: 24, top: 12,
       style: {
         text: `均值=${res.mean_residual} · 标准差=${res.std_residual}`,
-        fontSize: 11, fill: '#64748b',
+        fontSize: 11, fill: 'var(--text-secondary)',
       },
     }],
   }
@@ -252,7 +252,7 @@ function buildPredVsActualOption(pva) {
       {
         type: 'line', showSymbol: false,
         data: [[lo, lo], [hi, hi]],
-        lineStyle: { color: '#ef4444', type: 'dashed' },
+        lineStyle: { color: '#e34d59', type: 'dashed' },
         tooltip: { show: false },
       },
     ],
@@ -275,12 +275,12 @@ function VizCard({ icon, title, hint, option, height = 320, empty = '暂无数�
           <Text strong style={{ fontSize: 13 }}>{title}</Text>
           {hint && (
             <Tooltip title={hint}>
-              <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+              <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 12 }} />
             </Tooltip>
           )}
         </Space>
       }
-      style={{ background: '#ffffff', boxShadow: '0 1px 3px rgba(15,23,42,0.06)' }}
+      style={{ background: 'var(--surface-0)', boxShadow: '0 1px 3px rgba(15,23,42,0.06)' }}
     >
       {option ? (
         <EChart option={option} style={{ height }} />
@@ -425,7 +425,7 @@ export default function TrainingViz({
             <>
               <Col span={24} xl={12}>
                 <VizCard
-                  icon={<HeatMapOutlined style={{ color: '#2563eb' }} />}
+                  icon={<HeatMapOutlined style={{ color: '#1a8dff' }} />}
                   title="混淆矩阵"
                   hint="真实类别 × 预测类别的计数。对角线越深越好；非对角线透露主要误分类方向。"
                   option={options.cm}
@@ -434,7 +434,7 @@ export default function TrainingViz({
               </Col>
               <Col span={24} xl={12}>
                 <VizCard
-                  icon={<LineChartOutlined style={{ color: '#10b981' }} />}
+                  icon={<LineChartOutlined style={{ color: '#00a870' }} />}
                   title="学习曲线 (交叉验证)"
                   hint="每折的评估指标走势。各折差异大 = 方差高，指标随折上升 = 数据顺序敏感。"
                   option={options.lc}
@@ -446,7 +446,7 @@ export default function TrainingViz({
             <>
               <Col span={24} xl={12}>
                 <VizCard
-                  icon={<DotChartOutlined style={{ color: '#2563eb' }} />}
+                  icon={<DotChartOutlined style={{ color: '#1a8dff' }} />}
                   title="残差图"
                   hint="残差 = 真实值 − 预测值。理想情况下围绕 0 线均匀散布，出现明显模式（漏斗 / 曲线）说明模型欠拟合。"
                   option={options.res}
@@ -455,7 +455,7 @@ export default function TrainingViz({
               </Col>
               <Col span={24} xl={12}>
                 <VizCard
-                  icon={<LineChartOutlined style={{ color: '#10b981' }} />}
+                  icon={<LineChartOutlined style={{ color: '#00a870' }} />}
                   title="学习曲线 (交叉验证)"
                   hint="每折的 R² / RMSE / MAE 走势。"
                   option={options.lc}
@@ -471,7 +471,7 @@ export default function TrainingViz({
           {resolvedTaskType === 'classification' ? (
             <Col span={24} xl={12}>
               <VizCard
-                icon={<RadarChartOutlined style={{ color: '#f59e0b' }} />}
+                icon={<RadarChartOutlined style={{ color: '#ed7b2f' }} />}
                 title="ROC 曲线"
                 hint="横轴 FPR 纵轴 TPR。曲线越贴近左上角越好，AUC ≥ 0.8 为可用模型。"
                 option={options.roc}
@@ -481,7 +481,7 @@ export default function TrainingViz({
           ) : (
             <Col span={24} xl={12}>
               <VizCard
-                icon={<DotChartOutlined style={{ color: '#f59e0b' }} />}
+                icon={<DotChartOutlined style={{ color: '#ed7b2f' }} />}
                 title="预测 vs 真实"
                 hint="散点越贴近 y=x 虚线越好。偏离可以显示模型的系统性高估或低估。"
                 option={options.pva}
@@ -494,7 +494,7 @@ export default function TrainingViz({
           {data.fi && (
             <Col span={24} xl={12}>
               <VizCard
-                icon={<BarChartOutlined style={{ color: '#8b5cf6' }} />}
+                icon={<BarChartOutlined style={{ color: '#8e7cff' }} />}
                 title="特征重要度 Top-10"
                 hint="模型自带的 feature_importances_ / coef_。越靠上贡献越大，为特征选择提供参考。"
                 option={options.fi}

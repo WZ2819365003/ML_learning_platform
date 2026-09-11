@@ -1,3 +1,4 @@
+import React from 'react'
 /**
  * ReportPrintDocument — the off-screen copy of the report that print / 导出
  * PDF captures (ffe9aa2).
@@ -7,14 +8,20 @@
  * sub-report in payload order. The appendix is forced open because a folded
  * panel prints as nothing. A legacy (non-AI) source prints its markdown only.
  */
-import React from 'react'
+
+import { ConfigProvider } from 'antd'
+import { printTheme } from '../../theme/antd'
+import { useTabActive } from '../../navigation/TabContext'
 
 import MarkdownReport from './MarkdownReport'
 import { AiReportReader } from './AiReportModal'
 import { RunReportBody } from './RunReportPanel'
 
 export default function ReportPrintDocument({ source, taskName }) {
+  const active = useTabActive()
+  if (!active) return null
   return (
+    <ConfigProvider theme={printTheme}>
     <div className="report-print-document" aria-hidden="true">
       {source?.kind === 'ai' ? (
         <>
@@ -29,5 +36,6 @@ export default function ReportPrintDocument({ source, taskName }) {
         <MarkdownReport markdown={source?.markdown || ''} />
       )}
     </div>
+    </ConfigProvider>
   )
 }

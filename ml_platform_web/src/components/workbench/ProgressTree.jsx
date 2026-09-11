@@ -1,14 +1,10 @@
+import { useActiveEffect } from '../../hooks/useActiveEffect'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button, Card, Empty, Modal, Popconfirm, Progress, Space, Spin, Tag, Tooltip,
   Tree, Typography, message,
-} from 'antd'
-import {
-  AppstoreOutlined, CheckCircleOutlined, ClockCircleOutlined,
-  CloseCircleOutlined, DeleteOutlined, ExperimentOutlined, FileTextOutlined,
-  PoweroffOutlined, QuestionCircleOutlined,
-  ReloadOutlined, SyncOutlined, ThunderboltOutlined,
-} from '@ant-design/icons'
+} from '../../ui'
+import { AppstoreOutlined, CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined, ExperimentOutlined, FileTextOutlined, QuestionCircleOutlined, ReloadOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import {
   modelingTaskApi, platformExperimentsApi, platformRunsApi, platformTasksApi,
 } from '../../services/api'
@@ -72,9 +68,9 @@ export default function ProgressTree({
     }
   }, [modelingTaskId])
 
-  useEffect(() => { load() }, [load])
+  useActiveEffect(() => { load() }, [load])
 
-  useEffect(() => {
+  useActiveEffect(() => {
     if (!autoRefresh) return
     if (!data?.has_active_runs) return
     const t = setInterval(load, pollMs)
@@ -439,8 +435,7 @@ function StatusCell({ status, currentStep, progressPct }) {
 function LogButton({ run, onViewLogs }) {
   return (
     <Tooltip title="查看实时日志">
-      <Button size="small" type="text" icon={<FileTextOutlined />}
-        onClick={() => onViewLogs?.(run)} />
+      <Button size="small" onClick={() => onViewLogs?.(run)} type="link" className="table-action">日志</Button>
     </Tooltip>
   )
 }
@@ -454,7 +449,7 @@ function StopButton({ run, onStop, busy }) {
         okText="停止" okButtonProps={{ danger: true }} cancelText="取消"
         onConfirm={() => onStop?.(run)}
       >
-        <Button size="small" type="text" danger loading={busy} icon={<PoweroffOutlined />} />
+        <Button size="small" danger loading={busy} type="link" className="table-action">停止</Button>
       </Popconfirm>
     </Tooltip>
   )
@@ -473,9 +468,7 @@ function DeleteButton({ exp, onDelete, busy, running }) {
           disabled={running}
           onConfirm={() => onDelete?.(exp)}
         >
-          <Button size="small" type="text" danger loading={busy} disabled={running}
-            icon={<DeleteOutlined />}
-            style={running ? { pointerEvents: 'none' } : undefined} />
+          <Button size="small" danger loading={busy} disabled={running} style={running ? { pointerEvents: 'none' } : undefined} type="link" className="table-action">删除</Button>
         </Popconfirm>
       </span>
     </Tooltip>
@@ -522,7 +515,7 @@ function ExperimentNode({ exp, taskName, onDelete, busy }) {
   const running = isActive(exp.status)
   return (
     <div style={{ ...ROW, padding: '4px 0' }}>
-      <AppstoreOutlined style={{ color: '#64748b' }} />
+      <AppstoreOutlined style={{ color: 'var(--text-secondary)' }} />
       <Text strong ellipsis style={{ minWidth: 150 }}>
         {_shortBatchName(exp.name, taskName)}
       </Text>

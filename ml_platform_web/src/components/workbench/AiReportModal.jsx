@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Modal, Space, Spin, message } from 'antd'
+import React, { useCallback, useMemo, useState, useEffect } from 'react'
+import { Alert, Button, Modal, Space, Spin, message } from '../../ui'
 import {
   BulbOutlined,
   DownloadOutlined,

@@ -1,13 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import DetailHeader from '../layout/DetailHeader'
+import { useActiveEffect } from '../../hooks/useActiveEffect'
+import React, { useCallback, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert, Button, Card, Col, Descriptions, Row, Skeleton,
   Space, Statistic, Tabs, Tag, Typography, message,
-} from 'antd'
-import {
-  ArrowLeftOutlined, BarChartOutlined, FileTextOutlined,
-  LineChartOutlined, ReloadOutlined, SafetyCertificateOutlined,
-} from '@ant-design/icons'
+} from '../../ui'
+import { BarChartOutlined, FileTextOutlined, LineChartOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 
 import ResultLogPanel from './ResultLogPanel'
 import ModelExplainPanel from './ModelExplainPanel'
@@ -17,7 +16,7 @@ import { getResultViewEntries } from './resultViewRegistry'
 import { dlApi, modelApi } from '../../services/api'
 import { formatDateTime, metricLabels, percentageMetricValue } from '../../utils/formatters'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 
 const METRIC_PRIORITY = {
   ml: {
@@ -104,7 +103,7 @@ export default function UnifiedResultDetail({ family, taskId }) {
     }
   }, [family, taskId])
 
-  useEffect(() => {
+  useActiveEffect(() => {
     setActiveTab('logs')
     void load()
   }, [load])
@@ -169,25 +168,10 @@ export default function UnifiedResultDetail({ family, taskId }) {
 
   return (
     <div>
-      <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 20 }} wrap>
-        <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/models')}>
-            返回模型管理
-          </Button>
-          <div>
-            <Space size={10} wrap>
-              <Title level={2} style={{ margin: 0 }}>模型训练结果</Title>
-              <Tag color={family === 'dl' ? 'purple' : 'blue'}>
-                {family === 'dl' ? '深度学习' : '机器学习'}
-              </Tag>
-            </Space>
-            <Text type="secondary">{result.name}</Text>
-          </div>
-        </Space>
-        <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>
-          刷新
-        </Button>
-      </Space>
+      <DetailHeader onBack={() => navigate('/models')} backLabel="返回模型管理"
+        title="模型训练结果" subtitle={result.name}
+        tags={<Tag color={family === 'dl' ? 'purple' : 'blue'}>{family === 'dl' ? '深度学习' : '机器学习'}</Tag>}
+        actions={<Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>刷新</Button>} />
 
       {result.status === 'FAILED' && (
         <Alert type="error" showIcon message="训练失败" style={{ marginBottom: 16 }} />

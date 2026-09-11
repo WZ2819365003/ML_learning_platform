@@ -1,3 +1,4 @@
+import { useActiveEffect } from '../hooks/useActiveEffect'
 /**
  * ModelDeploy — 模型部署管理
  * 路由: /deploy
@@ -7,17 +8,14 @@
  *       - TS 测试 payload 从数据集动态组装
  *       - Chronos 模型状态卡 + 下载/预热按钮
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
   Alert, Badge, Button, Card, Col, Descriptions, Drawer, Empty,
   Form, Input, Modal, Popconfirm, Row, Select, Space, Spin,
-  Statistic, Table, Tabs, Tag, Tooltip, Typography, message,
-} from 'antd'
-import {
-  CloudDownloadOutlined, CloudServerOutlined, CopyOutlined,
-  DeleteOutlined, EyeOutlined, PauseCircleOutlined, PlayCircleOutlined,
-  PlusOutlined, ReloadOutlined, ThunderboltOutlined,
-} from '@ant-design/icons'
+  Table, Tabs, Tag, Tooltip, Typography, message,
+} from '../ui'
+import { ApiOutlined, CloudDownloadOutlined, CloudServerOutlined, CopyOutlined, DatabaseOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import MetricCard from '../components/layout/MetricCard'
 import api, { dataApi, deployApi, dlApi, modelApi, trainingApi, tsApi } from '../services/api'
 import BatchPredictPanel from '../components/workbench/BatchPredictPanel'
 import { formatDateTime } from '../utils/formatters'
@@ -28,7 +26,7 @@ const { Text, Title } = Typography
 const statusMeta = (s) => ({
   badge:  s === 'active' ? 'success' : 'default',
   text:   s === 'active' ? '运行中' : '已暂停',
-  color:  s === 'active' ? '#52c41a' : '#8c8c8c',
+  color:  s === 'active' ? '#00a870' : 'var(--text-muted)',
 })
 
 // ── 可复制地址框 ───────────────────────────────────────────────────────────────
@@ -39,7 +37,7 @@ function CopyField({ label, value }) {
       <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>{label}</Text>
       <Space style={{ width: '100%' }} align="start">
         <Text code style={{ wordBreak: 'break-all', flex: 1 }}>{value}</Text>
-        <Button
+        <Button aria-label="复制"
           size="small" icon={<CopyOutlined />}
           onClick={() => { navigator.clipboard.writeText(value); message.success('已复制') }}
         />
@@ -54,18 +52,12 @@ function DeployPanel({ stats, loading, data, columns, onRefresh, onNew }) {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Row gutter={[12, 12]}>
         {[
-          { label: '部署总数', val: stats.total,  color: '#1890ff' },
-          { label: '运行中',   val: stats.active, color: '#52c41a' },
-          { label: '累计调用', val: stats.calls,  color: '#722ed1' },
-        ].map(({ label, val, color }) => (
-          <Col xs={8} key={label}>
-            <Card size="small" style={{ textAlign: 'center', borderTop: `3px solid ${color}` }}>
-              <Statistic
-                title={<Text type="secondary" style={{ fontSize: 12 }}>{label}</Text>}
-                value={val}
-                valueStyle={{ color, fontSize: 20, fontWeight: 700 }}
-              />
-            </Card>
+          { label: '部署总数', val: stats.total,  color: 'var(--brand-500)', icon: <CloudServerOutlined /> },
+          { label: '运行中',   val: stats.active, color: 'var(--success)', icon: <ThunderboltOutlined /> },
+          { label: '累计调用', val: stats.calls,  color: 'var(--info)', icon: <ApiOutlined /> },
+        ].map(({ label, val, color, icon }) => (
+          <Col xs={24} sm={8} key={label}>
+            <MetricCard label={label} value={val} color={color} icon={icon} />
           </Col>
         ))}
       </Row>
@@ -128,18 +120,12 @@ function ChronosStatusCard({ status, statusLoading, preloading, modelName, onMod
         <Space direction="vertical" style={{ width: '100%' }} size={16}>
           <Row gutter={[12, 12]}>
             {[
-              { label: '依赖状态', val: status?.available ? '已安装' : '未安装', color: status?.available ? '#52c41a' : '#ff4d4f' },
-              { label: '当前加载', val: status?.loaded    ? '已加载' : '未加载', color: status?.loaded    ? '#1890ff' : '#8c8c8c' },
-              { label: '模型名称', val: (status?.model ?? modelName).split('/').pop(), color: '#595959' },
-            ].map(({ label, val, color }) => (
-              <Col span={8} key={label}>
-                <Card size="small" style={{ textAlign: 'center' }}>
-                  <Statistic
-                    title={<Text type="secondary" style={{ fontSize: 12 }}>{label}</Text>}
-                    value={val}
-                    valueStyle={{ color, fontSize: 16, fontWeight: 600 }}
-                  />
-                </Card>
+              { label: '依赖状态', val: status?.available ? '已安装' : '未安装', color: status?.available ? 'var(--success)' : 'var(--error)', icon: <SafetyCertificateOutlined /> },
+              { label: '当前加载', val: status?.loaded ? '已加载' : '未加载', color: 'var(--brand-500)', icon: <CloudServerOutlined /> },
+              { label: '模型名称', val: (status?.model ?? modelName).split('/').pop(), color: 'var(--info)', icon: <DatabaseOutlined /> },
+            ].map(({ label, val, color, icon }) => (
+              <Col xs={24} sm={8} key={label}>
+                <MetricCard label={label} value={val} color={color} icon={icon} />
               </Col>
             ))}
           </Row>
@@ -227,7 +213,7 @@ export default function ModelDeploy() {
     } finally { setTsStatusLoading(false) }
   }, [])
 
-  useEffect(() => {
+  useActiveEffect(() => {
     void fetchMl()
     void fetchDl()
     void fetchTs()
@@ -492,30 +478,26 @@ export default function ModelDeploy() {
             </Tooltip>
           )}
           {kind === 'ts' && r.backend_label && (
-            <Tag color="blue" style={{ fontSize: 10 }}>{r.backend_label.split('/').pop()}</Tag>
+            <Tag color="blue">{r.backend_label.split('/').pop()}</Tag>
           )}
         </Space>
       ),
     },
     {
       title: '状态', dataIndex: 'status', width: 100,
-      render: v => { const m = statusMeta(v); return <Badge status={m.badge} text={<Text style={{ color: m.color }}>{m.text}</Text>} /> },
+      render: v => { const m = statusMeta(v); return <Tag color={m.badge}>{m.text}</Tag> },
     },
     { title: '调用次数', dataIndex: 'request_count', width: 95, render: v => v ?? 0 },
     { title: '创建时间', dataIndex: 'created_at', width: 145, render: v => <Text style={{ fontSize: 12 }}>{formatDateTime(v)}</Text> },
     {
       title: '操作', key: 'act', width: 210,
       render: (_, r) => (
-        <Space size={4} onClick={e => e.stopPropagation()}>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => openDrawer(kind, r, 'overview')}>详情</Button>
-          <Button size="small" icon={<ThunderboltOutlined />} onClick={() => openDrawer(kind, r, 'testing')}>测试</Button>
-          <Button
-            size="small"
-            icon={r.status === 'active' ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-            onClick={() => void handleToggle(kind, r)}
-          />
+        <Space onClick={e => e.stopPropagation()} size={16} className="table-actions">
+          <Button size="small" onClick={() => openDrawer(kind, r, 'overview')} type="link" className="table-action">详情</Button>
+          <Button size="small" onClick={() => openDrawer(kind, r, 'testing')} type="link" className="table-action">测试</Button>
+          <Button size="small" onClick={() => void handleToggle(kind, r)} type="link" className="table-action">{r.status === 'active' ? '暂停' : '启用'}</Button>
           <Popconfirm title="确认删除此部署？" okButtonProps={{ danger: true }} onConfirm={() => void handleDelete(kind, r)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
+            <Button size="small" danger type="link" className="table-action">删除</Button>
           </Popconfirm>
         </Space>
       ),

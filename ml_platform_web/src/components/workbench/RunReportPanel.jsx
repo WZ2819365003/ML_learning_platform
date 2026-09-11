@@ -14,7 +14,7 @@
  * halves of the report share one look.
  */
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Card, Empty, Space, Tag, Typography } from 'antd'
+import { Alert, Card, Empty, Space, Tag, Typography } from '../../ui'
 import { TrophyOutlined } from '@ant-design/icons'
 
 import ReportDocument from './ReportDocument'
@@ -118,7 +118,7 @@ export default function RunReportPanel({
                   <span>{item.label}</span>
                   {item.meta && <small>{item.meta}</small>}
                 </span>
-                {item.best && <TrophyOutlined style={{ color: '#f59e0b' }} />}
+                {item.best && <TrophyOutlined style={{ color: '#ed7b2f' }} />}
                 {item.failed && <Text type="danger" style={{ fontSize: 11 }}>失败</Text>}
               </button>
             ))}
