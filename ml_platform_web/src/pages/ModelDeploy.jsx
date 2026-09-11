@@ -178,6 +178,10 @@ export default function ModelDeploy() {
   const [mlTasks, setMlTasks] = useState([])
   const [dlTasks, setDlTasks] = useState([])
 
+  // 时序在线测试可以照抄哪几次跑成功的任务
+  const [tsReplayTasks, setTsReplayTasks] = useState([])
+  const [tsReplayId, setTsReplayId] = useState(null)
+
   // Chronos 状态
   const [tsStatus, setTsStatus]         = useState(null)
   const [tsStatusLoading, setTsStatusLoading] = useState(false)
@@ -255,8 +259,13 @@ export default function ModelDeploy() {
         // 先照抄最近一次跑成功的时序任务：那组参数后端已经接受过一次，打开抽屉
         // 就能直接点发送。没有历史任务（全新环境）才退回猜列名。
         const taskRes = await tsApi.listTasks({ page: 1, page_size: 20 }).catch(() => null)
-        const replay = payloadFromTask(latestSuccessfulTask(taskRes?.items ?? taskRes?.tasks ?? []))
+        const successful = (taskRes?.items ?? taskRes?.tasks ?? [])
+          .filter(t => String(t?.status ?? '').toUpperCase() === 'SUCCESS' && t?.dataset_id && t?.value_column)
+        setTsReplayTasks(successful)
+        const latest = latestSuccessfulTask(successful)
+        const replay = payloadFromTask(latest)
         if (replay) {
+          setTsReplayId(latest.id)
           setTester(s => ({ ...s, ts: { ...s.ts, input: JSON.stringify(replay, null, 2), prepared: true } }))
           return
         }
@@ -656,6 +665,27 @@ export default function ModelDeploy() {
                           : 'ML / DL 请求已根据训练数据集自动预填第一行样本（已删除目标列），可直接点发送。'
                       }
                     />
+                    {drawer.kind === 'ts' && tsReplayTasks.length > 0 ? (
+                      <Space wrap size={8}>
+                        <Text type="secondary">照抄历史任务</Text>
+                        <Select
+                          size="small"
+                          style={{ minWidth: 280 }}
+                          value={tsReplayId}
+                          onChange={(id) => {
+                            const task = tsReplayTasks.find(t => t.id === id)
+                            const payload = payloadFromTask(task)
+                            if (!payload) return
+                            setTsReplayId(id)
+                            setTester(s => ({ ...s, ts: { ...s.ts, input: JSON.stringify(payload, null, 2), result: null } }))
+                          }}
+                          options={tsReplayTasks.map(t => ({
+                            value: t.id,
+                            label: `${t.dataset_name ?? t.dataset_id} · ${t.value_column} · ${t.horizon}步`,
+                          }))}
+                        />
+                      </Space>
+                    ) : null}
                     <Input.TextArea
                       rows={10}
                       value={tester[drawer.kind]?.input ?? ''}
