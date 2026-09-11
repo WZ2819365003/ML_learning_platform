@@ -9,6 +9,8 @@ Orchestrates DLTrainingTask lifecycle:
 from __future__ import annotations
 
 import asyncio
+import itertools
+from collections import defaultdict
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -299,6 +301,11 @@ async def _store_dl_epoch_record(task_id: str, epoch: int, total_epochs: int, me
         await db.commit()
 
 
+# 每个 DL 任务一个单调计数器。DL 日志是逐条 INSERT 的，一个 epoch 内几条日志会
+# 落在同一个时间戳上，只按 created_at 排序读回来的顺序就是乱的。
+_dl_log_seq: dict[str, "itertools.count[int]"] = defaultdict(itertools.count)
+
+
 async def _store_dl_log_record(
     task_id: str,
     level: str,
@@ -312,6 +319,7 @@ async def _store_dl_log_record(
                 level=level,
                 message=message,
                 extra=extra or None,
+                seq=next(_dl_log_seq[task_id]),
             )
         )
         await db.commit()
@@ -839,7 +847,7 @@ async def list_dl_logs(
 
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
-    stmt = stmt.order_by(DLTrainingLog.created_at.asc()).offset(offset).limit(page_size)
+    stmt = stmt.order_by(DLTrainingLog.created_at.asc(), DLTrainingLog.seq.asc()).offset(offset).limit(page_size)
     entries = (await db.execute(stmt)).scalars().all()
     return {
         "task_id": task_id,

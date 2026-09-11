@@ -1,6 +1,7 @@
 """Training logger — per-task file + metrics logging with event bus."""
 
 import asyncio
+import itertools
 import json
 import logging
 import threading
@@ -156,6 +157,10 @@ class TrainingLogger:
         # awaiting a DB flush, plus the bookkeeping that decides when to flush.
         self._db_buffer: list[dict[str, Any]] = []
         self._buffer_lock = threading.Lock()
+        # 日志的排序键。挂钟时间只说明"大概什么时候"，说不清"谁先谁后"——一个几秒
+        # 跑完的任务，几十条日志会落在同一个时间戳上，读回来的顺序就随存储引擎
+        # 心情了。itertools.count 是原子的，log() 可能被多个 worker 线程调用。
+        self._seq = itertools.count()
         self._last_flush_at = time.monotonic()
         self._persist_to_db = persist_to_db
 
@@ -169,6 +174,7 @@ class TrainingLogger:
 
     def log(self, level: str, message: str, **extra):
         """Write a log entry to file, buffer for DB, and publish to bus."""
+        seq = next(self._seq)
         timestamp_dt = datetime.now(timezone.utc)
         timestamp = timestamp_dt.isoformat()
 
@@ -194,6 +200,7 @@ class TrainingLogger:
                         "message": message,
                         "extra": dict(extra) if extra else None,
                         "created_at": timestamp_dt,
+                        "seq": seq,
                     }
                 )
 
@@ -207,6 +214,7 @@ class TrainingLogger:
                 "message": message,
                 "extra": extra if extra else None,
                 "timestamp": timestamp,
+                "seq": seq,
             },
         )
 
@@ -258,6 +266,7 @@ class TrainingLogger:
                             "message": entry["message"],
                             "extra": entry["extra"],
                             "created_at": entry["created_at"],
+                            "seq": entry["seq"],
                         }
                         for entry in buffered
                     ],

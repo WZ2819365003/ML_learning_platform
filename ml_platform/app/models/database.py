@@ -19,6 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy import JSON
 from sqlalchemy import create_engine
+from sqlalchemy.dialects.mysql import DATETIME as MYSQL_DATETIME
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -214,8 +215,13 @@ class TrainingLog(Base):
     level: Mapped[str] = mapped_column(String(16), nullable=False, default="INFO")
     message: Mapped[str] = mapped_column(Text, nullable=False)
     extra: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # 顺序键。挂钟时间只能到"大概什么时候"，说不清"谁先谁后"：一个几秒跑完的
+    # 任务，几十条日志全挤在同一个时间戳上。seq 由写入方单调递增，排序以它为准。
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # MySQL 的 DATETIME 默认 fsp=0，Python 端的微秒会被静默截断。显式要 (6)。
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow
+        DateTime(timezone=True).with_variant(MYSQL_DATETIME(fsp=6), "mysql"),
+        default=_utcnow,
     )
 
     # relationships
@@ -258,8 +264,13 @@ class ExperimentRunLog(Base):
     level: Mapped[str] = mapped_column(String(16), nullable=False, default="INFO")
     message: Mapped[str] = mapped_column(Text, nullable=False)
     extra: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # 顺序键。挂钟时间只能到"大概什么时候"，说不清"谁先谁后"：一个几秒跑完的
+    # 任务，几十条日志全挤在同一个时间戳上。seq 由写入方单调递增，排序以它为准。
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # MySQL 的 DATETIME 默认 fsp=0，Python 端的微秒会被静默截断。显式要 (6)。
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow
+        DateTime(timezone=True).with_variant(MYSQL_DATETIME(fsp=6), "mysql"),
+        default=_utcnow,
     )
 
     def __repr__(self) -> str:
@@ -425,7 +436,14 @@ class DLTrainingLog(Base):
     level: Mapped[str] = mapped_column(String(16), nullable=False, default="INFO")
     message: Mapped[str] = mapped_column(Text, nullable=False)
     extra: Mapped[dict | None] = mapped_column(JSON, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # 顺序键。挂钟时间只能到"大概什么时候"，说不清"谁先谁后"：一个几秒跑完的
+    # 任务，几十条日志全挤在同一个时间戳上。seq 由写入方单调递增，排序以它为准。
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # MySQL 的 DATETIME 默认 fsp=0，Python 端的微秒会被静默截断。显式要 (6)。
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True).with_variant(MYSQL_DATETIME(fsp=6), "mysql"),
+        default=_utcnow,
+    )
 
     task: Mapped[DLTrainingTask] = relationship(back_populates="dl_logs")
 

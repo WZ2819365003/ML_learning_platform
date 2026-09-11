@@ -294,7 +294,7 @@ async def inspect_run(
         await db.execute(
             select(ExperimentRunLog)
             .where(ExperimentRunLog.run_id == run_id)
-            .order_by(ExperimentRunLog.created_at.asc())
+            .order_by(ExperimentRunLog.created_at.asc(), ExperimentRunLog.seq.asc())
             .limit(log_limit)
         )
     ).scalars().all()
@@ -319,7 +319,7 @@ async def inspect_run(
                     log_rows = await db.execute(
                         select(DLTrainingLog)
                         .where(DLTrainingLog.task_id == dl_task.id)
-                        .order_by(DLTrainingLog.created_at.desc())
+                        .order_by(DLTrainingLog.created_at.desc(), DLTrainingLog.seq.desc())
                         .limit(log_limit)
                     )
                     logs = list(log_rows.scalars().all())
@@ -340,7 +340,7 @@ async def inspect_run(
             log_rows = await db.execute(
                 select(TrainingLog)
                 .where(TrainingLog.task_id == tt.id)
-                .order_by(TrainingLog.created_at.desc())
+                .order_by(TrainingLog.created_at.desc(), TrainingLog.seq.desc())
                 .limit(log_limit)
             )
             logs = list(log_rows.scalars().all())
@@ -363,7 +363,7 @@ async def inspect_run(
                 log_rows = await db.execute(
                     select(TrainingLog)
                     .where(TrainingLog.task_id == cid)
-                    .order_by(TrainingLog.created_at.desc())
+                    .order_by(TrainingLog.created_at.desc(), TrainingLog.seq.desc())
                     .limit(log_limit)
                 )
                 logs = list(log_rows.scalars().all())

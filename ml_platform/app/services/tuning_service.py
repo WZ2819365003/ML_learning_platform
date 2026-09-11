@@ -1226,7 +1226,7 @@ async def _mirror_logs_to_v3(*, domain_task_id: str, run_id: str) -> None:
                 await db.execute(
                     select(TrainingLog)
                     .where(TrainingLog.task_id == domain_task_id)
-                    .order_by(TrainingLog.created_at)
+                    .order_by(TrainingLog.created_at, TrainingLog.seq)
                 )
             ).scalars().all()
             if not legacy_rows:
@@ -1239,6 +1239,7 @@ async def _mirror_logs_to_v3(*, domain_task_id: str, run_id: str) -> None:
                     message=ll.message,
                     extra=ll.extra,
                     created_at=ll.created_at,
+                    seq=ll.seq,
                 ))
             await db.commit()
     except Exception as exc:  # noqa: BLE001
