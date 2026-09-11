@@ -20,6 +20,13 @@ import api, { dataApi, deployApi, dlApi, modelApi, trainingApi, tsApi } from '..
 import BatchPredictPanel from '../components/workbench/BatchPredictPanel'
 import { formatDateTime } from '../utils/formatters'
 import { absoluteEndpoint } from '../utils/endpointUrl'
+import {
+  latestSuccessfulTask,
+  missingTsFields,
+  payloadFromPreview,
+  payloadFromTask,
+  TS_TEST_FALLBACK,
+} from '../utils/tsTestPayload'
 
 const { Text, Title } = Typography
 
@@ -161,7 +168,7 @@ export default function ModelDeploy() {
   const [tester, setTester] = useState({
     ml: { input: '[\n  {}\n]',  result: null, loading: false, prepared: false },
     dl: { input: '[\n  {}\n]',  result: null, loading: false, prepared: false },
-    ts: { input: '{\n  "dataset_id": "",\n  "value_column": "",\n  "time_column": null,\n  "horizon": 24,\n  "frequency": "D"\n}',
+    ts: { input: JSON.stringify(TS_TEST_FALLBACK, null, 2),
           result: null, loading: false, prepared: false },
   })
 
@@ -245,63 +252,26 @@ export default function ModelDeploy() {
         }
       }
       if (kind === 'ts') {
-        // 动态选择第一份真正像时序的数据集组装 payload
-        // 时序预测需要：
-        //   time_column  — datetime dtype 或名字含 time/date/timestamp/ds
-        //   value_column — 数值型（int/float）且 unique_rate < 0.9（过滤 UDI 这种 ID）
-        //   frequency    — 默认 'D'，让用户自己按需改成 H/T/M/Q/Y
-        const dsRes = await dataApi.listDatasets({ page: 1, page_size: 20 })
-        const datasets = dsRes.items ?? dsRes.datasets ?? []
-        if (datasets.length === 0) return
-        let selectedDs = null
-        let valueCol = null
-        let timeCol  = null
-
-        const inferColumns = (preview, ds) => {
-          const colsInfo = preview?.columns_info ?? {}
-          const stats    = preview?.statistics ?? {}
-          const rowCount = preview?.row_count || ds.row_count || 0
-          const cols     = Object.keys(colsInfo)
-
-          const isDatetime = (name) => {
-            const dt = String(colsInfo[name]?.dtype ?? '').toLowerCase()
-            if (dt.startsWith('datetime') || dt.includes('date')) return true
-            return ['time','date','datetime','timestamp','ds'].includes(name.toLowerCase())
-          }
-          const isNumericNonId = (name) => {
-            const dt = String(colsInfo[name]?.dtype ?? '').toLowerCase()
-            const numeric = dt.startsWith('int') || dt.startsWith('float') || dt.startsWith('uint')
-            if (!numeric) return false
-            const unique = Number(stats[name]?.unique_count ?? 0)
-            const rate   = rowCount > 0 ? unique / rowCount : 0
-            return rate < 0.9  // ID-like columns (UDI etc.) are filtered out
-          }
-
-          timeCol  = cols.find(isDatetime) ?? null
-          valueCol = cols.find(c => c !== timeCol && isNumericNonId(c)) ?? null
-          return { timeCol, valueCol }
+        // 先照抄最近一次跑成功的时序任务：那组参数后端已经接受过一次，打开抽屉
+        // 就能直接点发送。没有历史任务（全新环境）才退回猜列名。
+        const taskRes = await tsApi.listTasks({ page: 1, page_size: 20 }).catch(() => null)
+        const replay = payloadFromTask(latestSuccessfulTask(taskRes?.items ?? taskRes?.tasks ?? []))
+        if (replay) {
+          setTester(s => ({ ...s, ts: { ...s.ts, input: JSON.stringify(replay, null, 2), prepared: true } }))
+          return
         }
 
+        const dsRes = await dataApi.listDatasets({ page: 1, page_size: 20 })
+        const datasets = dsRes.items ?? dsRes.datasets ?? []
         for (const ds of datasets) {
           try {
-            const preview = await dataApi.previewDataset(ds.id)
-            const inferred = inferColumns(preview, ds)
-            if (inferred.timeCol && inferred.valueCol) {
-              selectedDs = ds
-              timeCol = inferred.timeCol
-              valueCol = inferred.valueCol
-              break
+            const payload = payloadFromPreview(ds, await dataApi.previewDataset(ds.id))
+            if (payload) {
+              setTester(s => ({ ...s, ts: { ...s.ts, input: JSON.stringify(payload, null, 2), prepared: true } }))
+              return
             }
           } catch { /* try next dataset */ }
         }
-        const payload = {
-          dataset_id: selectedDs?.id ?? '',
-          value_column: valueCol ?? '',
-          time_column: timeCol ?? '',
-          horizon: 24,
-          frequency: 'D',
-        }
-        setTester(s => ({ ...s, ts: { ...s.ts, input: JSON.stringify(payload, null, 2), prepared: true } }))
       }
     } catch { /* silent */ }
     finally { preparingRef.current = false }
@@ -391,8 +361,10 @@ export default function ModelDeploy() {
         })
       } else {
         const payload = JSON.parse(tester[kind].input)
-        if (!payload.dataset_id || !payload.value_column || !payload.time_column) {
-          throw new Error('时序测试需要 dataset_id、value_column 和 time_column，请先补齐参数')
+        // time_column 后端签名是 str | None，只用来画显示用的横轴，缺了不影响预测。
+        const missing = missingTsFields(payload)
+        if (missing.length > 0) {
+          throw new Error(`时序测试还缺 ${missing.join('、')}，请先补齐`)
         }
         result = await tsApi.predictDeployment(drawer.record.deployment_id, payload)
       }
@@ -680,7 +652,7 @@ export default function ModelDeploy() {
                       type="info" showIcon message="在线测试说明"
                       description={
                         drawer.kind === 'ts'
-                          ? 'TimesFM 请求需要 dataset_id、value_column、time_column、horizon、frequency。系统只会自动填入同时具备时间列和数值目标列的数据集；若未推断到，请手工补齐，避免把 UDI 等 ID 列当作预测值。'
+                          ? '已按最近一次跑成功的时序任务预填，可以直接点发送；没有历史任务时会从数据集推断列名。time_column 只用于显示横轴，留空也能预测。'
                           : 'ML / DL 请求已根据训练数据集自动预填第一行样本（已删除目标列），可直接点发送。'
                       }
                     />
