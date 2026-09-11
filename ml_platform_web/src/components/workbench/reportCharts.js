@@ -167,12 +167,13 @@ function tooltipBase(trigger = 'item') {
     trigger,
     confine: true,
     appendToBody: false,
-    backgroundColor: 'rgba(255, 255, 255, 0.98)',
-    borderColor: T.colors.grid,
+    // 背景与文字色不在这里定：applyChartTheme 会按当前主题补上。写死浅色时，
+    // 深色主题下框是白的、而 .ai-report-tip-label 取的 --text-secondary 是浅色，
+    // 标签打在白底上等于隐形。
     borderWidth: 1,
     padding: [8, 12],
-    textStyle: { color: T.colors.ink, fontSize: T.fontSize, fontFamily: T.fontFamily },
-    extraCssText: 'box-shadow: 0 6px 18px rgba(15,23,42,0.12); max-width: 360px; white-space: normal;',
+    textStyle: { fontSize: T.fontSize, fontFamily: T.fontFamily },
+    extraCssText: 'box-shadow: 0 6px 18px rgba(0,0,0,0.35); max-width: 360px; white-space: normal;',
   }
 }
 

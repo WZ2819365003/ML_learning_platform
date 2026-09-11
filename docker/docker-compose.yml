@@ -134,10 +134,18 @@ services:
       - "127.0.0.1:8000:8000"
     volumes:
       - ml_backend_storage:/app/storage
+      # Chronos 权重约 176MB。放卷不打进镜像：这台机器连不上 huggingface.co，
+      # 权重是离线灌进去的，镜像每次重建都重传没有意义。
+      - ml_hf_cache:/opt/hf-cache
     env_file:
       - path: .deploy_secrets
         required: false
     environment:
+      # transformers 在这里找权重。离线是因为 huggingface.co 从本机不可达，
+      # 放任联网只会让首次加载卡到超时，而不是干脆报错。
+      HF_HOME: "/opt/hf-cache"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
       DATABASE_URL: "${DATABASE_URL:-mysql+aiomysql://root:123456@mysql:3306/ml_platform}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
       CELERY_BROKER_URL: "${CELERY_BROKER_URL:-redis://redis:6379/0}"
@@ -200,10 +208,18 @@ services:
     command: celery -A app.scheduler.celery_app worker -Q train,explain,forecast,default --concurrency=2 --loglevel=info
     volumes:
       - ml_backend_storage:/app/storage
+      # Chronos 权重约 176MB。放卷不打进镜像：这台机器连不上 huggingface.co，
+      # 权重是离线灌进去的，镜像每次重建都重传没有意义。
+      - ml_hf_cache:/opt/hf-cache
     env_file:
       - path: .deploy_secrets
         required: false
     environment:
+      # transformers 在这里找权重。离线是因为 huggingface.co 从本机不可达，
+      # 放任联网只会让首次加载卡到超时，而不是干脆报错。
+      HF_HOME: "/opt/hf-cache"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
       DATABASE_URL: "${DATABASE_URL:-mysql+aiomysql://root:123456@mysql:3306/ml_platform}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
       CELERY_BROKER_URL: "${CELERY_BROKER_URL:-redis://redis:6379/0}"
@@ -288,6 +304,8 @@ volumes:
   ml_minio_data:
   ml_backend_storage:
     name: ml_platform_backend_storage
+  ml_hf_cache:
+    name: ml_platform_hf_cache
 
 networks:
   default:

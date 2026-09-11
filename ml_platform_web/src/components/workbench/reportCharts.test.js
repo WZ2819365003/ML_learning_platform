@@ -10,6 +10,7 @@ import {
   formatValue,
   renderReportChart,
 } from './reportCharts'
+import { darkChartOption } from '../../theme/chartOptions'
 import {
   allSpecs,
   confusionMatrix4Spec,
@@ -520,5 +521,28 @@ describe('renderReportChart · colliding mark-line labels', () => {
     ]).series[0].markLine.data
     expect(data.map((d) => d.name)).toEqual(['均值', 'P25', '中位数'])
     expect(data.map((d) => d.xAxis)).toEqual([900, 0, 4])
+  })
+})
+
+describe('renderReportChart · 悬停框把配色交给主题', () => {
+  it('不写死背景色和文字色', () => {
+    // 写死浅色时，深色主题下框是白的，而 .ai-report-tip-label 取的
+    // --text-secondary 是浅色 —— 标签打在白底上等于隐形。
+    const { tooltip } = renderReportChart(leaderboardSpec)
+    expect(tooltip.backgroundColor).toBeUndefined()
+    expect(tooltip.textStyle.color).toBeUndefined()
+    expect(tooltip.textStyle.fontSize).toBe(REPORT_CHART_THEME.fontSize)
+  })
+
+  it('主题适配器补上深色背景与浅色文字', () => {
+    const themed = darkChartOption(renderReportChart(leaderboardSpec))
+    expect(themed.tooltip.backgroundColor).toBeTruthy()
+    expect(themed.tooltip.textStyle.color).toBeTruthy()
+  })
+
+  it('补色之后字段仍然逐行输出', () => {
+    const themed = darkChartOption(renderReportChart(leaderboardSpec))
+    const html = themed.tooltip.formatter([{ data: themed.series[0].data[0] }])
+    for (const f of leaderboardSpec.tooltip_fields) expect(html).toContain(f.label)
   })
 })

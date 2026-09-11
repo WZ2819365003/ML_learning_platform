@@ -3,7 +3,9 @@ export const TABS_STORAGE_KEY = 'ml_platform_workspace_v1'
 export const menuGroups = [
   { key: '/data', label: '数据管理', icon: 'data' },
   { key: 'modeling', label: '建模', icon: 'modeling', children: [
-    { key: HOME, label: '任务列表' }, { key: '/v3/training-plans', label: '训练方案' },
+    // 训练方案不在菜单里：它是「调参策略」的素材，入口是那一页的方案下拉框和
+    // 「管理训练方案 →」。路由与页面标题保留，那个链接打开的页签才有名字。
+    { key: HOME, label: '任务列表' },
     { key: '/models', label: '模型管理' }, { key: '/deploy', label: '模型部署' }, { key: '/v3/runs', label: '运行诊断' },
   ] },
   { key: 'ts', label: '时序任务', icon: 'ts', children: [
