@@ -45,9 +45,17 @@ describe('Workspace identity and navigation compatibility', () => {
     expect(result).toHaveLength(2)
     expect(result[1].location.search).toBe('?status=FAILED')
   })
-  it('exposes every primary business menu, including training plans', () => {
+  it('exposes every primary business menu', () => {
     const keys = menuGroups.flatMap(group => group.children?.map(c => c.key) || [group.key])
-    expect(keys).toEqual(expect.arrayContaining([HOME, '/v3/training-plans', '/data', '/models', '/deploy', '/v3/runs', '/ts/tasks', '/settings']))
+    expect(keys).toEqual(expect.arrayContaining([HOME, '/data', '/models', '/deploy', '/v3/runs', '/ts/tasks', '/settings']))
+  })
+
+  it('keeps 训练方案 out of the menu but reachable', () => {
+    // 它是「调参策略」的素材，不是一个去处：那一页有方案下拉框和
+    // 「管理训练方案 →」。路由和标题得留着，那个链接开出来的页签才有名字。
+    const keys = menuGroups.flatMap(group => group.children?.map(c => c.key) || [group.key])
+    expect(keys).not.toContain('/v3/training-plans')
+    expect(route('/v3/training-plans').title).toBe('训练方案')
   })
 })
 
