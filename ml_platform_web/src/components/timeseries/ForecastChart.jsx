@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Segmented, Space, Typography } from '../../ui'
+import { MarkAreaComponent } from 'echarts/components'
 import echarts from '../../utils/echarts'
 import { buildOption, buildSeries } from './forecastChartOption'
+
+// markArea 不在 app 级 bundle 里（见 utils/echarts.js 的 use 列表），预测段那块
+// 底色要自己注册，否则 markLine 画得出来、markArea 静默丢掉。
+echarts.use([MarkAreaComponent])
 
 const { Text } = Typography
 
