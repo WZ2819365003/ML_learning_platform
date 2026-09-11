@@ -1,10 +1,11 @@
-import { useMarkTabSaved } from '../navigation/TabContext'
 import { useActiveEffect } from '../hooks/useActiveEffect'
-import React, { useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import {
+  Badge,
   Button,
   Card,
   Col,
+  Descriptions,
   Divider,
   Form,
   Input,
@@ -19,8 +20,9 @@ import {
   Typography,
   message,
 } from '../ui'
-import { PlusOutlined, SaveOutlined, SettingOutlined, TagOutlined } from '@ant-design/icons'
-import { modelApi } from '../services/api'
+import { ApiOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TagOutlined } from '@ant-design/icons'
+import { modelApi, systemApi } from '../services/api'
+import { REFRESH_SECONDS_RANGE, resetPrefs, setPrefs, useAppSettings } from '../hooks/useAppSettings'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -196,128 +198,137 @@ function TagLibrarySection() {
   )
 }
 
-// ── Main Settings Page ────────────────────────────────────────────────────────
-const Settings = () => {
-  const [form] = Form.useForm()
-  const markSaved = useMarkTabSaved()
-  const [loading, setLoading] = useState(false)
+// ── 服务连接（只读，反映真实解析结果，不是可改的设置项）─────────────────────
+function ConnectionSection() {
+  const [state, setState] = useState({ loading: true, health: null, error: null, latency: null })
 
-  const defaultSettings = {
-    apiBaseUrl: 'http://localhost:8000',
-    websocketUrl: 'ws://localhost:8000',
-    autoSave: true,
-    theme: 'dark',
-    language: 'zh-CN',
-    notification: true,
-    maxUploadSize: 200,
-    refreshInterval: 5,
-  }
+  const origin = typeof window === 'undefined' ? '' : window.location.origin
+  const wsOrigin = origin.replace(/^http/, 'ws')
 
-  const handleSubmit = () => {
-    form.validateFields()
-      .then(() => {
-        setLoading(true)
-        setTimeout(() => {
-          setLoading(false)
-          markSaved(form)
-          message.success('设置保存成功')
-        }, 1000)
+  const check = useCallback(async () => {
+    setState(prev => ({ ...prev, loading: true }))
+    const started = performance.now()
+    try {
+      const health = await systemApi.health()
+      setState({ loading: false, health, error: null, latency: Math.round(performance.now() - started) })
+    } catch (err) {
+      setState({
+        loading: false,
+        health: null,
+        latency: null,
+        error: err?.message ?? '无法连接后端',
       })
-      .catch((info) => {
-        console.log('验证失败:', info)
-      })
-  }
+    }
+  }, [])
+
+  useActiveEffect(() => { void check() }, [check])
+
+  const { health, error, loading, latency } = state
+  const uploadMb = health?.max_upload_size_mb
 
   return (
-    <Space direction="vertical" size={20} style={{ width: '100%' }}>
-      <Title level={2} style={{ margin: 0 }}>
-        <Space>
-          <SettingOutlined />
-          系统设置
-        </Space>
-      </Title>
+    <Card
+      title={<Space><ApiOutlined style={{ color: '#1a8dff' }} /><span>服务连接</span></Space>}
+      extra={<Button size="small" onClick={() => void check()} loading={loading} icon={<ReloadOutlined />}>重新检测</Button>}
+    >
+      <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+        前端始终按当前访问的地址回连后端，没有可填的服务器地址——填了反而会连错。
+        这里显示的是实际生效的结果。
+      </Text>
 
-      {/* ── General settings form ── */}
-      <Card hoverable>
-        <Form form={form} layout="vertical" initialValues={defaultSettings}>
-          <Title level={4}>API 设置</Title>
-          <Form.Item
-            name="apiBaseUrl"
-            label="API 基础地址"
-            rules={[{ required: true, message: '请输入 API 基础地址' }]}
-          >
-            <Input placeholder="请输入 API 基础地址" />
-          </Form.Item>
-
-          <Form.Item
-            name="websocketUrl"
-            label="WebSocket 地址"
-            rules={[{ required: true, message: '请输入 WebSocket 地址' }]}
-          >
-            <Input placeholder="请输入 WebSocket 地址" />
-          </Form.Item>
-
-          <Divider />
-
-          <Title level={4}>界面设置</Title>
-          <Form.Item
-            name="theme"
-            label="主题"
-            rules={[{ required: true, message: '请选择主题' }]}
-          >
-            <Select disabled options={[{ value: 'dark', label: '深色主题' }]} />
-          </Form.Item>
-
-          <Form.Item
-            name="language"
-            label="语言"
-            rules={[{ required: true, message: '请选择语言' }]}
-          >
-            <Select placeholder="请选择语言">
-              <Option value="zh-CN">中文</Option>
-              <Option value="en-US">英文</Option>
-            </Select>
-          </Form.Item>
-
-          <Divider />
-
-          <Title level={4}>功能设置</Title>
-          <Form.Item name="autoSave" label="自动保存" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-
-          <Form.Item name="notification" label="通知提醒" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-
-          <Form.Item name="maxUploadSize" label="最大上传大小 (MB)">
-            <Slider min={10} max={500} step={10} />
-          </Form.Item>
-
-          <Form.Item name="refreshInterval" label="刷新间隔 (秒)">
-            <Slider min={1} max={30} step={1} />
-          </Form.Item>
-
-          <div style={{ marginTop: 24, display: 'flex', justifyContent: 'flex-end' }}>
-            <Space>
-              <Button onClick={() => form.resetFields()}>重置</Button>
-              <Button
-                type="primary"
-                onClick={handleSubmit}
-                loading={loading}
-                icon={<SaveOutlined />}
-              >
-                保存设置
-              </Button>
-            </Space>
-          </div>
-        </Form>
-      </Card>
-
-      {/* ── Tag library management ── */}
-      <TagLibrarySection />
-    </Space>
+      <Descriptions bordered size="small" column={{ xs: 1, md: 2 }}>
+        <Descriptions.Item label="接口地址">
+          <Text code copyable>{`${origin}/api`}</Text>
+        </Descriptions.Item>
+        <Descriptions.Item label="WebSocket 地址">
+          <Text code copyable>{`${wsOrigin}/ws`}</Text>
+        </Descriptions.Item>
+        <Descriptions.Item label="后端状态">
+          {loading ? <Spin size="small" /> : error
+            ? <Badge status="error" text={<Text type="danger">{error}</Text>} />
+            : <Badge status="success" text={`正常${latency == null ? '' : ` · ${latency} ms`}`} />}
+        </Descriptions.Item>
+        <Descriptions.Item label="后端版本">
+          {health?.version ?? '—'}
+          {health?.environment ? <Tag style={{ marginLeft: 8 }}>{health.environment}</Tag> : null}
+        </Descriptions.Item>
+        <Descriptions.Item label="上传大小上限" span={2}>
+          {uploadMb == null ? '—' : `${uploadMb} MB`}
+          <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+            由后端 MAX_UPLOAD_SIZE 决定，前端改不了
+          </Text>
+        </Descriptions.Item>
+      </Descriptions>
+    </Card>
   )
 }
+
+// ── 界面偏好（写 localStorage，页面轮询实时读取）──────────────────────────────
+function PreferenceSection() {
+  const prefs = useAppSettings()
+
+  return (
+    <Card title={<Space><SettingOutlined style={{ color: '#1a8dff' }} /><span>界面偏好</span></Space>}>
+      <Text type="secondary" style={{ display: 'block', marginBottom: 20 }}>
+        存在本机浏览器里，改完立即生效，不需要保存，也不影响其他人。
+      </Text>
+
+      <div className="settings-field">
+        <div className="settings-field-label">
+          <Text strong>自动刷新</Text>
+          <Switch
+            checked={prefs.autoRefresh}
+            onChange={(checked) => setPrefs({ autoRefresh: checked })}
+          />
+        </div>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          关掉之后，任务详情、训练过程、时序任务列表等页面只在你手动刷新时拉取数据。
+        </Text>
+      </div>
+
+      <Divider style={{ margin: '20px 0' }} />
+
+      <div className="settings-field">
+        <div className="settings-field-label">
+          <Text strong>刷新间隔</Text>
+          <Text style={{ fontVariantNumeric: 'tabular-nums' }}>{prefs.refreshSeconds} 秒</Text>
+        </div>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          训练中想看得实时一点就调小；任务多、网络慢时调大可以少发一些请求。
+        </Text>
+        <Slider
+          min={REFRESH_SECONDS_RANGE.min}
+          max={REFRESH_SECONDS_RANGE.max}
+          step={1}
+          disabled={!prefs.autoRefresh}
+          value={prefs.refreshSeconds}
+          onChange={(value) => setPrefs({ refreshSeconds: value })}
+          marks={{ 2: '2s', 5: '5s', 15: '15s', 30: '30s', 60: '60s' }}
+          style={{ marginTop: 8 }}
+        />
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 28 }}>
+        <Button onClick={() => { resetPrefs(); message.success('已恢复默认') }}>恢复默认</Button>
+      </div>
+    </Card>
+  )
+}
+
+// ── Main Settings Page ────────────────────────────────────────────────────────
+const Settings = () => (
+  <Space direction="vertical" size={20} style={{ width: '100%' }}>
+    <Title level={2} style={{ margin: 0 }}>
+      <Space>
+        <SettingOutlined />
+        系统设置
+      </Space>
+    </Title>
+
+    <ConnectionSection />
+    <PreferenceSection />
+    <TagLibrarySection />
+  </Space>
+)
 
 export default Settings

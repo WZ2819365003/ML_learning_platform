@@ -1,6 +1,7 @@
 import DetailHeader from '../components/layout/DetailHeader'
 import MetricCard from '../components/layout/MetricCard'
 import { useActiveEffect } from '../hooks/useActiveEffect'
+import { usePollMs } from '../hooks/useAppSettings'
 import React, { useCallback, useState, useEffect } from 'react'
 import { Card, Button, Tabs, Tag, Space, Table, Descriptions, Typography, Empty, Row, Col, Spin, Alert, Statistic, Modal, List, message } from '../ui'
 import { ReloadOutlined, PlusOutlined, TrophyOutlined, NodeIndexOutlined, LineChartOutlined, ExperimentOutlined, CheckCircleFilled, CloseCircleFilled, ClockCircleFilled, FileTextOutlined, ThunderboltOutlined, BulbOutlined, HistoryOutlined } from '@ant-design/icons'
@@ -38,6 +39,7 @@ function renderStatus(status) {
 }
 
 export default function ModelingTaskDetail() {
+  const pollMs = usePollMs()
   const { taskId } = useParams()
   const navigate = useNavigate()
   const requestedTab = useLocation().state?.tab
@@ -128,9 +130,10 @@ export default function ModelingTaskDetail() {
   // Auto-refresh when task is running
   useActiveEffect(() => {
     if (task?.status !== 'RUNNING') return
-    const id = setInterval(() => { loadTask(); loadLeaderboard(); loadRuns() }, 5000)
+    if (!pollMs) return
+    const id = setInterval(() => { loadTask(); loadLeaderboard(); loadRuns() }, pollMs)
     return () => clearInterval(id)
-  }, [task?.status, loadTask, loadLeaderboard, loadRuns])
+  }, [task?.status, pollMs, loadTask, loadLeaderboard, loadRuns])
 
   const refreshAll = async () => {
     await loadTask()

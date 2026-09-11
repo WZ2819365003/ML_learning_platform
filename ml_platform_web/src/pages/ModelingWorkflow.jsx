@@ -1,6 +1,7 @@
 import DetailHeader from '../components/layout/DetailHeader'
 import { useMarkTabSaved, useTabGuard } from '../navigation/TabContext'
 import { useActiveEffect } from '../hooks/useActiveEffect'
+import { usePollMs } from '../hooks/useAppSettings'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card, Steps, Button, Space, Select, Input, Upload, Form, Row, Col, Tag, Tabs,
@@ -52,6 +53,7 @@ const STEP_ITEMS = [
 ]
 
 export default function ModelingWorkflow() {
+  const pollMs = usePollMs()
   const markSaved = useMarkTabSaved()
   const { taskId } = useParams()
   const navigate = useNavigate()
@@ -117,9 +119,10 @@ export default function ModelingWorkflow() {
   // Poll while task running so 训练/可视化 stay fresh
   useActiveEffect(() => {
     if (isNew || task?.status !== 'RUNNING') return
-    const id = setInterval(() => { loadTask(); loadRuns() }, 5000)
+    if (!pollMs) return
+    const id = setInterval(() => { loadTask(); loadRuns() }, pollMs)
     return () => clearInterval(id)
-  }, [isNew, task?.status, loadTask, loadRuns])
+  }, [isNew, task?.status, pollMs, loadTask, loadRuns])
 
   const taskTypeWatch = Form.useWatch('task_type', form) || task?.task_type || 'classification'
   const datasetIdWatch = Form.useWatch('dataset_id', form)

@@ -65,7 +65,7 @@ export default function Header() {
     <div className="app-brand">
       <img className="brand-logo" src="/brand/hengshi-shengjing-light.png" alt="恒实盛景" />
       <span className="brand-divider" aria-hidden="true" />
-      <span className="brand-title">智能建模平台</span>
+      <span className="brand-title">AI算法训练平台</span>
     </div>
     <Space size={16} className="header-actions">
       <Tag color={envTag.color}>{envTag.label}</Tag>

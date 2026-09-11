@@ -1,120 +1,89 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Segmented, Space, Typography } from '../../ui'
 import echarts from '../../utils/echarts'
+import { buildOption, buildSeries } from './forecastChartOption'
 
-function buildLabelSeries(result) {
-  const historical = result?.historical ?? []
-  const forecast = result?.point_forecast ?? []
-  const historicalAxis = result?.time_axis?.historical
+const { Text } = Typography
 
-  const historyLabels = historicalAxis?.length
-    ? historicalAxis.slice(-historical.length)
-    : historical.map((_, index) => `t-${historical.length - index}`)
-
-  const forecastLabels = forecast.map((_, index) => `t+${index + 1}`)
-
-  return {
-    historical,
-    forecast,
-    q10: result?.q10 ?? [],
-    q90: result?.q90 ?? [],
-    labels: [...historyLabels, ...forecastLabels],
-  }
-}
+const MIN_HEIGHT = 280
+const DEFAULT_HEIGHT = 420
 
 export default function ForecastChart({ result }) {
   const containerRef = useRef(null)
+  const horizon = result?.point_forecast?.length ?? 0
+  const totalHistory = result?.historical?.length ?? 0
+
+  const windowOptions = useMemo(() => {
+    const focused = Math.max(horizon * 6, 48)
+    const candidates = [
+      { label: '聚焦预测段', value: focused },
+      { label: '近 500 点', value: 500 },
+      { label: '近 5000 点', value: 5000 },
+    ].filter((item, index, list) => item.value < totalHistory
+      && list.findIndex(other => other.value === item.value) === index)
+    return [...candidates, { label: `全部 ${totalHistory.toLocaleString('zh-CN')} 点`, value: Infinity }]
+  }, [horizon, totalHistory])
+
+  const [windowSize, setWindowSize] = useState(() => Math.max(horizon * 6, 48))
+  const [height, setHeight] = useState(DEFAULT_HEIGHT)
 
   useEffect(() => {
-    if (!containerRef.current || !result) {
-      return undefined
-    }
+    setWindowSize(Math.max(horizon * 6, 48))
+  }, [horizon])
+
+  useEffect(() => {
+    if (!containerRef.current || !result) return undefined
 
     const chart = echarts.init(containerRef.current)
-    const series = buildLabelSeries(result)
-
-    chart.setOption(
-      {
-        color: ['#1a8dff', '#18c3e3', '#ed7b2f', '#ed7b2f'],
-        tooltip: {
-          trigger: 'axis',
-          backgroundColor: 'rgba(15, 23, 42, 0.92)',
-          borderWidth: 0,
-          textStyle: { color: 'var(--text-primary)' },
-        },
-        legend: {
-          bottom: 0,
-          itemGap: 18,
-          data: ['历史值', '预测值', '置信上界', '置信下界'],
-        },
-        grid: {
-          left: 52,
-          right: 24,
-          top: 28,
-          bottom: 64,
-        },
-        xAxis: {
-          type: 'category',
-          boundaryGap: false,
-          data: series.labels,
-        },
-        yAxis: {
-          type: 'value',
-          splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.18)' } },
-        },
-        series: [
-          {
-            name: '历史值',
-            type: 'line',
-            smooth: true,
-            symbol: 'none',
-            lineStyle: { width: 3 },
-            data: [...series.historical, ...series.forecast.map(() => null)],
-          },
-          {
-            name: '预测值',
-            type: 'line',
-            smooth: true,
-            symbol: 'none',
-            lineStyle: { width: 3, type: 'dashed' },
-            data: [...series.historical.map(() => null), ...series.forecast],
-          },
-          {
-            name: '置信上界',
-            type: 'line',
-            smooth: true,
-            symbol: 'none',
-            lineStyle: { opacity: 0 },
-            data: [...series.historical.map(() => null), ...series.q90],
-            stack: 'confidence-band',
-            areaStyle: {
-              color: 'rgba(217, 119, 6, 0.14)',
-            },
-          },
-          {
-            name: '置信下界',
-            type: 'line',
-            smooth: true,
-            symbol: 'none',
-            lineStyle: { opacity: 0 },
-            data: [...series.historical.map(() => null), ...series.q10],
-            stack: 'confidence-band',
-            areaStyle: {
-              color: 'var(--surface-0)',
-            },
-          },
-        ],
-      },
-      true,
-    )
+    chart.setOption(buildOption(buildSeries(result, windowSize)), true)
 
     const handleResize = () => chart.resize()
     window.addEventListener('resize', handleResize)
-
     return () => {
       window.removeEventListener('resize', handleResize)
       chart.dispose()
     }
-  }, [result])
+  }, [result, windowSize])
 
-  return <div ref={containerRef} style={{ width: '100%', height: 320 }} />
+  // 容器自身可拖拽改高，utils/echarts 的 ResizeObserver 会跟着重绘。
+  const onHandleDrag = (event) => {
+    event.preventDefault()
+    const startY = event.clientY
+    const startHeight = containerRef.current?.clientHeight ?? height
+    const onMove = (move) => {
+      setHeight(Math.max(MIN_HEIGHT, Math.round(startHeight + move.clientY - startY)))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  return (
+    <div className="forecast-chart">
+      <Space className="forecast-chart-toolbar" size={12} wrap>
+        <Text type="secondary">历史窗口</Text>
+        <Segmented
+          size="small"
+          value={windowSize}
+          onChange={setWindowSize}
+          options={windowOptions}
+        />
+      </Space>
+      <div ref={containerRef} style={{ width: '100%', height }} />
+      <div
+        className="forecast-chart-handle"
+        role="separator"
+        aria-label="拖拽调整图表高度"
+        onMouseDown={onHandleDrag}
+      >
+        <span />
+        <Text type="secondary" className="forecast-chart-hint">
+          上下拖拽调整高度 · 按住 Shift 滚轮可缩放横轴
+        </Text>
+      </div>
+    </div>
+  )
 }

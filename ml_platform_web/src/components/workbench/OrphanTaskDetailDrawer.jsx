@@ -1,4 +1,5 @@
 import { useActiveEffect } from '../../hooks/useActiveEffect'
+import { usePollMs } from '../../hooks/useAppSettings'
 import React, { useCallback, useMemo, useState } from 'react'
 import {
   Alert, Button, Descriptions, Drawer, Empty, Popconfirm, Space, Spin,
@@ -37,6 +38,7 @@ export default function OrphanTaskDetailDrawer({
   onCancel,
   onDelete,
 }) {
+  const pollMs = usePollMs()
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
 
@@ -66,9 +68,10 @@ export default function OrphanTaskDetailDrawer({
   useActiveEffect(() => {
     const status = detail?.task?.status?.toUpperCase()
     if (!open || !['RUNNING', 'QUEUED', 'PENDING', 'RETRY'].includes(status)) return
-    const t = setInterval(load, 3000)
+    if (!pollMs) return
+    const t = setInterval(load, pollMs)
     return () => clearInterval(t)
-  }, [open, detail?.task?.status, load])
+  }, [open, detail?.task?.status, pollMs, load])
 
   const task   = detail?.task
   const domain = detail?.domain

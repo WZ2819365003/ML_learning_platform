@@ -24,7 +24,14 @@ def _utcnow() -> datetime:
 
 
 def _build_predict_url(deployment_id: str) -> str:
-    return f"http://127.0.0.1:8000/api/ts/deployments/{deployment_id}/predict"
+    """Gateway-relative path, same convention as deploy_service.
+
+    Hard-coding a host here leaked the container's own loopback address into the
+    UI, so the page showed http://127.0.0.1:8000/... — useless to anyone outside
+    the container. The caller resolves this against whatever host it reached us
+    on.
+    """
+    return f"/api/ts/deployments/{deployment_id}/predict"
 
 
 async def _get_dataset_or_404(

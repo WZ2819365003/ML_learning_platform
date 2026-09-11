@@ -318,10 +318,14 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["Health"])
     async def health_check():
+        settings = get_settings()
         return {
             "status": "ok",
             "version": "2.0.0",
-            "environment": get_settings().environment,
+            "environment": settings.environment,
+            # 前端「系统设置」把上传上限当只读信息展示，避免页面上再放一个
+            # 改不动后端的假滑块。
+            "max_upload_size_mb": round(settings.max_upload_size / (1024 * 1024)),
         }
 
     return app

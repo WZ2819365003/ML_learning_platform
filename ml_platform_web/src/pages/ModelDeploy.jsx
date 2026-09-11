@@ -19,6 +19,7 @@ import MetricCard from '../components/layout/MetricCard'
 import api, { dataApi, deployApi, dlApi, modelApi, trainingApi, tsApi } from '../services/api'
 import BatchPredictPanel from '../components/workbench/BatchPredictPanel'
 import { formatDateTime } from '../utils/formatters'
+import { absoluteEndpoint } from '../utils/endpointUrl'
 
 const { Text, Title } = Typography
 
@@ -439,11 +440,12 @@ export default function ModelDeploy() {
   }
 
   // ── 辅助：预测 URL ────────────────────────────────────────────────────────
+  // 后端只给相对路径，这里按当前访问的 host 拼成能直接复制调用的地址。
   const getPredictUrl = (kind, record) => {
     if (!record) return ''
-    if (kind === 'ml') return record.endpoints?.predict ?? ''
-    if (kind === 'dl') return `${api.defaults.baseURL}/dl/deployments/${record.id}/predict`
-    return record.predict_url ?? `${api.defaults.baseURL}/ts/deployments/${record.deployment_id}/predict`
+    if (kind === 'ml') return absoluteEndpoint(record.endpoints?.predict)
+    if (kind === 'dl') return absoluteEndpoint(`${api.defaults.baseURL}/dl/deployments/${record.id}/predict`)
+    return absoluteEndpoint(record.predict_url ?? `${api.defaults.baseURL}/ts/deployments/${record.deployment_id}/predict`)
   }
 
   // ── 详情 Descriptions ─────────────────────────────────────────────────────

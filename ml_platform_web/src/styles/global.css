@@ -651,3 +651,33 @@ body {
     max-width: 100% !important;
   }
 }
+
+/* 时序预测图：工具条 + 可拖拽高度的手柄 */
+.forecast-chart-toolbar { margin-bottom: 8px; }
+.forecast-chart-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 6px 0 2px;
+  cursor: ns-resize;
+  user-select: none;
+}
+.forecast-chart-handle > span {
+  width: 44px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  flex: none;
+}
+.forecast-chart-handle:hover > span { background: var(--primary); }
+.forecast-chart-hint { font-size: 12px; }
+
+/* 系统设置：偏好项的标签行 */
+.settings-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 4px;
+}

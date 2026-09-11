@@ -1,6 +1,7 @@
 import DetailHeader from '../components/layout/DetailHeader'
 import MetricCard from '../components/layout/MetricCard'
 import { useActiveEffect } from '../hooks/useActiveEffect'
+import { usePollMs } from '../hooks/useAppSettings'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -29,6 +30,7 @@ import { DatabaseOutlined, DeleteOutlined, EditOutlined, InfoCircleOutlined, Lin
 import ForecastChart from '../components/timeseries/ForecastChart'
 import { modelApi, tsApi } from '../services/api'
 import { formatDateTime } from '../utils/formatters'
+import { absoluteEndpoint } from '../utils/endpointUrl'
 
 const { Text } = Typography
 const { TextArea } = Input
@@ -113,6 +115,7 @@ function EditMetaModal({ task, open, onClose, onSaved }) {
 }
 
 export default function TSResults() {
+  const pollMs = usePollMs()
   const { taskId } = useParams()
   const navigate = useNavigate()
 
@@ -147,13 +150,13 @@ export default function TSResults() {
 
   useActiveEffect(() => {
     window.clearInterval(pollTimer.current)
-    if (!task || !['PENDING', 'RUNNING'].includes(task.status)) {
+    if (!pollMs || !task || !['PENDING', 'RUNNING'].includes(task.status)) {
       return undefined
     }
 
     pollTimer.current = window.setInterval(() => {
       void fetchTask()
-    }, 3000)
+    }, pollMs)
 
     return () => window.clearInterval(pollTimer.current)
   }, [fetchTask, task])
@@ -247,7 +250,7 @@ export default function TSResults() {
           <Descriptions.Item label="部署实例">{task.deployment_name ?? '默认部署'}</Descriptions.Item>
           <Descriptions.Item label="预测后端">{task.backend_label ?? task.model_name ?? '—'}</Descriptions.Item>
           <Descriptions.Item label="服务地址">
-            {task.predict_url ? <Text code copyable>{task.predict_url}</Text> : '—'}
+            {task.predict_url ? <Text code copyable>{absoluteEndpoint(task.predict_url)}</Text> : '—'}
           </Descriptions.Item>
           <Descriptions.Item label="创建时间">{formatDateTime(task.created_at)}</Descriptions.Item>
           <Descriptions.Item label="开始时间">{formatDateTime(task.started_at)}</Descriptions.Item>

@@ -1,4 +1,5 @@
 import { useActiveEffect } from '../hooks/useActiveEffect'
+import { usePollMs } from '../hooks/useAppSettings'
 /**
  * TSMonitor — 时序任务列表页
  * 路由: /ts/tasks
@@ -226,6 +227,7 @@ function CreateTaskModal({ open, onClose, onCreated }) {
 
 // ── 主页面 ──────────────────────────────────────────────────────────────────────
 export default function TSMonitor() {
+  const pollMs = usePollMs()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -260,11 +262,11 @@ export default function TSMonitor() {
   useActiveEffect(() => {
     clearInterval(refreshTimer.current)
     const hasActive = tasks.some(t => t.status === 'RUNNING' || t.status === 'PENDING')
-    if (hasActive) {
-      refreshTimer.current = setInterval(() => void fetchTasks(page, statusFilter), 3000)
+    if (hasActive && pollMs) {
+      refreshTimer.current = setInterval(() => void fetchTasks(page, statusFilter), pollMs)
     }
     return () => clearInterval(refreshTimer.current)
-  }, [tasks, page, statusFilter])
+  }, [tasks, page, statusFilter, pollMs])
 
   async function fetchTasks(p, sf) {
     setLoading(true)
