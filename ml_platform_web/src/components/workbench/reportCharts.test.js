@@ -282,17 +282,17 @@ describe('renderReportChart · tooltips', () => {
   it('hbar tooltip lists every tooltip_field as label: value', () => {
     const option = renderReportChart(leaderboardSpec)
     const html = option.tooltip.formatter({ data: option.series[0].data[0] })
-    labelsOf(leaderboardSpec).forEach((label) => expect(html).toContain(`${label}</span>: `))
-    expect(html).toContain('RMSE</span>: 72.5')
-    expect(html).toContain('占均值</span>: 0.8%')
-    expect(html).toContain('R²</span>: 0.981')
-    expect(html).toContain('验证方式</span>: 交叉验证')
+    labelsOf(leaderboardSpec).forEach((label) => expect(html).toContain(`>${label}</span>`))
+    expect(html).toContain('ai-report-tip-value">72.5<')
+    expect(html).toContain('ai-report-tip-value">0.8%<')
+    expect(html).toContain('ai-report-tip-value">0.981<')
+    expect(html).toContain('ai-report-tip-value">交叉验证<')
   })
 
   it('hbar tooltip shows — for a missing value instead of NaN', () => {
     const option = renderReportChart(leaderboardSpec)
     const html = option.tooltip.formatter({ data: option.series[1].data[4] })
-    expect(html).toContain('折间标准差</span>: —')
+    expect(html).toContain('ai-report-tip-value">—<')
     expect(html).not.toContain('NaN')
   })
 
@@ -300,8 +300,8 @@ describe('renderReportChart · tooltips', () => {
     const option = renderReportChart(foldDotsSpec)
     const html = option.tooltip.formatter({ seriesId: 'dots', data: option.series[0].data[7] })
     labelsOf(foldDotsSpec).forEach((label) => expect(html).toContain(label))
-    expect(html).toContain('第几折</span>: 3')
-    expect(html).toContain('RMSE</span>: 72.6')
+    expect(html).toContain('ai-report-tip-value">3<')
+    expect(html).toContain('ai-report-tip-value">72.6<')
     const mean = option.tooltip.formatter({ seriesId: 'mean', data: option.series[1].data[0] })
     expect(mean).toContain('均值')
     expect(mean).toContain('xgboost_regressor')
@@ -311,9 +311,9 @@ describe('renderReportChart · tooltips', () => {
     const option = renderReportChart(targetHistSpec)
     const html = option.tooltip.formatter({ data: option.series[0].data[19] })
     labelsOf(targetHistSpec).forEach((label) => expect(html).toContain(label))
-    expect(html).toContain('样本数</span>: 9')
-    expect(html).toContain('区间</span>: 13810.3 – 14274')
-    expect(html).toContain('占比</span>: 0.01%')
+    expect(html).toContain('ai-report-tip-value">9<')
+    expect(html).toContain('ai-report-tip-value">13810.3 – 14274.0<')
+    expect(html).toContain('ai-report-tip-value">0.01%<')
   })
 
   it('stacked tooltip lists the column names of the hovered segment', () => {
@@ -321,7 +321,7 @@ describe('renderReportChart · tooltips', () => {
     const html = option.tooltip.formatter({ data: option.series[2].data[0] })
     labelsOf(fieldCompositionSpec).forEach((label) => expect(html).toContain(label))
     expect(html).toContain('load_lag_1<br/>load_lag_2<br/>load_lag_24<br/>load_lag_168')
-    expect(html).toContain('列数</span>: 4')
+    expect(html).toContain('ai-report-tip-value">4<')
     expect(html).not.toContain('等 ')
   })
 
@@ -344,13 +344,13 @@ describe('renderReportChart · tooltips', () => {
       { seriesName: '验证损失', dataIndex: 30, value: [31, 0.006] },
     ])
     labelsOf(lossHistorySpec).forEach((label) => expect(html).toContain(label))
-    expect(html).toContain('轮</span>: 31')
+    expect(html).toContain('ai-report-tip-value">31<')
   })
 
   it('lines tooltip falls back to series values when the spec has no rows', () => {
     const option = renderReportChart({ ...lossHistorySpec, rows: [], tooltip_fields: [] })
     const html = option.tooltip.formatter([{ seriesName: '训练损失', dataIndex: 0, value: [1, 0.0412] }])
-    expect(html).toContain('训练损失</span>: 0.0412')
+    expect(html).toContain('ai-report-tip-value">0.0412<')
     expect(html).toContain('epoch 1')
   })
 
@@ -358,9 +358,9 @@ describe('renderReportChart · tooltips', () => {
     const option = renderReportChart(scatterPairSpec)
     const left = option.tooltip.formatter([{ seriesId: 'actual', dataIndex: 5 }, { seriesId: 'predicted', dataIndex: 5 }])
     labelsOf(scatterPairSpec).forEach((label) => expect(left).toContain(label))
-    expect(left).toContain(`实际</span>: ${scatterPairSpec.pair.actual[5]}`)
+    expect(left).toContain(`ai-report-tip-value">${scatterPairSpec.pair.actual[5]}<`)
     const right = option.tooltip.formatter([{ seriesId: 'residual', dataIndex: 0, data: option.series[2].data[0] }])
-    expect(right).toContain('区间</span>: -120 – -100')
+    expect(right).toContain('ai-report-tip-value">-120 – -100<')
     expect(right).toContain('样本数')
   })
 
@@ -370,8 +370,8 @@ describe('renderReportChart · tooltips', () => {
       { seriesName: 'ROC', seriesId: 'line-0', dataIndex: 3, value: [0.037, 0.813] },
       { seriesName: 'series\u00002', seriesId: 'reference-diagonal', dataIndex: 0, value: [0, 0] },
     ])
-    expect(html).toContain('阈值</span>: 0.850')
-    expect(html).toContain('假正率</span>: 0.037')
+    expect(html).toContain('ai-report-tip-value">0.850<')
+    expect(html).toContain('ai-report-tip-value">0.037<')
     expect(html).not.toContain('reference')
     // The diagonal arriving first must not become the row the tooltip reads.
     const flipped = option.tooltip.formatter([
@@ -387,7 +387,7 @@ describe('renderReportChart · tooltips', () => {
       { seriesName: 'ROC', seriesId: 'line-0', dataIndex: 3, value: [0.037, 0.813] },
       { seriesName: 'x', seriesId: 'reference-diagonal', dataIndex: 0, value: [0, 0] },
     ])
-    expect(html).toContain('ROC</span>: 0.813')
+    expect(html).toContain(`ai-report-tip-value">0.8130<`)
     expect(html).toContain('假正率 (FPR) 0.037')
     expect(html).not.toContain('>x</span>')
   })
@@ -395,34 +395,34 @@ describe('renderReportChart · tooltips', () => {
   it('matrix tooltip names the classes rather than their indices', () => {
     const option = renderReportChart(confusionMatrixSpec)
     const html = option.tooltip.formatter({ data: option.series[1].data[1] })
-    labelsOf(confusionMatrixSpec).forEach((label) => expect(html).toContain(`${label}</span>: `))
+    labelsOf(confusionMatrixSpec).forEach((label) => expect(html).toContain(`>${label}</span>`))
     // Cell (x=0, y=1): actual 已流失, predicted 未流失 — the missed churners.
-    expect(html).toContain('实际</span>: 已流失')
-    expect(html).toContain('预测</span>: 未流失')
-    expect(html).toContain('样本数</span>: 68')
-    expect(html).toContain('占该类</span>: 30%')
+    expect(html).toContain('ai-report-tip-value">已流失<')
+    expect(html).toContain('ai-report-tip-value">未流失<')
+    expect(html).toContain('ai-report-tip-value">68<')
+    expect(html).toContain('ai-report-tip-value">30%<')
     expect(html).not.toContain('</span>: 0<')
   })
 
   it('matrix tooltip falls back to the contract fields when the spec omits them', () => {
     const option = renderReportChart({ ...confusionMatrixSpec, tooltip_fields: [] })
     const html = option.tooltip.formatter({ data: option.series[1].data[0] })
-    expect(html).toContain('实际</span>: 未流失')
-    expect(html).toContain('预测</span>: 已流失')
-    expect(html).toContain('样本数</span>: 61')
+    expect(html).toContain('ai-report-tip-value">未流失<')
+    expect(html).toContain('ai-report-tip-value">已流失<')
+    expect(html).toContain('ai-report-tip-value">61<')
   })
 
   it('matrix tooltip reads a fractional pct as a share, not as 0.9%', () => {
     // The contract sends pct as a fraction but declares it `percent`; taken at
     // face value a 93% row would print as 0.9%.
     const option = renderReportChart(confusionMatrixSpec)
-    expect(option.tooltip.formatter({ data: option.series[0].data[0] })).toContain('占该类</span>: 93%')
+    expect(option.tooltip.formatter({ data: option.series[0].data[0] })).toContain('ai-report-tip-value">93%<')
     // A backend that switches to real percentages must not be doubled.
     const asPercent = renderReportChart({
       ...confusionMatrixSpec,
       cells: confusionMatrixSpec.cells.map((cell) => ({ ...cell, pct: cell.pct * 100 })),
     })
-    expect(asPercent.tooltip.formatter({ data: asPercent.series[0].data[0] })).toContain('占该类</span>: 93%')
+    expect(asPercent.tooltip.formatter({ data: asPercent.series[0].data[0] })).toContain('ai-report-tip-value">93%<')
   })
 
   it('escapes markup in labels and values', () => {

@@ -188,14 +188,28 @@ body {
   line-height: 1.6;
 }
 .ai-report-tip-head {
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
   font-weight: 600;
+  font-size: 13px;
 }
+/* Two columns: labels left, values right in a column of their own. Inline
+   `label: value` started every number at a different x. */
 .ai-report-tip-row {
-  line-height: 1.7;
+  display: grid;
+  grid-template-columns: auto minmax(64px, max-content);
+  gap: 4px 18px;
+  align-items: baseline;
+  line-height: 1.85;
 }
 .ai-report-tip-label {
   color: var(--text-secondary);
+}
+.ai-report-tip-value {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
 }
 
 /* Appendix: the two wide tables, folded shut, scrolling sideways when open. */

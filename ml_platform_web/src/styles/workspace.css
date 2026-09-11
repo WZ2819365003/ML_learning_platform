@@ -1,9 +1,12 @@
 /* Geometry from power-trade/standalone and business/PageShell. */
 .app-shell { height: 100dvh; overflow: hidden; }
 .app-header { height: 64px; display: flex; align-items: center; padding: 0 24px; gap: 32px; background: linear-gradient(90deg,#05316f 0%,#02163c 100%); border-bottom: 1px solid #143d77; }
-.app-brand { display: flex; align-items: center; gap: 12px; min-width: 260px; color: var(--text-primary); font-size: 20px; font-weight: 600; letter-spacing: .5px; }
-.brand-symbol { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; border: 1px solid #1a8dff; background: linear-gradient(135deg,#1a8dff,#05316f); font-size: 24px; font-weight: 700; transform: skew(-8deg); }
-.brand-subtitle { margin-left: 16px; font-size: 16px; font-weight: 500; }
+.app-brand { display: flex; align-items: center; gap: 10px; min-width: 260px; color: var(--text-primary); }
+.brand-mark { width: 30px; height: 30px; flex: none; display: block; }
+.brand-name { font-size: 20px; font-weight: 700; letter-spacing: 2px; }
+/* The rule between the company and the platform, as on the reference header. */
+.brand-divider { width: 1px; height: 20px; margin: 0 6px; background: var(--border); flex: none; }
+.brand-title { font-size: 18px; font-weight: 600; letter-spacing: 1px; }
 .header-actions { margin-left: auto; flex: none; }
 .header-icon, .header-user { border: 0; background: none; color: var(--text-primary); cursor: pointer; }
 .header-icon { width: 28px; height: 32px; font-size: 18px; }
@@ -84,7 +87,7 @@
 .report-print-document .ant-table-wrapper .ant-table-tbody > tr > td { background: #fff; }
 .report-print-document .ant-table-wrapper .ant-table-tbody > tr:nth-child(even) > td { background: #f8fafc; }
 @media (max-width: 1366px) { :root { --sidebar-width: 220px; } .workspace-page-scroll { padding: 16px; } }
-@media (max-width: 1100px) { .brand-subtitle { display: none; } .app-brand { min-width: 180px; } .metric-grid { grid-template-columns: repeat(2,minmax(160px,1fr)); } }
+@media (max-width: 1100px) { .brand-title, .brand-divider { display: none; } .app-brand { min-width: 180px; } .metric-grid { grid-template-columns: repeat(2,minmax(160px,1fr)); } }
 @media (max-width: 991px) {
   .app-sidebar.is-mobile { position: fixed; z-index: 1001; top: 64px; bottom: 0; left: 0; width: 220px; }
   .app-sidebar.is-mobile.is-collapsed { display: none; }
@@ -94,7 +97,7 @@
 @media (max-width: 767px) {
   .app-header { padding: 0 12px; gap: 12px; }
   .app-brand { min-width: 0; font-size: 17px; gap: 8px; }
-  .brand-symbol { width: 28px; height: 28px; font-size: 20px; }
+  .brand-mark { width: 26px; height: 26px; } .brand-name { font-size: 17px; letter-spacing: 1px; }
   .header-user > span:not(.ant-avatar), .header-actions .ant-tag { display: none; }
   .header-actions { gap: 8px !important; }
   .workspace-page-scroll { padding: 12px; }

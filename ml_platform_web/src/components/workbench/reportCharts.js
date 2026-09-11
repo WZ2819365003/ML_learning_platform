@@ -150,16 +150,29 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
 }
 
-/** One tooltip line per field: `label: value`. */
+/**
+ * One row per field, laid out as two columns.
+ *
+ * The inline `label: value` form left every number starting at a different
+ * x — five ragged rows that have to be read one at a time. A grid puts the
+ * values in a column, and tabular figures keep the digits under each other.
+ */
 export function formatTooltipRows(fields = [], row = {}) {
   const lines = fields
     .filter((field) => field && field.key)
     .map((field) => {
       const value = formatValue(row?.[field.key], field.format)
       const label = escapeHtml(String(field.label ?? field.key))
-      return `<div class="ai-report-tip-row"><span class="ai-report-tip-label">${label}</span>: ${value}</div>`
+      return tipRow(label, value)
     })
   return lines.join('')
+}
+
+/** The only place a tooltip row is built. Three copies drifted apart before. */
+export function tipRow(label, value) {
+  return `<div class="ai-report-tip-row">`
+    + `<span class="ai-report-tip-label">${label}</span>`
+    + `<span class="ai-report-tip-value">${value}</span></div>`
 }
 
 function tooltipBase(trigger = 'item') {
@@ -214,7 +227,11 @@ const DEFAULT_FIELDS = {
 
 function rowOf(param) {
   const row = param?.data?.row
-  return row ? { row } : null
+  if (!row) return null
+  // The category is the one thing the rows never carry: hovering a bar told
+  // you five numbers without saying which model they belonged to.
+  const heading = row.category ?? param?.name
+  return heading == null ? { row } : { row, heading }
 }
 
 const axisText = () => ({ color: T.colors.text, fontSize: T.fontSize, fontFamily: T.fontFamily })
@@ -454,7 +471,7 @@ function renderDots(spec) {
     tooltip: fieldTooltip(spec, (_params, first) => {
       if (first?.seriesId === 'mean') {
         return `<div class="ai-report-tip-head">${escapeHtml(String(first.data.category))}</div>`
-          + `<div class="ai-report-tip-row"><span class="ai-report-tip-label">均值</span>: ${formatValue(first.data.mean)}</div>`
+          + tipRow('均值', formatValue(first.data.mean))
       }
       return rowOf(first)
     }),
@@ -662,7 +679,7 @@ function renderLines(spec) {
         if (fields && row) return { row }
         // No per-epoch rows: show the series values at this x.
         const lines = list.map((p) => (
-          `<div class="ai-report-tip-row"><span class="ai-report-tip-label">${escapeHtml(String(p.seriesName))}</span>: ${formatValue(p.value?.[1])}</div>`
+          tipRow(escapeHtml(String(p.seriesName)), formatValue(p.value?.[1]))
         ))
         return `<div class="ai-report-tip-head">${escapeHtml(`${spec.x_label || 'epoch'} ${first?.value?.[0] ?? ''}`)}</div>${lines.join('')}`
       },

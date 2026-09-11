@@ -60,7 +60,14 @@ export default function Header() {
 
 
   return <header className="app-header">
-    <div className="app-brand"><span className="brand-symbol" aria-hidden="true">M</span><span>ML Platform<span className="brand-subtitle">智能建模平台</span></span></div>
+    {/* 标识 + 字号 | 平台名。标识是按品牌图描摹的近似件，换成官方矢量文件时
+        只需替换 public/brand/hengshi-shengjing-mark.svg，这里不用动。 */}
+    <div className="app-brand">
+      <img className="brand-mark" src="/brand/hengshi-shengjing-mark.svg" alt="" aria-hidden="true" />
+      <span className="brand-name">恒实盛景</span>
+      <span className="brand-divider" aria-hidden="true" />
+      <span className="brand-title">智能建模平台</span>
+    </div>
     <Space size={16} className="header-actions">
       <Tag color={envTag.color}>{envTag.label}</Tag>
       <Badge count={failedCount} offset={[0, 1]}>
