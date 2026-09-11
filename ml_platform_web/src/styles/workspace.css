@@ -1,12 +1,12 @@
 /* Geometry from power-trade/standalone and business/PageShell. */
 .app-shell { height: 100dvh; overflow: hidden; }
 .app-header { height: 64px; display: flex; align-items: center; padding: 0 24px; gap: 32px; background: linear-gradient(90deg,#05316f 0%,#02163c 100%); border-bottom: 1px solid #143d77; }
-.app-brand { display: flex; align-items: center; gap: 10px; min-width: 260px; color: var(--text-primary); }
+.app-brand { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-primary); }
 .brand-mark { width: 30px; height: 30px; flex: none; display: block; }
-.brand-name { font-size: 20px; font-weight: 700; letter-spacing: 2px; }
-/* The rule between the company and the platform, as on the reference header. */
-.brand-divider { width: 1px; height: 20px; margin: 0 6px; background: var(--border); flex: none; }
-.brand-title { font-size: 18px; font-weight: 600; letter-spacing: 1px; }
+.brand-name { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
+/* The rule between company and platform, tight to both as on the reference. */
+.brand-divider { width: 1px; height: 18px; margin: 0; background: var(--border); flex: none; }
+.brand-title { font-size: 18px; font-weight: 600; letter-spacing: .5px; white-space: nowrap; }
 .header-actions { margin-left: auto; flex: none; }
 .header-icon, .header-user { border: 0; background: none; color: var(--text-primary); cursor: pointer; }
 .header-icon { width: 28px; height: 32px; font-size: 18px; }
