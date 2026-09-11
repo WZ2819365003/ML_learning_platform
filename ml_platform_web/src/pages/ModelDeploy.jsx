@@ -181,7 +181,6 @@ export default function ModelDeploy() {
   // 时序在线测试可以照抄哪几次跑成功的任务
   const [tsReplayTasks, setTsReplayTasks] = useState([])
   const [tsReplayId, setTsReplayId] = useState(null)
-  const [tsReplayOpen, setTsReplayOpen] = useState(false)
 
   // Chronos 状态
   const [tsStatus, setTsStatus]         = useState(null)
@@ -673,10 +672,6 @@ export default function ModelDeploy() {
                           size="small"
                           style={{ minWidth: 280 }}
                           value={tsReplayId}
-                          open={tsReplayOpen}
-                          onDropdownVisibleChange={setTsReplayOpen}
-                          // 下拉展开时 Esc 只收下拉，别一路冒泡到 Drawer 把抽屉也关了。
-                          onKeyDown={(e) => { if (e.key === 'Escape' && tsReplayOpen) e.stopPropagation() }}
                           onChange={(id) => {
                             const task = tsReplayTasks.find(t => t.id === id)
                             const payload = payloadFromTask(task)
