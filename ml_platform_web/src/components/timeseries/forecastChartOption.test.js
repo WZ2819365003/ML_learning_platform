@@ -91,11 +91,13 @@ describe('buildOption', () => {
     expect(forecastLine.data[142]).toBeNull()
   })
 
-  it('标出预测段的起点与范围', () => {
+  it('预测段的标注挂在预测线上——历史线在这一段全是 null，挂上去不会渲染', () => {
     const [history] = byName('历史值')
-    expect(history.markLine.data[0].xAxis).toBe('t+1')
-    expect(history.markArea.data[0][0].xAxis).toBe('t+1')
-    expect(history.markArea.data[0][1].xAxis).toBe('t+24')
+    const [forecastLine] = byName('预测值')
+    expect(history.markArea).toBeUndefined()
+    expect(forecastLine.markLine.data[0].xAxis).toBe('t+1')
+    expect(forecastLine.markArea.data[0][0].xAxis).toBe('t+1')
+    expect(forecastLine.markArea.data[0][1].xAxis).toBe('t+24')
   })
 
   it('点数超阈值时降级为 LTTB 采样', () => {

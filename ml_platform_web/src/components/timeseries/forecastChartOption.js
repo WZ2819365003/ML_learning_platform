@@ -139,19 +139,6 @@ export function buildOption(series) {
         large: dense,
         lineStyle: { width: dense ? 1 : 2 },
         data: [...history, ...forecast.map(() => null)],
-        markArea: {
-          silent: true,
-          itemStyle: { color: 'rgba(24, 195, 227, 0.07)' },
-          label: { show: true, position: 'insideTop', color: '#18c3e3', fontSize: 12, formatter: '预测段' },
-          data: [[{ xAxis: labels[splitIndex] }, { xAxis: labels[labels.length - 1] }]],
-        },
-        markLine: {
-          silent: true,
-          symbol: 'none',
-          lineStyle: { color: '#18c3e3', type: 'dashed', width: 1 },
-          label: { show: false },
-          data: [{ xAxis: labels[splitIndex] }],
-        },
       },
       {
         name: '预测值',
@@ -161,6 +148,28 @@ export function buildOption(series) {
         lineStyle: { width: 2.5, type: 'dashed' },
         data: bridged,
         z: 4,
+        // 标在预测线上而不是历史线上：历史线在这一段全是 null，markArea 挂在它上面
+        // 不会渲染。
+        markArea: {
+          silent: true,
+          itemStyle: { color: 'rgba(24, 195, 227, 0.10)' },
+          label: {
+            show: true,
+            position: 'insideTopLeft',
+            distance: 6,
+            color: '#7fdcee',
+            fontSize: 12,
+            formatter: '预测段',
+          },
+          data: [[{ xAxis: labels[splitIndex] }, { xAxis: labels[labels.length - 1] }]],
+        },
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: { color: '#18c3e3', type: 'dashed', width: 1 },
+          label: { show: false },
+          data: [{ xAxis: labels[splitIndex] }],
+        },
       },
       // 区间用两条堆叠线画：下界透明打底，上界只堆叠差值，填充出来的才是 Q10~Q90
       // 这一条带。原来两条都堆叠原值，上沿画到了 q90+q10。

@@ -671,7 +671,8 @@ body {
   flex: none;
 }
 .forecast-chart-handle:hover > span { background: var(--primary); }
-.forecast-chart-hint { font-size: 12px; }
+.forecast-chart-hint { font-size: 12px; flex: none; white-space: nowrap; }
+@media (max-width: 720px) { .forecast-chart-hint { display: none; } }
 
 /* 系统设置：偏好项的标签行 */
 .settings-field-label {
