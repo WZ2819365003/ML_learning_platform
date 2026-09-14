@@ -31,7 +31,12 @@ Design notes
       {"<model_type>": {"param_name": {"type": "float", "low": ..., "high": ...}, ...}}
   Missing models fall back to ``registry/tuning_spaces.yaml`` defaults.
 - ``budget_config``:
-    max_trials      (grid/bayesian): cap on how many runs per model
+    max_trials      (grid/bayesian): cap on the TOTAL number of runs in the batch,
+                    consumed model by model in selected order. A cap below the
+                    planned total would starve the later models, so preflight
+                    rejects that for multi-model batches (see
+                    ``_budget_starvation_detail``).
+    n_trials_per_model (bayesian)  : Optuna trials per model
     timeout_minutes (future)        : hard walltime
     random_state                    : seed used everywhere for reproducibility
 """
@@ -448,6 +453,12 @@ def _preflight_batch(
             _reject("Baseline produced no trials — check selected_models")
         total_trials = len(trials)
     elif strategy_type == "grid_search":
+        starvation = _budget_starvation_detail(
+            _planned_trials_per_model(strategy_type, ml_models, tuning_defaults, search_space, budget_config),
+            max_trials,
+        )
+        if starvation:
+            _reject(starvation)
         ml_trials = _expand_grid_search(ml_models, tuning_defaults, search_space, max_trials)
         trials = ml_trials + _renumber_trials(dl_trials, start=len(ml_trials) + 1)
         if not trials:
@@ -457,6 +468,12 @@ def _preflight_batch(
             )
         total_trials = len(trials)
     else:  # bayesian_search
+        starvation = _budget_starvation_detail(
+            _planned_trials_per_model(strategy_type, ml_models, tuning_defaults, search_space, budget_config),
+            max_trials,
+        )
+        if starvation:
+            _reject(starvation)
         total_trials = _count_bayesian_trials(ml_models, budget_config, max_trials) + len(dl_trials)
 
     return _PreflightedBatch(
@@ -906,6 +923,68 @@ def _renumber_trials(trials: list[dict[str, Any]], *, start: int) -> list[dict[s
     for offset, t in enumerate(trials):
         out.append({**t, "trial_no": start + offset})
     return out
+
+
+def _planned_trials_per_model(
+    strategy_type: str,
+    ml_models: list[str],
+    tuning_defaults: dict[str, Any],
+    search_space: dict[str, Any] | None,
+    budget_config: dict[str, Any] | None,
+) -> dict[str, int]:
+    """How many trials each model would get with no cap, in dispatch order.
+
+    Mirrors the expansion rules exactly: grid uses the user grid or the
+    registry ``grid_values``; bayesian uses ``n_trials_per_model`` for every
+    model that has a distribution. Models the expansion would skip anyway
+    (no grid / no distribution / DL) are left out.
+    """
+    search_space = search_space or {}
+    planned: dict[str, int] = {}
+    for model_type in ml_models:
+        template = tuning_defaults.get(model_type) or {}
+        if template.get("family", "ml") == "dl":
+            continue
+        if strategy_type == "grid_search":
+            grid = search_space.get(model_type) or template.get("grid_values") or {}
+            if not grid:
+                continue
+            combos = 1
+            for values in grid.values():
+                combos *= len(values) if isinstance(values, list) else 1
+            planned[model_type] = combos
+        elif strategy_type == "bayesian_search":
+            dist = search_space.get(model_type) or template.get("distribution") or {}
+            if not dist:
+                continue
+            planned[model_type] = int((budget_config or {}).get("n_trials_per_model", 10))
+    return planned
+
+
+def _budget_starvation_detail(planned: dict[str, int], max_trials: int | None) -> str | None:
+    """Explain why a total cap would silently cut whole models, or None if it won't.
+
+    The cap is consumed model by model, so with two or more models any cap
+    below the planned total leaves the later ones short — historically with
+    zero runs and a batch that still reports COMPLETED. A single model keeps
+    the original safety-valve truncation.
+    """
+    total = sum(planned.values())
+    if not max_trials or len(planned) < 2 or max_trials >= total:
+        return None
+    remaining = max_trials
+    cut = []
+    for model_type, want in planned.items():
+        got = min(want, remaining)
+        remaining -= got
+        if got < want:
+            cut.append(f"{model_type} 只能跑 {got}/{want} 次")
+    breakdown = "、".join(f"{m} {n}" for m, n in planned.items())
+    return (
+        f"「最大 Trial 数」{max_trials} 小于本批次计划的 {total} 次（{breakdown}）。"
+        f"上限按模型顺序消耗，{'；'.join(cut)}。"
+        f"请把「最大 Trial 数」调到 {total}，或减少模型数 / 每个模型的次数。"
+    )
 
 
 def _count_bayesian_trials(

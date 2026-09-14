@@ -12,7 +12,13 @@ import pathlib
 import pytest
 
 from app.core.model_registry import resolve_model_family
-from app.services.tuning_service import _tpe_startup_trials, _validate_search_space
+from app.services.modeling_task_service import load_tuning_spaces
+from app.services.tuning_service import (
+    _budget_starvation_detail,
+    _planned_trials_per_model,
+    _tpe_startup_trials,
+    _validate_search_space,
+)
 
 PLAN_DIR = pathlib.Path(__file__).resolve().parents[1] / "registry" / "training_plans"
 PLAN_FILES = sorted(PLAN_DIR.glob("*.json"))
@@ -43,17 +49,20 @@ def test_every_model_is_a_known_ml_model_for_the_declared_family(path):
 
 
 @pytest.mark.parametrize("path", PLAN_FILES, ids=lambda p: p.stem)
-def test_grid_budget_does_not_truncate_any_model(path):
-    """max_trials 是每个模型的上限。比某个模型的组合数小，就会有组合被悄悄跳过。"""
+def test_budget_does_not_starve_any_model(path):
+    """max_trials 是整个批次的总上限、按模型顺序消耗。
+
+    这条测试最初按「每个模型的上限」写的，信了 tuning_service 顶部一句错误的文档，
+    于是方案里 max_trials 设成了单个模型的次数——线上贝叶斯三个模型只跑了第一个。
+    现在直接用派发端的判定函数，方案和派发永远是同一套规则。
+    """
     plan = _load(path)
-    if plan["strategy_type"] != "grid_search":
-        pytest.skip("只检查网格搜索")
-    cap = plan["budget_config"]["max_trials"]
-    for model, space in plan["search_space"].items():
-        combos = 1
-        for values in space.values():
-            combos *= len(values)
-        assert combos <= cap, f"{model} 有 {combos} 组参数，max_trials={cap} 会截掉一部分"
+    planned = _planned_trials_per_model(
+        plan["strategy_type"], plan["selected_models"], load_tuning_spaces(plan["task_type"]),
+        plan["search_space"], plan["budget_config"],
+    )
+    assert set(planned) == set(plan["selected_models"]), "有模型不会展开任何试验"
+    assert _budget_starvation_detail(planned, plan["budget_config"].get("max_trials")) is None
 
 
 @pytest.mark.parametrize("path", PLAN_FILES, ids=lambda p: p.stem)
