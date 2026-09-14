@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
   Tabs, Form, Select, InputNumber, Input, Switch, Button, Space, Divider,
-  Typography, Tooltip, message, Alert, Card, Modal,
+  Typography, Tooltip, message, Card, Modal,
 } from '../../ui'
 import {
-  RocketOutlined, CodeOutlined, QuestionCircleOutlined, ThunderboltOutlined,
+  RocketOutlined, CodeOutlined, QuestionCircleOutlined,
   SettingOutlined,
 } from '@ant-design/icons'
 import { trainingApi, dlApi, modelingTaskApi } from '../../services/api'
@@ -61,24 +61,23 @@ const _tsName = (task, tag) =>
   `${task?.name || 'task'}-${tag}-${new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[/\s:]/g, '')}`
 
 /**
- * 模型配置 step — 4 tabs (机器学习 / 深度学习 / 多模型对照 / 调参策略). The first
- * three configure real ML/DL parameters and dispatch a baseline batch through
- * the existing V3 pipeline (modelingTaskApi.createExperimentBatch), so
- * 训练/结果/部署 are unchanged; 调参策略 embeds ExperimentBatchForm (grid /
- * bayesian). A 「代码配置」 button (Python executor) is available on the first
- * three tabs.
+ * 模型配置 step — 3 tabs (机器学习 / 深度学习 / 调参策略). The first two
+ * configure real ML/DL parameters and dispatch a baseline batch through the
+ * existing V3 pipeline (modelingTaskApi.createExperimentBatch), so
+ * 训练/结果/部署 are unchanged; 调参策略 embeds ExperimentBatchForm (baseline /
+ * grid / bayesian, plus 训练方案 apply). A 「代码配置」 button (Python executor)
+ * is available on the first two tabs.
  *
- * 多模型对照 is the only tab whose dropdown offers both ML and DL tokens:
- * ExperimentBatchForm builds its options from /v3/tasks/tuning-spaces, i.e.
- * registry/tuning_spaces.yaml, which has ML models only. It is NOT a fusion —
- * the backend trains each selected model independently; weighted fusion is
- * 模型部署 → 多模型部署.
+ * 曾经还有第四个页签「多模型对照」：一次多选 ML + DL 模型、全部用默认参数跑基线。
+ * 它和其余页签高度重叠——多个 ML 模型的基线在「调参策略 → 基线」里就能一次勾选，
+ * 单个模型带参数在前两个页签——唯一独有的是把 DL 模型放进同一批次，这不值得一个
+ * 页签。已移除 UI；后端的 model_family="mixed" 仍保留，训练方案和「代码配置」
+ * 依旧可以提交跨族批次。
  */
 export default function ModelConfigTabs({ task, onSubmitted }) {
   const taskType = task?.task_type || 'classification'
   const [mlForm] = Form.useForm()
   const [dlForm] = Form.useForm()
-  const [mixedForm] = Form.useForm()
   const [mlReg, setMlReg] = useState({ categories: [], models: [], classification_metrics: [], regression_metrics: [] })
   const [dlReg, setDlReg] = useState({ categories: [], models: [], optimizer_params: [], train_params: [] })
   const [submitting, setSubmitting] = useState(false)
@@ -111,18 +110,6 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
   const dlModelOptions = dlReg.models
     .filter(m => !m.task_types || m.task_types.includes(taskType))
     .map(m => ({ value: m.id, label: m.display_name || m.id }))
-
-  const mixedOptions = useMemo(() => ([
-    {
-      label: '机器学习',
-      options: mlReg.models.filter(m => m.task_types?.includes(taskType))
-        .map(m => ({ value: m.id, label: `${m.display_name || m.id}` })),
-    },
-    {
-      label: '深度学习',
-      options: dlModelOptions,
-    },
-  ]), [mlReg.models, dlModelOptions, taskType])
 
   const dispatch = async (payload) => {
     setSubmitting(true)
@@ -159,20 +146,6 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
       selected_models: [v.model_type],
       model_family: 'dl',
       dl_config: { [v.model_type]: { arch: v.arch_config || {}, opt: v.opt_config || {}, train: v.train_config || {} } },
-    })
-  }
-
-  // 多模型对照 (UI name). `model_family: 'mixed'` stays: it is the backend's
-  // training_plans family label (training_plan_service._VALID_FAMILIES) and
-  // historical batches carry it; only the user-facing wording changed.
-  const submitMixed = async () => {
-    let v; try { v = await mixedForm.validateFields() } catch { return }
-    if (!v.models?.length) { message.warning('请至少选择一个模型'); return }
-    await dispatch({
-      name: _tsName(task, 'mixed'),
-      strategy_type: 'baseline',
-      selected_models: v.models,
-      model_family: 'mixed',
     })
   }
 
@@ -271,24 +244,6 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
     </Form>
   )
 
-  const mixedTab = (
-    <Form form={mixedForm} layout="vertical">
-      {/* Not an ensemble: every selected model is trained on its own and gets
-          its own run/result. Real weighted fusion lives in 模型部署 → 多模型部署
-          (ensemble_service), so point users there instead of implying it here. */}
-      <Alert type="info" showIcon style={{ marginBottom: 12 }}
-        message="多模型对照：机器学习 + 深度学习各训一遍，一次拿到跨族基线"
-        description="每个模型独立训练、独立出结果，互不组合，方便横向对比。这不是模型融合——若要把多个模型的预测加权合并，请在训练完成后前往「模型部署 → 多模型部署」。也可用「代码配置」以 Python 精确描述实验。" />
-      <Form.Item name="models" label="参与模型（机器学习 + 深度学习）" rules={[{ required: true, message: '请至少选择一个模型' }]}>
-        <Select mode="multiple" options={mixedOptions} placeholder="从机器学习 / 深度学习中多选" maxTagCount="responsive" />
-      </Form.Item>
-      <Space>
-        <Button type="primary" icon={<ThunderboltOutlined />} loading={submitting} onClick={submitMixed}>启动多模型对照训练</Button>
-        <CodeButton kind="mixed" />
-      </Space>
-    </Form>
-  )
-
   return (
     <>
       <Paragraph type="secondary" style={{ marginBottom: 8 }}>
@@ -300,7 +255,6 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
         items={[
           { key: 'ml', label: '机器学习', children: mlTab },
           { key: 'dl', label: '深度学习', children: dlTab },
-          { key: 'mixed', label: '多模型对照', children: mixedTab },
           { key: 'tune', label: '调参策略', children: (
             // 「管理训练方案」入口在表单的方案下拉框旁边。以前这里用 window.open
             // 另开一个浏览器窗口，脱离了平台的页签栏，草稿保护和页签状态都管不到它。
@@ -340,19 +294,6 @@ config = {
     "dl_config": {
         "mlp_dl": {"arch": {"hidden_layers": [256, 128]}, "train": {"epochs": 30}},
     },
-}
-`,
-  mixed: `# 多模型对照：机器学习 + 深度学习各训一遍，每个模型独立出结果（不做融合）。
-# model_family 仍用后端标签 "mixed"；真正的加权融合请到「模型部署 → 多模型部署」。
-ml = ["random_forest", "xgboost", "lightgbm"]
-dl = ["mlp_dl"]
-config = {
-    "name": "多模型对照代码配置",
-    "strategy_type": "baseline",
-    "model_family": "mixed",
-    "selected_models": ml + dl,
-    "search_space": {m: {"n_estimators": 200} for m in ["random_forest"]},
-    "eval_metrics": ["accuracy", "f1"],
 }
 `,
 }
