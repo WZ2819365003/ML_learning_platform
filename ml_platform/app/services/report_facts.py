@@ -563,8 +563,10 @@ def _verdict_sentences(summary: dict[str, Any]) -> dict[str, str]:
                 others = (f"另外{n}个{other['scheme']}模型都比它差 "
                           f"{readable(other['gap_lo'], metric)} 以上，明显落后。")
         else:
+            # 没到「确定落后」的门槛不等于「接近」：差距可能已经超出折间波动，
+            # 只是口径不同不足以下结论。
             others = (f"{other['leader'].get('model_type')}（{other['scheme']} "
-                      f"{readable(other['leader_value'], metric)}）与它接近，口径不同，排不出先后。")
+                      f"{readable(other['leader_value'], metric)}）与它口径不同，差距不足以定论，排不出先后。")
     elif len(summary["distinct"]) > 2:
         rest = summary["distinct"][2:]
         gaps = [abs(entry_metric(e, metric) - summary["best_value"]) for e in rest
@@ -709,7 +711,17 @@ def build_run_facts(
     board = context.get("leaderboard") or []
     overall_best = best or (board[0] if board else run)
     scheme = validation_scheme(run)
-    comparable = [entry for entry in board if validation_scheme(entry) == scheme]
+    # leaderboard 只有前 8 名。以前组内比较只在这里找同口径的 Run：前 8 名全是交叉
+    # 验证时，留出验证组在候选里是空的，每个深度学习模型都把自己当成组内第一，
+    # Transformer（31.0）和 LSTM（45.7）两篇都写「本模型是留出验证组里最好的」。
+    # scheme_leaders 是每种口径在完整排名里的第一名，由 build_task_report_context 给出。
+    pool: dict[Any, dict[str, Any]] = {}
+    for entry in [*board, *(context.get("scheme_leaders") or {}).values()]:
+        pool.setdefault(entry.get("run_id") or id(entry), entry)
+    comparable = sorted(
+        (entry for entry in pool.values() if validation_scheme(entry) == scheme),
+        key=lambda e: (e.get("rank") is None, e.get("rank") or 0),
+    )
     best = comparable[0] if comparable else run
     best_value = entry_metric(best, metric)
     best_std = entry_std(best, metric)
@@ -888,15 +900,23 @@ def _cross_scheme_sentence(run: dict[str, Any], overall_best: dict[str, Any],
         return (f"注意口径不同：本模型采用{validation_scheme(run)}，总榜首 {name} 采用{best_scheme}；"
                 "两种口径不直接比较。")
     gap = abs(value - best_value)
-    if noise and gap > _DECISIVE_GAP_IN_STD * noise:
+    prefix = f"注意口径不同：本模型采用{validation_scheme(run)}，总榜首 {name} 采用{best_scheme}；"
+    # 以前只有两档：超过 3 倍标准差算「落后是确定的」，其余一律「差距落在折间波动之内」。
+    # LSTM 45.7 对 23.8、标准差 11.6，差距是 1.9 倍标准差——明明超出了波动，也被写成
+    # 「在波动之内」；两边都没有标准差时同样落进这句，等于凭空编了一个波动。
+    if not noise:
+        return prefix + "两者都没有折间波动数据，判断不了这个差距是否显著，两种口径不直接比较。"
+    if gap > _DECISIVE_GAP_IN_STD * noise:
         if error and best_value:
             size = f"本模型的误差是它的 {_fmt(value / best_value, 1)} 倍"
         else:
             size = f"本模型落后 {readable(gap, metric)}"
         return (f"总榜首 {name} 的{best_scheme}成绩是 {readable(best_value, metric)}，{size}；"
                 "口径不同，但差距远超折间波动，落后是确定的。")
-    return (f"注意口径不同：本模型采用{validation_scheme(run)}，总榜首 {name} 采用{best_scheme}；"
-            "差距落在折间波动之内，两种口径不直接比较，排不出先后。")
+    if gap > noise:
+        return (prefix + f"差距 {readable(gap, metric)} 超过折间波动 {readable(noise, metric)}，"
+                "但口径不同、不足以定论，两种口径不直接比较。")
+    return prefix + "差距落在折间波动之内，两种口径不直接比较，排不出先后。"
 
 
 def _merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:

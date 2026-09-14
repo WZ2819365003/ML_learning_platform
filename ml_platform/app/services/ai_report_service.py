@@ -1070,6 +1070,16 @@ def _select_report_runs(
     return runs, describe_selection(slim, chosen)
 
 
+def _scheme_leaders(full_leaderboard: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """每种验证口径的第一名（完整排名、已按名次排好）。只序列化这几个。"""
+    leaders: dict[str, dict[str, Any]] = {}
+    for entry in full_leaderboard:
+        scheme = validation_scheme(entry)
+        if scheme not in leaders:
+            leaders[scheme] = {**_serialize_leaderboard_entry(entry), "family": entry.get("family")}
+    return leaders
+
+
 def _serialize_leaderboard_entry(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "rank": entry.get("rank"),
@@ -1145,6 +1155,7 @@ async def build_task_report_context(
     )
     leaderboard = full_leaderboard[:_TOP_RUNS]
     report_runs, report_run_selection = _select_report_runs(full_leaderboard)
+    scheme_leaders = _scheme_leaders(full_leaderboard)
     failed_runs = [run for run in runs if run.status == "FAILED"][:3]
     successful_runs = [run for run in runs if run.status == "SUCCESS"][:_TOP_RUNS]
 
@@ -1201,6 +1212,9 @@ async def build_task_report_context(
         # 见 report_run_selection。只存挑中的这几个，不把完整排名塞进归档。
         "report_runs": report_runs,
         "report_run_selection": report_run_selection,
+        # 每种验证口径在完整排名里的第一名。分报告做「组内比较」要用它：
+        # 只看前 8 名时，排名靠后的那种口径在候选里是空的。
+        "scheme_leaders": scheme_leaders,
         "successful_run_examples": [
             _serialize_run(run, experiment_index) for run in successful_runs
         ],

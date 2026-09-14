@@ -282,7 +282,8 @@ class TestValidationCohorts:
         ctx["leaderboard"][1]["objective_value"] = 73.0
         ctx["leaderboard"][1]["metrics"]["selection_val_rmse"] = 73.0
         facts = rf.build_overview_facts(ctx)
-        assert "口径不同，排不出先后" in facts["conclusion"]["others"]
+        assert "口径不同，差距不足以定论，排不出先后" in facts["conclusion"]["others"]
+        assert "接近" not in facts["conclusion"]["others"]
         assert "lstm" in facts["conclusion"]["others"]
 
     def test_a_close_gap_inside_one_scheme_is_a_draw(self):
@@ -647,3 +648,70 @@ class TestStringifiedConfigIsStillRead:
 
     def test_the_batch_size_survives_as_a_number(self):
         assert "批量 32" in self._facts()["run"]["arch_note"]
+
+
+class TestSchemeComparisonSeesTheFullRanking:
+    """分报告按三类分摊名额以后，深度学习模型第一次有了分报告，暴露出两句假话。
+
+    线上「虚拟电厂楼宇超短期负荷预测」：前 8 名全是交叉验证的随机森林，Transformer
+    （留出验证 RMSE 31.0）和 LSTM（45.7）两篇都写「本模型是留出验证组里最好的」，
+    也都写「差距落在折间波动之内」——而随机森林 23.8、折间标准差 11.6。
+    """
+
+    @staticmethod
+    def _cv(rank, value, std, model="random_forest_regressor"):
+        return {"run_id": f"cv{rank}", "rank": rank, "model_type": model, "objective_value": value,
+                "metrics": {"selection_cv_mean_rmse": value, "cv_std_rmse": std}}
+
+    @staticmethod
+    def _holdout(rank, value, model):
+        return {"run_id": f"ho{rank}", "rank": rank, "model_type": model, "objective_value": value,
+                "metrics": {"selection_val_rmse": value, "history": [{"val_loss": 1.0}]}}
+
+    def _ctx(self, lstm_value=45.7):
+        top8 = [self._cv(i, 23.8 + i * 0.01, 11.6) for i in range(1, 9)]
+        transformer = self._holdout(30, 31.0, "transformer")
+        lstm = self._holdout(32, lstm_value, "lstm")
+        ctx = {
+            "task": {"name": "T", "objective_metric": "rmse", "target_column": "load_kw"},
+            "leaderboard": top8,
+            "report_runs": top8[:5] + [transformer, lstm],
+            "scheme_leaders": {"交叉验证": top8[0], "留出验证": transformer},
+            "_target_stats": {"mean": 209.8},
+        }
+        return ctx, transformer, lstm
+
+    def test_second_holdout_model_is_compared_to_the_first_not_crowned(self):
+        ctx, transformer, lstm = self._ctx()
+        _, facts = rf.build_run_facts(lstm, ctx, ctx["leaderboard"][0])
+        assert "组里最好" not in facts["gap"]["sentence"]
+        assert "transformer" in facts["gap"]["sentence"]
+
+    def test_the_real_holdout_leader_is_still_crowned_in_its_group(self):
+        ctx, transformer, _ = self._ctx()
+        _, facts = rf.build_run_facts(transformer, ctx, ctx["leaderboard"][0])
+        assert "留出验证组里最好的" in facts["gap"]["sentence"]
+
+    def test_gap_between_one_and_three_std_is_not_called_within_noise(self):
+        # LSTM 45.7 vs 23.8, std 11.6 → 1.9σ：超出了波动，但口径不同，不足以定论
+        ctx, _, lstm = self._ctx()
+        _, facts = rf.build_run_facts(lstm, ctx, ctx["leaderboard"][0])
+        caveat = facts["gap"]["caveat"]
+        assert "落在折间波动之内" not in caveat
+        assert "超过折间波动" in caveat
+        assert "两种口径不直接比较" in caveat
+
+    def test_gap_inside_one_std_is_called_within_noise(self):
+        ctx, _, _ = self._ctx()
+        near = self._holdout(31, 30.0, "gru")        # 30.0 - 23.81 = 6.2 < 11.6
+        _, facts = rf.build_run_facts(near, ctx, ctx["leaderboard"][0])
+        assert "落在折间波动之内" in facts["gap"]["caveat"]
+
+    def test_without_any_fold_std_the_caveat_does_not_invent_one(self):
+        ctx, _, lstm = self._ctx()
+        for entry in ctx["leaderboard"]:
+            entry["metrics"].pop("cv_std_rmse")
+        _, facts = rf.build_run_facts(lstm, ctx, ctx["leaderboard"][0])
+        caveat = facts["gap"]["caveat"]
+        assert "落在折间波动之内" not in caveat
+        assert "没有折间波动" in caveat
