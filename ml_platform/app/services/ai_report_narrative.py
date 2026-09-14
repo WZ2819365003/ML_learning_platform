@@ -56,17 +56,17 @@ def keep_placed(charts: list[dict[str, Any]], markdown: str) -> list[dict[str, A
 
 
 def select_runs_for_reports(context: dict[str, Any]) -> list[dict[str, Any]]:
-    """The runs worth narrating: best first, capped.
+    """要写分报告的 Run。
 
-    Reads `leaderboard`, which is what build_task_report_context actually
-    produces — it holds only successful runs, already ranked, with the metrics
-    and params a sub-report needs. `runs` is accepted as a fallback for callers
-    that assemble a context themselves.
+    优先用 build_task_report_context 预先挑好的 `report_runs`：在完整排名上按
+    机器学习基线 / 深度学习基线 / 调优 分摊名额（report_run_selection）。
 
-    Getting this key wrong is silent: an absent key yields an empty list, so
-    every report simply came back with no sub-reports at all and nothing
-    anywhere said why.
+    没有这个键时（自行组装 context 的调用方、旧归档重放）退回原来的规则：
+    `leaderboard`（或 `runs`）按名次取前 _MAX_RUN_REPORTS 个。读错键是静默的——
+    缺键返回空列表，报告就没有分报告且没有任何提示，所以两个键都要认。
     """
+    if context.get("report_runs"):
+        return list(context["report_runs"])[:_MAX_RUN_REPORTS]
     entries = context.get("leaderboard") or context.get("runs") or []
     runs = [
         r for r in entries
@@ -148,6 +148,8 @@ async def generate_narrative_report(
             "strategy_type": run.get("strategy_type"),
             "trial_no": run.get("trial_no"),
             "validation_scheme": report_facts.validation_scheme(run),
+            "report_bucket": run.get("report_bucket"),
+            "report_bucket_label": run.get("report_bucket_label"),
             "markdown": markdown,
             "charts": keep_placed(charts, markdown),
         }

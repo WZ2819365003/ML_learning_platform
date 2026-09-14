@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.report_run_selection import BUCKET_LABELS, describe_selection, select_report_runs
 from app.config import get_settings
 from app.models.database import (
     AIReportArchive,
@@ -29,6 +30,8 @@ from app.services.report_facts import validation_scheme
 logger = logging.getLogger(__name__)
 
 _TOP_RUNS = 8
+# 挑分报告时看的排名深度。远大于任何实际任务的 Run 数，只是给 SQL 一个上限。
+_REPORT_POOL_LIMIT = 5000
 _MAX_CONTEXT_CHARS = 12000
 _SCATTER_POINTS = 500
 # v2: charts are semantic specs, the prose carries {{chart:id}} markers, and
@@ -1035,6 +1038,38 @@ def _serialize_run(run: ExperimentRun, experiment_index: dict[str, dict[str, Any
     }
 
 
+def _select_report_runs(
+    full_leaderboard: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """在完整排名上挑分报告，只序列化挑中的那几个（_compact_metrics 不便宜）。"""
+    slim = [
+        {
+            "run_id": e.get("run_id"),
+            "rank": e.get("rank"),
+            "model_type": _model_name_from_params(e.get("params")),
+            "strategy_type": e.get("strategy_type"),
+            "family": e.get("family"),
+            "selection_value": e.get("selection_value"),
+            "objective_value": e.get("objective_value"),
+            "params": e.get("params") or {},
+        }
+        for e in full_leaderboard
+    ]
+    chosen = select_report_runs(slim)
+    by_id = {e.get("run_id"): e for e in full_leaderboard}
+    runs = [
+        {
+            **_serialize_leaderboard_entry(by_id[c["run_id"]]),
+            "family": c.get("family"),
+            "report_bucket": c["report_bucket"],
+            "report_bucket_label": BUCKET_LABELS[c["report_bucket"]],
+        }
+        for c in chosen
+        if c.get("run_id") in by_id
+    ]
+    return runs, describe_selection(slim, chosen)
+
+
 def _serialize_leaderboard_entry(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "rank": entry.get("rank"),
@@ -1100,12 +1135,16 @@ async def build_task_report_context(
         )
         runs = run_rows.scalars().all()
 
-    leaderboard = await task_leaderboard(
+    # 完整排名只用来挑分报告；其余地方（封面、误差对比图、提示词）仍用前 _TOP_RUNS 名。
+    # 以前直接拿 top_k=8 的排行榜去挑分报告，排在第 9 名以后的模型根本进不了候选。
+    full_leaderboard = await task_leaderboard(
         db,
         task_id,
-        top_k=_TOP_RUNS,
+        top_k=_REPORT_POOL_LIMIT,
         owner_username=owner_username,
     )
+    leaderboard = full_leaderboard[:_TOP_RUNS]
+    report_runs, report_run_selection = _select_report_runs(full_leaderboard)
     failed_runs = [run for run in runs if run.status == "FAILED"][:3]
     successful_runs = [run for run in runs if run.status == "SUCCESS"][:_TOP_RUNS]
 
@@ -1158,6 +1197,10 @@ async def build_task_report_context(
         } - {""}),
         "run_status_counts": status_counts,
         "leaderboard": [_serialize_leaderboard_entry(entry) for entry in leaderboard],
+        # 要写分报告的 Run（≤8），按 机器学习基线 / 深度学习基线 / 调优 分摊名额，
+        # 见 report_run_selection。只存挑中的这几个，不把完整排名塞进归档。
+        "report_runs": report_runs,
+        "report_run_selection": report_run_selection,
         "successful_run_examples": [
             _serialize_run(run, experiment_index) for run in successful_runs
         ],

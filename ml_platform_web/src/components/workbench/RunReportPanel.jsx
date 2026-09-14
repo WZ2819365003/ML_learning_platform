@@ -35,7 +35,9 @@ export function buildTreeItems(runReports = [], bestRunId = null, overviewLabel 
     ...runReports.map(r => ({
       id: r.run_id,
       label: runReportLabel(r, modelCounts),
-      meta: r.validation_scheme || null,
+      // 「调优 · 交叉验证」：分报告名额按 机器学习基线/深度学习基线/调优 分摊，
+      // 读者要能看出这一篇属于哪一类。旧归档没有 report_bucket_label，只显示验证方式。
+      meta: [r.report_bucket_label, r.validation_scheme].filter(Boolean).join(' · ') || null,
       best: Boolean(bestRunId) && r.run_id === bestRunId,
       failed: Boolean(r.error),
     })),

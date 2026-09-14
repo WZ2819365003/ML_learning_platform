@@ -693,3 +693,48 @@ async def test_ai_report_route_returns_markdown_payload(
     assert list_response.json()["items"][0]["id"] == "report-1"
     assert detail_response.status_code == 200
     assert detail_response.json()["archive_id"] == "report-1"
+
+
+async def test_report_runs_are_picked_from_the_full_ranking_not_the_top_eight(db):
+    """回归：上下文的 leaderboard 只带前 8 名，分报告以前就在这 8 个里挑。
+
+    线上任务前 9 名全是随机森林网格，8 篇分报告全是它；排在后面的深度学习基线
+    根本不在候选里。report_runs 必须从完整排名里挑。
+    """
+    task_id = await _seed_task(db)
+    grid = PlatformExperiment(
+        modeling_task_id=task_id, name="rf-grid", strategy_type="grid_search",
+        selected_models=["random_forest"], objective_metric="accuracy",
+        objective_direction="max", status="COMPLETED",
+    )
+    dl = PlatformExperiment(
+        modeling_task_id=task_id, name="lstm", strategy_type="baseline",
+        selected_models=["lstm"], objective_metric="accuracy",
+        objective_direction="max", status="COMPLETED",
+    )
+    db.add_all([grid, dl])
+    await db.flush()
+    for i in range(10):   # 10 个网格 Run，全部高于种子里的所有 Run
+        db.add(ExperimentRun(
+            experiment_id=grid.id, status="SUCCESS", trial_no=i + 1,
+            params={"model_type": "random_forest", "family": "ml",
+                    "hyperparameters": {"n_estimators": 100 + i}},
+            metrics={"selection_cv_mean_accuracy": 0.99 - i * 0.001, "accuracy": 0.99 - i * 0.001},
+        ))
+    db.add(ExperimentRun(
+        experiment_id=dl.id, status="SUCCESS", trial_no=1,
+        params={"model_type": "lstm", "family": "dl", "hyperparameters": {}},
+        metrics={"selection_cv_mean_accuracy": 0.5, "accuracy": 0.5},
+    ))
+    await db.commit()
+
+    context = await ai_report_service.build_task_report_context(db, task_id)
+
+    assert len(context["leaderboard"]) == 8
+    assert {r["model_type"] for r in context["leaderboard"]} == {"random_forest"}
+
+    buckets = {r["report_bucket"] for r in context["report_runs"]}
+    assert buckets == {"ml_baseline", "dl_baseline", "tuned"}
+    assert "lstm" in {r["model_type"] for r in context["report_runs"]}
+    assert context["report_runs"][0]["rank"] == 1
+    assert context["report_run_selection"]["tuned"]["runs"] == 10

@@ -63,3 +63,17 @@ describe('buildTreeItems', () => {
     expect(buildTreeItems()).toEqual([{ id: OVERVIEW, label: '总报告' }])
   })
 })
+
+describe('buildTreeItems · 分报告分类标签', () => {
+  it('有分类时显示「分类 · 验证方式」', () => {
+    const items = buildTreeItems([
+      { run_id: 'a', model_type: 'lstm', report_bucket_label: '深度学习基线', validation_scheme: '留出验证' },
+    ])
+    expect(items[1].meta).toBe('深度学习基线 · 留出验证')
+  })
+
+  it('旧归档没有分类字段，只显示验证方式', () => {
+    const items = buildTreeItems([{ run_id: 'a', model_type: 'xgb', validation_scheme: '交叉验证' }])
+    expect(items[1].meta).toBe('交叉验证')
+  })
+})
