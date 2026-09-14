@@ -17,7 +17,7 @@ import React, { useCallback, useMemo, useState } from 'react'
 import {
   Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select,
   Switch, InputNumber, Divider, message, Typography, Tooltip, Empty, Radio,
-  Row, Col,
+  Row, Col, Tabs,
 } from '../ui'
 import { PlusOutlined, ReloadOutlined, ThunderboltOutlined, InfoCircleOutlined, CheckCircleOutlined, UndoOutlined, SaveOutlined } from '@ant-design/icons'
 import { trainingPlansApi, modelingTaskApi, dlApi } from '../services/api'
@@ -403,18 +403,32 @@ export default function TrainingPlans() {
     ? dlModelById[editingModelToken]
     : availableModels[editingModelToken]
 
+  // 一次拉全部、页签在前端过滤：这样每个页签标题上都能带数量，切页签也不用再请求。
+  // 方案是人手维护的配方，量级是几十条，不需要服务端分页。
   const loadPlans = useCallback(async () => {
     setLoading(true)
     try {
-      const params = taskType === 'all' ? {} : { task_type: taskType }
-      const resp = await trainingPlansApi.list(params)
+      const resp = await trainingPlansApi.list({ page_size: 200 })
       setData(resp)
     } catch (e) {
       message.error(e?.response?.data?.detail || '加载失败')
     } finally {
       setLoading(false)
     }
-  }, [taskType])
+  }, [])
+
+  const planCounts = useMemo(() => {
+    const items = data.items || []
+    return {
+      all: items.length,
+      classification: items.filter(p => p.task_type === 'classification').length,
+      regression: items.filter(p => p.task_type === 'regression').length,
+    }
+  }, [data.items])
+  const visiblePlans = useMemo(
+    () => (taskType === 'all' ? data.items : (data.items || []).filter(p => p.task_type === taskType)),
+    [data.items, taskType],
+  )
 
   const loadSpaces = useCallback(async () => {
     try {
@@ -450,15 +464,17 @@ export default function TrainingPlans() {
     setEditingModelToken(null)
     setModelSelectOpen(false)
     form.resetFields()
+    // 在「回归」页签里点新建，默认就是回归方案，不必再手动切一次。
+    const createAsRegression = taskType === 'regression'
     form.setFieldsValue({
-      task_type: 'classification',
+      task_type: createAsRegression ? 'regression' : 'classification',
       strategy_type: 'baseline',
       model_family: 'ml',
       selected_models: [],
       dl_config: {},
       search_space: {},
-      eval_metrics: ['accuracy', 'f1'],
-      default_objective_metric: 'accuracy',
+      eval_metrics: createAsRegression ? ['rmse', 'r2'] : ['accuracy', 'f1'],
+      default_objective_metric: createAsRegression ? 'rmse' : 'accuracy',
       budget_config: { max_trials: 20, n_trials_per_model: 10, test_size: 0.2 },
     })
     setDrawerOpen(true)
@@ -659,19 +675,6 @@ export default function TrainingPlans() {
             </Col>
             <Col>
               <Space wrap>
-                <Radio.Group
-                  optionType="button"
-                  buttonStyle="solid"
-                  aria-label="任务类型筛选"
-                  size="middle"
-                  value={taskType}
-                  onChange={e => setTaskType(e.target.value)}
-                  options={[
-                    { label: '全部', value: 'all' },
-                    { label: '分类', value: 'classification' },
-                    { label: '回归', value: 'regression' },
-                  ]}
-                />
                 <Button icon={<ReloadOutlined />} onClick={loadPlans} loading={loading}>刷新</Button>
                 <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
                   新建方案
@@ -681,10 +684,21 @@ export default function TrainingPlans() {
           </Row>
         </div>
 
+        <Tabs
+          activeKey={taskType}
+          onChange={setTaskType}
+          style={{ padding: '0 20px' }}
+          items={[
+            { key: 'all', label: `全部 (${planCounts.all})` },
+            { key: 'classification', label: `分类 (${planCounts.classification})` },
+            { key: 'regression', label: `回归 (${planCounts.regression})` },
+          ]}
+        />
+
         <Table
           rowKey="id"
           loading={loading}
-          dataSource={data.items}
+          dataSource={visiblePlans}
           columns={columns}
           scroll={{ x: 1220 }}
           pagination={{showTotal: total => `共 ${total} 条`,  defaultPageSize: 10, showSizeChanger: true }}
