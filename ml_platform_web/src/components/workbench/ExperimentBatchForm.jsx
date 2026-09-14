@@ -10,6 +10,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { modelingTaskApi, trainingPlansApi } from '../../services/api'
 import { useTabActive } from '../../navigation/TabContext'
+import { budgetStarvation, plannedTrialsPerModel } from '../../utils/trialBudget'
 
 const { Text } = Typography
 
@@ -167,6 +168,8 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
   const strategy = Form.useWatch('strategy_type', form) || 'baseline'
   const selectedModels = Form.useWatch('selected_models', form) || []
   const [modelParams, setModelParams] = useState({})
+  const maxTrials = Form.useWatch('max_trials', form)
+  const nTrialsPerModel = Form.useWatch('n_trials_per_model', form)
   const [plans, setPlans] = useState([])
   const [appliedPlanId, setAppliedPlanId] = useState(null)
   const [appliedPlanPayload, setAppliedPlanPayload] = useState(null)
@@ -315,6 +318,12 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
 
   const strategyMeta = STRATEGY_META[strategy]
 
+  // 「最大 Trial 数」是批次总上限，按模型顺序消耗——提交前就把会被截掉的模型摆出来
+  const plannedTrials = (strategy === 'grid_search' || strategy === 'bayesian_search')
+    ? plannedTrialsPerModel(strategy, selectedModels, tuningSpaces, modelParams, nTrialsPerModel)
+    : []
+  const { total: plannedTotal, starved } = budgetStarvation(plannedTrials, maxTrials)
+
   return (
     <div>
       <Alert type="info" showIcon style={{ marginBottom: 12 }}
@@ -395,6 +404,23 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
             </Form.Item>
           </Col>
         </Row>
+
+        {plannedTrials.length > 0 && (starved.length > 0 ? (
+          <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+            message={`「最大 Trial 数」${maxTrials} 不够：本批次计划 ${plannedTotal} 次，上限按模型顺序消耗`}
+            description={
+              <Space direction="vertical" size={4}>
+                <span>{starved.map(s => `${s.model} 只能跑 ${s.got}/${s.planned} 次`).join('；')}，提交会被拒绝。</span>
+                <Button size="small" type="primary" onClick={() => form.setFieldValue('max_trials', plannedTotal)}>
+                  把上限调到 {plannedTotal}
+                </Button>
+              </Space>
+            } />
+        ) : (
+          <Text type="secondary" style={{ display: 'block', fontSize: 12, margin: '-4px 0 12px' }}>
+            本批次计划 {plannedTotal} 次训练：{plannedTrials.map(p => `${p.model} ${p.planned}`).join(' · ')}
+          </Text>
+        ))}
 
         {selectedModels.length > 0 && (
           <>
