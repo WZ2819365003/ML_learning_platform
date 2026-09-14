@@ -18,6 +18,7 @@ import {
 import { DownloadOutlined, PrinterOutlined, ReloadOutlined } from '@ant-design/icons'
 
 import { modelingTaskApi } from '../../services/api'
+import { saveBlob } from '../../utils/download'
 import MarkdownReport from './MarkdownReport'
 import { AiReportReader } from './AiReportModal'
 import RunReportPanel from './RunReportPanel'
@@ -103,12 +104,7 @@ export default function ReportView({ taskId, taskName, generatedAiReport = null 
   const download = () => {
     const markdown = buildCompleteReportMarkdown(source.report, source.markdown)
     const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${source.kind === 'ai' ? 'ai-report' : 'report'}-${String(taskId).slice(0, 8)}.md`
-    a.click()
-    URL.revokeObjectURL(url)
+    saveBlob(blob, `${source.kind === 'ai' ? 'ai-report' : 'report'}-${String(taskId).slice(0, 8)}.md`)
     message.success('报告已下载')
   }
 

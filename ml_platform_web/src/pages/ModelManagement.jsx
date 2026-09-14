@@ -26,7 +26,7 @@ import {
 } from '../ui';
 import { ApiOutlined, BarChartOutlined, CloudUploadOutlined, CopyOutlined, DownloadOutlined, PlayCircleOutlined, TagOutlined, TrophyOutlined } from '@ant-design/icons'
 import echarts from '../utils/echarts';
-import api, { dataApi, deployApi, dlApi, modelApi, timesfmApi, trainingApi } from '../services/api';
+import api, { dataApi, deployApi, dlApi, downloadFile, modelApi, timesfmApi, trainingApi } from '../services/api';
 import { formatBytes, formatDateTime, formatMetricByKey, metricLabels } from '../utils/formatters';
 import { buildResultsUrl } from '../utils/resultRoutes';
 
@@ -428,12 +428,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
                 </Button>
                 <Button
                   icon={<DownloadOutlined />}
-                  onClick={() => {
-                    const a = document.createElement('a');
-                    a.href = modelApi.downloadModelUrl(detail.task_id);
-                    a.download = '';
-                    a.click();
-                  }}
+                  onClick={() => downloadFile(modelApi.downloadModelUrl(detail.task_id), 'model.joblib').catch(err => message.error(err.message || '下载失败'))}
                 >
                   下载模型文件
                 </Button>
@@ -731,12 +726,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
                     tab with the artifact caveats; this is the quick grab. */}
                 <Button
                   icon={<DownloadOutlined />}
-                  onClick={() => {
-                    const a = document.createElement('a');
-                    a.href = modelApi.downloadModelUrl(detail.id);
-                    a.download = '';
-                    a.click();
-                  }}
+                  onClick={() => downloadFile(modelApi.downloadModelUrl(detail.id), 'model.pt').catch(err => message.error(err.message || '下载失败'))}
                 >
                   下载模型文件
                 </Button>

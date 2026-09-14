@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons'
 
 import { modelingTaskApi } from '../../services/api'
+import { saveBlob } from '../../utils/download'
 import ReportDocument from './ReportDocument'
 import { buildReportViewModel } from './aiReportViewModel'
 import { formatDateTime } from '../../utils/formatters'
@@ -111,12 +112,7 @@ export default function AiReportModal({
   const download = () => {
     if (!markdown) return
     const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `ai-report-${String(taskId).slice(0, 8)}.md`
-    a.click()
-    URL.revokeObjectURL(url)
+    saveBlob(blob, `ai-report-${String(taskId).slice(0, 8)}.md`)
     message.success('AI 报告已下载')
   }
 

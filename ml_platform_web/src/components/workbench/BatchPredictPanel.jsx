@@ -14,7 +14,7 @@ import {
   CloudUploadOutlined, DownloadOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 
-import { deployApi } from '../../services/api'
+import { deployApi, downloadFile } from '../../services/api'
 
 const POLL_MS = 1500
 const TERMINAL = ['completed', 'failed']
@@ -108,8 +108,7 @@ export default function BatchPredictPanel({ deploymentId }) {
           <Button
             type="primary"
             icon={<DownloadOutlined />}
-            href={deployApi.batchPredictDownloadUrl(deploymentId, job.job_id)}
-           target="_blank"
+            onClick={() => downloadFile(deployApi.batchPredictDownloadUrl(deploymentId, job.job_id), `batch-predict-${job.job_id}.csv`).catch(err => message.error(err.message || '下载失败'))}
           >
             下载结果 CSV
           </Button>

@@ -26,6 +26,7 @@ import {
 } from '@ant-design/icons'
 import { useLogStream } from '../../hooks/useLogStream'
 import { parseServerDate } from '../../utils/formatters'
+import { saveBlob } from '../../utils/download'
 
 const { Text } = Typography
 
@@ -163,14 +164,7 @@ export default function LogViewer({ historical, domainTaskId, isLive, streamEnab
       return `${ts} | ${lvl} | ${l.message}${extras}`
     })
     const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${domainTaskId || 'logs'}.log`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    saveBlob(blob, `${domainTaskId || 'logs'}.log`)
   }
 
   const levelCounts = useMemo(() => {

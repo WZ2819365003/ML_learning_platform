@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { downloadWithAuth } from '../utils/download';
 
 // ── Auth token helpers (single-admin bearer token, see backend app/core/auth) ──
 const TOKEN_KEY = 'ml_platform_token';
@@ -23,6 +24,13 @@ const redirectToLogin = () => {
     window.location.assign('/login');
   }
 };
+
+/**
+ * 下载需要登录的文件（模型、批量预测结果）。不要再用 <a href> 直链：浏览器直接打开
+ * 链接不会带 Authorization 请求头，后端一律 401。见 utils/download.js。
+ */
+export const downloadFile = (url, fallbackName) =>
+  downloadWithAuth(url, { getToken: getAuthToken, onUnauthorized: redirectToLogin }, fallbackName);
 
 // Use relative path for API to work in both dev and Docker environments
 const api = axios.create({

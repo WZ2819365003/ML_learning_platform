@@ -8,7 +8,7 @@ import {
   CloudUploadOutlined, DownloadOutlined, ThunderboltOutlined, TrophyOutlined,
   CopyOutlined, ApiOutlined, BlockOutlined, ReloadOutlined,
 } from '@ant-design/icons'
-import { dataApi, deployApi, ensembleApi, runModelDownloadUrl } from '../../services/api'
+import { dataApi, deployApi, downloadFile, ensembleApi, runModelDownloadUrl } from '../../services/api'
 import { useDeployRun } from '../../hooks/useDeployRun'
 import {
   buildCurl, buildRequestExample, buildResponseExample, deploymentNotes,
@@ -281,7 +281,7 @@ function SingleDeployTab({ task, successRuns, bestRunId, schema }) {
             {selectedRun?.domain_task_id && (
               <Tooltip title="下载该 Run 训练出的模型文件 (.joblib)">
                 <Button icon={<DownloadOutlined />}
-                  href={runModelDownloadUrl(selectedRun.domain_task_id)} target="_blank">
+                  onClick={() => downloadFile(runModelDownloadUrl(selectedRun.domain_task_id), 'model.joblib').catch(err => message.error(err.message || '下载失败'))}>
                   下载模型
                 </Button>
               </Tooltip>

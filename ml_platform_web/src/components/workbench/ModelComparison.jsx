@@ -10,7 +10,7 @@ import {
   finalizeTaskAndRefresh,
 } from '../../utils/comparison'
 import { useDeployRun } from '../../hooks/useDeployRun'
-import { modelingTaskApi, runModelDownloadUrl } from '../../services/api'
+import { downloadFile, modelingTaskApi, runModelDownloadUrl } from '../../services/api'
 import RunInspector from './RunInspector'
 
 const { Text } = Typography
@@ -234,7 +234,7 @@ export default function ModelComparison({
             <Button size="small" disabled={!r.can_explain} onClick={() => openInspector(r.run_id, 'shap')} type="link" className="table-action">解释</Button>
           </Tooltip>
           {r.can_download && (
-            <Tooltip title="下载模型"><Button size="small" href={runModelDownloadUrl(r.domain_task_id)} target="_blank" type="link" className="table-action">下载</Button></Tooltip>
+            <Tooltip title="下载模型"><Button size="small" onClick={() => downloadFile(runModelDownloadUrl(r.domain_task_id), `${r.model_type || 'model'}.joblib`).catch(err => message.error(err.message || '下载失败'))} type="link" className="table-action">下载</Button></Tooltip>
           )}
           <Tooltip title={r.can_deploy ? '部署此模型' : '仅成功且有产物的 Run 可部署'}>
             <Button size="small" disabled={!r.can_deploy} onClick={() => { resetDeploy(); setDeployModal({ runId: r.run_id, name: `${task.name}-${r.model_type}` }) }} type="link" className="table-action">部署</Button>
