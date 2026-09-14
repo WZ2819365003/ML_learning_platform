@@ -302,15 +302,10 @@ export default function ModelConfigTabs({ task, onSubmitted }) {
           { key: 'dl', label: '深度学习', children: dlTab },
           { key: 'mixed', label: '多模型对照', children: mixedTab },
           { key: 'tune', label: '调参策略', children: (
-            <div>
-              <div style={{ marginBottom: 8, textAlign: 'right' }}>
-                <Button type="link" size="small" onClick={() => window.open('/v3/training-plans', '_blank')}>
-                  管理训练方案 →
-                </Button>
-              </div>
-              <ExperimentBatchForm task={task} active={activeKey === 'tune'} resetKey={task?.id}
-                onSubmitted={onSubmitted} />
-            </div>
+            // 「管理训练方案」入口在表单的方案下拉框旁边。以前这里用 window.open
+            // 另开一个浏览器窗口，脱离了平台的页签栏，草稿保护和页签状态都管不到它。
+            <ExperimentBatchForm task={task} active={activeKey === 'tune'} resetKey={task?.id}
+              onSubmitted={onSubmitted} />
           ) },
         ]}
       />

@@ -7,7 +7,9 @@ import {
   ThunderboltOutlined, NodeIndexOutlined, FunctionOutlined,
   InfoCircleOutlined, BookOutlined, RocketOutlined,
 } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import { modelingTaskApi, trainingPlansApi } from '../../services/api'
+import { useTabActive } from '../../navigation/TabContext'
 
 const { Text } = Typography
 
@@ -204,12 +206,19 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
   }, [active, task?.task_type])
 
   // Load applicable training plans (filtered by task_type).
+  // 页签切回来也要重新拉：用户点「管理训练方案」去另一个页签新建完方案再切回来，
+  // 这里的 active（子页签是否选中）并没有变，不带上 tabActive 就看不到新方案。
+  const tabActive = useTabActive()
+  const navigate = useNavigate()
+  const [plansLoading, setPlansLoading] = useState(false)
   useEffect(() => {
-    if (!active || !task?.task_type) { setPlans([]); return }
+    if (!active || !tabActive || !task?.task_type) return
+    setPlansLoading(true)
     trainingPlansApi.list({ task_type: task.task_type, page_size: 50 })
       .then(resp => setPlans(resp?.items || []))
       .catch(() => setPlans([]))
-  }, [active, task?.task_type])
+      .finally(() => setPlansLoading(false))
+  }, [active, tabActive, task?.task_type])
 
   const applyPlan = (planId) => {
     const plan = plans.find(p => p.id === planId)
@@ -311,26 +320,32 @@ export default function ExperimentBatchForm({ task, active = true, resetKey, onS
       <Alert type="info" showIcon style={{ marginBottom: 12 }}
         message={<Space><strong>{strategyMeta?.label}</strong><Text type="secondary" style={{ fontSize: 12 }}>{strategyMeta?.description}</Text></Space>} />
 
-      {plans.length > 0 && (
-        <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 4, background: 'rgba(37,99,235,0.04)', border: '1px dashed rgba(37,99,235,0.25)' }}>
-          <Space align="center" size={10} style={{ width: '100%' }}>
-            <BookOutlined style={{ color: '#1a8dff' }} />
-            <Text style={{ fontSize: 12, color: 'var(--text-secondary)' }}>从已保存方案快速套用：</Text>
-            <Select placeholder="选择方案（覆盖策略 · 模型 · 预算）" style={{ flex: 1, minWidth: 260 }} allowClear
-              value={appliedPlanId} onChange={applyPlan}
-              options={plans.map(p => ({
-                value: p.id,
-                label: (
-                  <Space>
-                    <span style={{ fontWeight: 500 }}>{p.name}</span>
-                    <Tag color="blue">{p.strategy_type}</Tag>
-                    <Text type="secondary" style={{ fontSize: 11 }}>{(p.selected_models || []).length} 个模型</Text>
-                  </Space>
-                ),
-              }))} />
-          </Space>
-        </div>
-      )}
+      {/* 以前包在 plans.length > 0 里：没有匹配方案时整块不渲染，用户根本不知道
+          这里能套方案。回归任务一个方案都没有时就是这样。现在始终显示。 */}
+      <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 4, background: 'rgba(37,99,235,0.04)', border: '1px dashed rgba(37,99,235,0.25)' }}>
+        <Space align="center" size={10} style={{ width: '100%' }}>
+          <BookOutlined style={{ color: '#1a8dff' }} />
+          <Text style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>训练方案：</Text>
+          <Select
+            placeholder={plans.length ? '选择方案（覆盖策略 · 模型 · 搜索空间 · 预算）' : `暂无适用于${task?.task_type === 'regression' ? '回归' : '分类'}任务的方案`}
+            style={{ flex: 1, minWidth: 260 }} allowClear loading={plansLoading}
+            disabled={!plans.length}
+            value={appliedPlanId} onChange={applyPlan}
+            options={plans.map(p => ({
+              value: p.id,
+              label: (
+                <Space>
+                  <span style={{ fontWeight: 500 }}>{p.name}</span>
+                  <Tag color="blue">{p.strategy_type}</Tag>
+                  <Text type="secondary" style={{ fontSize: 11 }}>{(p.selected_models || []).length} 个模型</Text>
+                </Space>
+              ),
+            }))} />
+          <Button type="link" size="small" style={{ paddingInline: 0 }} onClick={() => navigate('/v3/training-plans')}>
+            {plans.length ? '管理训练方案 →' : '去新建方案 →'}
+          </Button>
+        </Space>
+      </div>
 
       <Form form={form} layout="vertical" size="middle">
         <Row gutter={12}>
