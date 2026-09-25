@@ -95,9 +95,15 @@ async def test_leaderboard_max_direction(session_factory):
         run3 = await create_run(db, exp["id"], params={"model_type": "lr"})
         await db.flush()
 
-        await update_run_metrics(db, run1["id"], {"accuracy": 0.85}, status="SUCCESS")
-        await update_run_metrics(db, run2["id"], {"accuracy": 0.92}, status="SUCCESS")
-        await update_run_metrics(db, run3["id"], {"accuracy": 0.78}, status="SUCCESS")
+        await update_run_metrics(
+            db, run1["id"], {"accuracy": 0.99, "cv_avg_accuracy": 0.85}, status="SUCCESS"
+        )
+        await update_run_metrics(
+            db, run2["id"], {"accuracy": 0.50, "cv_avg_accuracy": 0.92}, status="SUCCESS"
+        )
+        await update_run_metrics(
+            db, run3["id"], {"accuracy": 0.98, "cv_avg_accuracy": 0.78}, status="SUCCESS"
+        )
         await db.commit()
 
         exp_id = exp["id"]

@@ -45,6 +45,8 @@ import math
 import re
 from typing import Any, Iterable
 
+from app.core.evaluation_metrics import resolve_objective_metrics
+
 
 # ---------------------------------------------------------------------------
 # Log keyword → 中文 attribution table. Ordered: first hit wins.
@@ -215,7 +217,7 @@ def _param_impact(
         if str(sib.get("status", "")).upper() != "SUCCESS":
             continue
         metrics = sib.get("metrics") or {}
-        val = _finite(metrics.get(metric_name))
+        val = resolve_objective_metrics(metrics, metric_name).selection_value
         if val is None:
             continue
         hp = _extract_numeric_hparams(sib.get("params") or {})
@@ -278,7 +280,9 @@ def _peer_comparison(
     for sib in siblings or []:
         if str(sib.get("status", "")).upper() != "SUCCESS":
             continue
-        val = _finite((sib.get("metrics") or {}).get(metric_name))
+        val = resolve_objective_metrics(
+            sib.get("metrics") or {}, metric_name
+        ).selection_value
         if val is not None:
             values.append((str(sib.get("id")), val))
 
@@ -403,7 +407,7 @@ def diagnose_run(
     # 3/4. Need metric name + direction to rank and score param impact.
     metric_name = (experiment or {}).get("objective_metric") or "accuracy"
     direction   = (experiment or {}).get("objective_direction") or "max"
-    run_metric  = _finite(metrics.get(metric_name))
+    run_metric  = resolve_objective_metrics(metrics, metric_name).selection_value
     run_id      = run.get("id")
 
     impacts = _param_impact(run_metric, siblings, metric_name, direction, run_id)

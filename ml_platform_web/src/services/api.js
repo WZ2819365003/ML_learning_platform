@@ -1,4 +1,36 @@
 import axios from 'axios';
+import { downloadWithAuth } from '../utils/download';
+
+// ── Auth token helpers (single-admin bearer token, see backend app/core/auth) ──
+const TOKEN_KEY = 'ml_platform_token';
+export const getAuthToken = () => localStorage.getItem(TOKEN_KEY) || '';
+export const setAuthToken = (token) => localStorage.setItem(TOKEN_KEY, token);
+export const clearAuthToken = () => {
+  localStorage.removeItem(TOKEN_KEY);
+  try { sessionStorage.removeItem('ml_platform_workspace_v1'); } catch { /* Storage can be unavailable. */ }
+  // Auth expiry/logout must not be blocked by a draft's beforeunload prompt.
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('ml-platform:session-ended'));
+};
+/** Append ?token= for WebSocket URLs (browsers can't set WS headers). */
+export const withWsToken = (url) => {
+  const token = getAuthToken();
+  if (!token) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+};
+
+const redirectToLogin = () => {
+  if (window.location.pathname !== '/login') {
+    clearAuthToken();
+    window.location.assign('/login');
+  }
+};
+
+/**
+ * 下载需要登录的文件（模型、批量预测结果）。不要再用 <a href> 直链：浏览器直接打开
+ * 链接不会带 Authorization 请求头，后端一律 401。见 utils/download.js。
+ */
+export const downloadFile = (url, fallbackName) =>
+  downloadWithAuth(url, { getToken: getAuthToken, onUnauthorized: redirectToLogin }, fallbackName);
 
 // Use relative path for API to work in both dev and Docker environments
 const api = axios.create({
@@ -11,9 +43,19 @@ const inferenceApi = axios.create({
   baseURL: '/',
   timeout: 30000,
 });
+
+const attachToken = (config) => {
+  const token = getAuthToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+};
+api.interceptors.request.use(attachToken);
+inferenceApi.interceptors.request.use(attachToken);
+
 inferenceApi.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    if (error?.response?.status === 401) redirectToLogin();
     console.error('Inference API请求错误:', error);
     return Promise.reject(error);
   }
@@ -22,10 +64,29 @@ inferenceApi.interceptors.response.use(
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    // 登录接口自身的 401 交给登录页展示错误，不做跳转循环
+    if (error?.response?.status === 401 && !String(error?.config?.url).includes('/auth/login')) {
+      redirectToLogin();
+    }
     console.error('API请求错误:', error);
     return Promise.reject(error);
   }
 );
+
+export const authApi = {
+  login(username, password) {
+    return api.post('/auth/login', { username, password });
+  },
+  me() {
+    return api.get('/auth/me');
+  },
+};
+
+export const systemApi = {
+  health() {
+    return inferenceApi.get('/health');
+  },
+};
 
 export const dataApi = {
   listDatasets(params) {
@@ -43,6 +104,10 @@ export const dataApi = {
   },
   previewDataset(datasetId) {
     return api.get(`/data/${datasetId}/preview`);
+  },
+  // Data-pipeline-as-code: run Python that transforms the dataset → new dataset.
+  runPipeline(datasetId, payload) {
+    return api.post(`/data/${datasetId}/pipeline`, payload);
   },
   deleteDataset(datasetId) {
     return api.delete(`/data/${datasetId}`);
@@ -88,9 +153,6 @@ export const logsApi = {
 export const modelApi = {
   listAssets(params) {
     return api.get('/models/assets', { params });
-  },
-  listModels(params) {
-    return api.get('/models/list', { params });
   },
   getModelDetail(taskId) {
     return api.get(`/models/${taskId}/detail`);
@@ -138,14 +200,14 @@ export const vizApi = {
   getLearningCurve(taskId) {
     return api.get(`/viz/${taskId}/learning_curve`);
   },
-  getShapSummary(taskId, params) {
-    return api.get(`/viz/${taskId}/shap_summary`, { params });
+  getShapSummary(taskId, params, config = {}) {
+    return api.get(`/viz/${taskId}/shap_summary`, { ...config, params });
   },
-  getResidualPlot(taskId) {
-    return api.get(`/viz/${taskId}/residual_plot`);
+  getResidualPlot(taskId, params) {
+    return api.get(`/viz/${taskId}/residual_plot`, { params });
   },
-  getPredictedVsActual(taskId) {
-    return api.get(`/viz/${taskId}/predicted_vs_actual`);
+  getPredictedVsActual(taskId, params) {
+    return api.get(`/viz/${taskId}/predicted_vs_actual`, { params });
   },
   getPerClass(taskId) {
     return api.get(`/viz/${taskId}/per_class`);
@@ -194,6 +256,20 @@ export const deployApi = {
   },
   predict(deploymentId, payload) {
     return inferenceApi.post(`/inference/${deploymentId}/predict`, payload);
+  },
+  // Batch prediction is file-in / file-out and runs asynchronously — the POST
+  // returns a job id, not results. See batch_prediction_service.py.
+  submitBatchPredict(deploymentId, file) {
+    const form = new FormData();
+    form.append('file', file);
+    return inferenceApi.post(`/inference/${deploymentId}/batch-predict`, form);
+  },
+  getBatchPredict(deploymentId, jobId) {
+    return inferenceApi.get(`/inference/${deploymentId}/batch-predict/${jobId}`);
+  },
+  batchPredictDownloadUrl(deploymentId, jobId) {
+    // inferenceApi's baseURL is '/', so interpolating it would yield '//inference/…'.
+    return `/inference/${deploymentId}/batch-predict/${jobId}/download`;
   },
   getResult(deploymentId, jobId) {
     return inferenceApi.get(`/inference/${deploymentId}/result/${jobId}`);
@@ -250,6 +326,16 @@ export const tsApi = {
 
 // ── V3 Platform APIs ────────────────────────────────────────────────────────
 
+// Weighted multi-model deployments. Separate from deployApi because an
+// ensemble has members and weights instead of a task_id, and its predict
+// response reports which members actually contributed.
+export const ensembleApi = {
+  create: (payload) => api.post('/deploy/ensembles', payload),
+  list: (params = {}) => api.get('/deploy/ensembles', { params }),
+  delete: (id) => api.delete(`/deploy/ensembles/${id}`),
+  predict: (id, payload) => inferenceApi.post(`/inference/ensembles/${id}/predict`, payload),
+};
+
 export const platformTasksApi = {
   list:   (params = {}) => api.get('/platform/tasks/', { params }),
   tree:   (params = {}) => api.get('/platform/tasks/tree', { params }),
@@ -271,9 +357,7 @@ export const platformExperimentsApi = {
   getRun: (experimentId, runId) => api.get(`/platform/experiments/${experimentId}/runs/${runId}`),
   getLeaderboard: (experimentId) => api.get(`/platform/experiments/${experimentId}/leaderboard`),
   // Custom candidates (explicit list)
-  submitAutoml: (experimentId, candidates) => api.post(`/platform/experiments/${experimentId}/automl`, { candidates }),
   // Registry-based one-click AutoML
-  submitAutomlRegistry: (experimentId, config) => api.post(`/platform/experiments/${experimentId}/automl/registry`, config),
   // AutoML candidate list
   listAutomlCandidates: (taskType = 'classification') => api.get('/platform/experiments/automl/candidates', { params: { task_type: taskType } }),
   triggerExplain: (experimentId, runId) => api.post(`/platform/experiments/${experimentId}/runs/${runId}/explain`),
@@ -298,9 +382,36 @@ export const modelingTaskApi = {
     api.post(`/v3/tasks/${taskId}/experiments/bulk`, data),
   tuningSpaces: (taskType) => api.get(`/v3/tasks/tuning-spaces/${taskType}`),
   progressTree: (taskId) => api.get(`/v3/tasks/${taskId}/progress-tree`),
+  // AutoML is a strategy of the normal batch pipeline — its runs land on the
+  // leaderboard and qualify for final evaluation like any other.
+  launchAutoml: (taskId, params = {}) =>
+    api.post(`/v3/tasks/${taskId}/automl`, null, { params }),
+  // Markdown, not JSON — responseType keeps axios from trying to parse it.
+  report: (taskId) =>
+    api.get(`/v3/tasks/${taskId}/report.md`, { responseType: 'text' }),
+  aiReport: (taskId) =>
+    api.post(`/v3/tasks/${taskId}/ai-report`, null, { timeout: 600000 }),
+  aiReportArchives: (taskId) =>
+    api.get(`/v3/tasks/${taskId}/ai-reports`),
+  aiReportArchive: (taskId, reportId) =>
+    api.get(`/v3/tasks/${taskId}/ai-reports/${reportId}`),
   strategyComparison: (taskId) =>
     api.get(`/v3/tasks/${taskId}/strategy-comparison`),
+  finalize: (taskId) =>
+    api.post(`/v3/tasks/${taskId}/final-evaluation`),
+  // Deploy the model trained by a run (workflow 部署 step). Bridges to the
+  // underlying ML/DL deployment via the run's domain task.
+  deployRun: (taskId, runId, data) =>
+    api.post(`/v3/tasks/${taskId}/runs/${runId}/deploy`, data),
+  // Run user Python (code-config) → dispatch a batch through the normal pipeline.
+  configExec: (taskId, data) =>
+    api.post(`/v3/tasks/${taskId}/config-exec`, data),
 };
+
+// A run's trained model is downloadable via its domain_task_id (returned by
+// modelingTaskApi.runs/leaderboard). ML models go through /api/models/{id}/download.
+export const runModelDownloadUrl = (domainTaskId) =>
+  `${api.defaults.baseURL}/models/${domainTaskId}/download`;
 
 export const platformRunsApi = {
   inspect: (runId, params = {}) => api.get(`/platform/runs/${runId}/inspector`, { params }),

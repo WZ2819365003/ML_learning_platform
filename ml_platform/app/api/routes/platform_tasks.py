@@ -9,9 +9,11 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import case, func, select
+from sqlalchemy import case, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import current_username_from_authorization, owner_scope_username
+from app.core.ownership import ensure_task_owner
 from app.models.database import (
     ExperimentRun,
     ModelingTask,
@@ -19,7 +21,8 @@ from app.models.database import (
     PlatformTask,
     get_db,
 )
-from app.scheduler.task_runner import cancel_task, dispatch_platform_task, retry_task
+from app.scheduler.scheduler import get_scheduler
+from app.scheduler.task_runner import cancel_task, retry_task
 from app.services.platform_task_detail_service import get_platform_task_detail
 
 router = APIRouter(prefix="/platform/tasks", tags=["Platform Tasks V3"])
@@ -61,13 +64,25 @@ def _serialize(task: PlatformTask) -> dict[str, Any]:
 @router.get("/stats", summary="Global task counts grouped by status")
 async def platform_task_stats(
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """Return total task counts for every status in a single query."""
-    rows = await db.execute(
-        select(PlatformTask.status, func.count(PlatformTask.id))
-        .group_by(PlatformTask.status)
-    )
-    counts: dict[str, int] = {status: cnt for status, cnt in rows.all()}
+    owner_username = owner_scope_username(username)
+    if owner_username:
+        task_rows = await db.execute(select(PlatformTask))
+        counts: dict[str, int] = {}
+        for task in task_rows.scalars().all():
+            try:
+                await ensure_task_owner(db, task.id, owner_username)
+            except HTTPException:
+                continue
+            counts[task.status] = counts.get(task.status, 0) + 1
+    else:
+        rows = await db.execute(
+            select(PlatformTask.status, func.count(PlatformTask.id))
+            .group_by(PlatformTask.status)
+        )
+        counts = {status: cnt for status, cnt in rows.all()}
     return {
         "total": sum(counts.values()),
         "by_status": counts,
@@ -96,6 +111,7 @@ async def platform_task_tree(
     page_size: int = Query(10, ge=1, le=50),
     status: str | None = Query(None, description="Filter modeling tasks by status"),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """
     Return a paginated list of modeling tasks with nested experiments and runs.
@@ -124,11 +140,15 @@ async def platform_task_tree(
     forecast/predict tasks) are surfaced separately by the flat /list endpoint.
     """
     # --- 1. Paginate modeling tasks
+    owner_username = owner_scope_username(username)
     stmt = select(ModelingTask)
     count_stmt = select(func.count(ModelingTask.id))
     if status:
         stmt = stmt.where(ModelingTask.status == status.upper())
         count_stmt = count_stmt.where(ModelingTask.status == status.upper())
+    if owner_username:
+        stmt = stmt.where(ModelingTask.owner_username == owner_username)
+        count_stmt = count_stmt.where(ModelingTask.owner_username == owner_username)
 
     total = (await db.execute(count_stmt)).scalar_one()
     rows = await db.execute(
@@ -190,6 +210,9 @@ async def platform_task_tree(
             "trial_no": run.trial_no,
             "rank": run.rank,
             "status": run.status,
+            # M2c: the Run keeps its own terminal failure reason, so the tree
+            # still explains a failure after the PlatformTask is cleaned up.
+            "error_message": run.error_message,
             "metrics": run.metrics or {},
             "params": run.params or {},
             "source_experiment_type": run.source_experiment_type,
@@ -291,7 +314,9 @@ async def list_platform_tasks(
     page_size: int = Query(20, ge=1, le=200),
     kind: str | None = Query(None),
     status: str | None = Query(None),
+    orphan_only: bool = Query(False),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     stmt = select(PlatformTask)
     count_stmt = select(func.count(PlatformTask.id))
@@ -302,14 +327,33 @@ async def list_platform_tasks(
     if status:
         stmt = stmt.where(PlatformTask.status == status.upper())
         count_stmt = count_stmt.where(PlatformTask.status == status.upper())
+    if orphan_only:
+        linked_to_run = exists(
+            select(ExperimentRun.id).where(ExperimentRun.task_id == PlatformTask.id)
+        )
+        stmt = stmt.where(~linked_to_run)
+        count_stmt = count_stmt.where(~linked_to_run)
 
-    total = (await db.execute(count_stmt)).scalar_one()
-    rows = await db.execute(
-        stmt.order_by(PlatformTask.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
-    tasks = rows.scalars().all()
+    owner_username = owner_scope_username(username)
+    if owner_username:
+        rows = await db.execute(stmt.order_by(PlatformTask.created_at.desc()))
+        owned_tasks: list[PlatformTask] = []
+        for task in rows.scalars().all():
+            try:
+                await ensure_task_owner(db, task.id, owner_username)
+            except HTTPException:
+                continue
+            owned_tasks.append(task)
+        total = len(owned_tasks)
+        tasks = owned_tasks[(page - 1) * page_size: page * page_size]
+    else:
+        total = (await db.execute(count_stmt)).scalar_one()
+        rows = await db.execute(
+            stmt.order_by(PlatformTask.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        tasks = rows.scalars().all()
     return {
         "items": [_serialize(t) for t in tasks],
         "total": total,
@@ -330,6 +374,7 @@ async def platform_task_detail(
     task_id: str,
     log_limit: int = Query(200, ge=1, le=2000),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """
     Backs the ``OrphanTaskDetailDrawer`` in TaskCenter's 孤立任务 tab.
@@ -343,6 +388,7 @@ async def platform_task_detail(
         still opens.
       * ``recent_logs`` — tail of ``storage/logs/{domain_id}.log``
     """
+    await ensure_task_owner(db, task_id, owner_scope_username(username))
     return await get_platform_task_detail(db, task_id, log_limit=log_limit)
 
 
@@ -354,7 +400,9 @@ async def platform_task_detail(
 async def get_platform_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
+    await ensure_task_owner(db, task_id, owner_scope_username(username))
     result = await db.execute(select(PlatformTask).where(PlatformTask.id == task_id))
     task = result.scalar_one_or_none()
     if task is None:
@@ -370,7 +418,9 @@ async def get_platform_task(
 async def retry_platform_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
+    await ensure_task_owner(db, task_id, owner_scope_username(username))
     try:
         task = await retry_task(db, task_id)
     except ValueError as exc:
@@ -378,7 +428,7 @@ async def retry_platform_task(
         status_code = 404 if "not found" in detail else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
     await db.commit()
-    await dispatch_platform_task(task.id, task.kind, task.payload_ref, task.priority)
+    await get_scheduler(task.kind).submit(task.id)
     return _serialize(task)
 
 
@@ -390,7 +440,9 @@ async def retry_platform_task(
 async def cancel_platform_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
+    await ensure_task_owner(db, task_id, owner_scope_username(username))
     try:
         task = await cancel_task(db, task_id)
     except ValueError as exc:
@@ -408,7 +460,9 @@ async def cancel_platform_task(
 async def delete_platform_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, str]:
+    await ensure_task_owner(db, task_id, owner_scope_username(username))
     result = await db.execute(select(PlatformTask).where(PlatformTask.id == task_id))
     task = result.scalar_one_or_none()
     if task is None:

@@ -34,6 +34,8 @@ from sklearn.metrics import (
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
+from app.core.model_artifact import DLPreprocessingArtifact
+
 logger = logging.getLogger(__name__)
 
 EpochCallback = Callable[[int, dict], None] | None
@@ -52,6 +54,7 @@ class BaseDLTrainer(ABC):
         self.scaler: StandardScaler | None = None
         self.model_type: str = ""
         self.num_classes: int = 1
+        self.preprocessing_artifact: DLPreprocessingArtifact | None = None
 
     # ── Abstract ──────────────────────────────────────────────────────────────
 
@@ -115,8 +118,11 @@ class BaseDLTrainer(ABC):
             ytr_t = torch.tensor(y_train.astype(np.int64), dtype=torch.long)
             yva_t = torch.tensor(y_val.astype(np.int64),   dtype=torch.long)
 
+        # BatchNorm cannot train on a final batch containing one sample. Drop
+        # only that pathological tail; keep all other partial batches.
+        drop_single_tail = len(Xtr_t) > batch_size and len(Xtr_t) % batch_size == 1
         train_loader = DataLoader(TensorDataset(Xtr_t, ytr_t),
-                                  batch_size=batch_size, shuffle=True, drop_last=False)
+                                  batch_size=batch_size, shuffle=True, drop_last=drop_single_tail)
         val_loader   = DataLoader(TensorDataset(Xva_t, yva_t),
                                   batch_size=batch_size * 2, shuffle=False)
         return train_loader, val_loader
@@ -354,14 +360,23 @@ class BaseDLTrainer(ABC):
             if nonzero.sum() > 0:
                 mape = float(np.mean(np.abs((labels[nonzero] - preds[nonzero]) / labels[nonzero])))
                 result["val_mape"] = mape
-            # Predicted vs actual scatter (max 500 points)
+            # Predicted vs actual samples (max 500 points), kept CONTIGUOUS and
+            # in validation order.
+            #
+            # This used to be rng.choice(...), a random subsample. That is fine
+            # for a scatter, where each point stands alone, but it destroys the
+            # ordering — so the same field could not be drawn as a
+            # predicted-vs-actual *curve* without connecting randomly ordered
+            # points into a line that looks like data and is not. A trailing
+            # window keeps both readings valid: the scatter is unchanged in
+            # character, and the curve now means something.
             try:
                 sample_n = min(len(preds), 500)
-                rng = np.random.default_rng(42)
-                idx = rng.choice(len(preds), sample_n, replace=False)
+                start = len(preds) - sample_n          # most recent window
                 result["val_scatter"] = {
-                    "actual":    [round(float(v), 6) for v in labels[idx]],
-                    "predicted": [round(float(v), 6) for v in preds[idx]],
+                    "actual":    [round(float(v), 6) for v in labels[start:]],
+                    "predicted": [round(float(v), 6) for v in preds[start:]],
+                    "ordered": True,                   # older runs lack this flag
                 }
             except Exception as e:
                 logger.warning("Scatter data computation skipped: %s", e)
@@ -370,8 +385,9 @@ class BaseDLTrainer(ABC):
     # ── Persistence ───────────────────────────────────────────────────────────
 
     def save(self, path: str, arch_config: dict | None = None, input_dim: int = 0,
-             task_type: str = "", feature_columns: list[str] | None = None):
-        """Save .pt checkpoint; scaler saved as {path}.scaler.joblib."""
+             task_type: str = "", feature_columns: list[str] | None = None,
+             preprocessing_artifact: DLPreprocessingArtifact | None = None):
+        """Save checkpoint plus optional scaler and preprocessing sidecars."""
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         torch.save({
@@ -385,6 +401,9 @@ class BaseDLTrainer(ABC):
         }, p)
         if self.scaler is not None:
             joblib.dump(self.scaler, str(p) + ".scaler.joblib")
+        self.preprocessing_artifact = preprocessing_artifact
+        if preprocessing_artifact is not None:
+            joblib.dump(preprocessing_artifact, str(p) + ".preprocessor.joblib")
         logger.info("DL model saved → %s", p)
 
     def load(self, path: str):
@@ -398,6 +417,12 @@ class BaseDLTrainer(ABC):
         scaler_path = str(p) + ".scaler.joblib"
         if Path(scaler_path).exists():
             self.scaler = joblib.load(scaler_path)
+        preprocessing_path = str(p) + ".preprocessor.joblib"
+        self.preprocessing_artifact = (
+            joblib.load(preprocessing_path)
+            if Path(preprocessing_path).exists()
+            else None
+        )
 
     def load_for_inference(self, path: str) -> dict:
         """Build model from saved checkpoint metadata + load weights + scaler.
@@ -423,7 +448,18 @@ class BaseDLTrainer(ABC):
         if Path(scaler_path).exists():
             self.scaler = joblib.load(scaler_path)
 
-        return {"task_type": task_type, "feature_columns": feature_columns}
+        preprocessing_path = str(p) + ".preprocessor.joblib"
+        self.preprocessing_artifact = (
+            joblib.load(preprocessing_path)
+            if Path(preprocessing_path).exists()
+            else None
+        )
+
+        return {
+            "task_type": task_type,
+            "feature_columns": feature_columns,
+            "preprocessing_artifact": self.preprocessing_artifact,
+        }
 
     def predict(self, X: np.ndarray, task_type: str) -> tuple[np.ndarray, np.ndarray | None]:
         """Run inference on pre-processed input X.  Returns (predictions, probabilities)."""

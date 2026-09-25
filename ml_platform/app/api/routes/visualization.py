@@ -3,6 +3,8 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import current_username_from_authorization, owner_scope_username
+from app.core.ownership import ensure_task_owner
 from app.models.database import get_db
 from app.services.viz_service import (
     get_calibration_curve,
@@ -22,9 +24,18 @@ from app.services.viz_service import (
 router = APIRouter(prefix="/viz", tags=["Visualization"])
 
 
+async def owned_task_id(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
+) -> str:
+    await ensure_task_owner(db, task_id, owner_scope_username(username))
+    return task_id
+
+
 @router.get("/{task_id}/confusion_matrix")
 async def confusion_matrix_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
     normalize: bool = Query(False, description="Normalize by row"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -34,7 +45,7 @@ async def confusion_matrix_route(
 
 @router.get("/{task_id}/roc_curve")
 async def roc_curve_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Return ROC curve data (FPR, TPR, AUC)."""
@@ -43,7 +54,7 @@ async def roc_curve_route(
 
 @router.get("/{task_id}/feature_importance")
 async def feature_importance_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Return feature importance scores."""
@@ -52,7 +63,7 @@ async def feature_importance_route(
 
 @router.get("/{task_id}/learning_curve")
 async def learning_curve_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Return per-step/fold training metrics for learning curve."""
@@ -61,30 +72,38 @@ async def learning_curve_route(
 
 @router.get("/{task_id}/shap_summary")
 async def shap_summary_route(
-    task_id: str,
-    max_samples: int = Query(100, ge=10, le=500, description="Max samples for SHAP"),
+    task_id: str = Depends(owned_task_id),
+    max_samples: int = Query(100, ge=1, le=500, description="Max samples for SHAP"),
+    refresh: bool = Query(False, description="Recompute instead of returning the cached summary"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return SHAP values for model explainability."""
-    return await get_shap_summary(task_id, db, max_samples=max_samples)
+    """Return SHAP values for model explainability.
+
+    Cached on the task row after the first run — the computation is expensive
+    and its result cannot change while the model does not. `refresh=true`
+    forces a new one.
+    """
+    return await get_shap_summary(task_id, db, max_samples=max_samples, refresh=refresh)
 
 
 @router.get("/{task_id}/residual_plot")
 async def residual_plot_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
+    max_samples: int = Query(1000, ge=50, le=5000),
     db: AsyncSession = Depends(get_db),
 ):
     """Return residuals vs predicted values for regression tasks."""
-    return await get_residual_plot(task_id, db)
+    return await get_residual_plot(task_id, db, max_samples=max_samples)
 
 
 @router.get("/{task_id}/predicted_vs_actual")
 async def predicted_vs_actual_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
+    max_samples: int = Query(1000, ge=50, le=5000),
     db: AsyncSession = Depends(get_db),
 ):
     """Return predicted vs actual scatter data for regression tasks."""
-    return await get_predicted_vs_actual(task_id, db)
+    return await get_predicted_vs_actual(task_id, db, max_samples=max_samples)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +114,7 @@ async def predicted_vs_actual_route(
 
 @router.get("/{task_id}/per_class")
 async def per_class_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Per-class precision / recall / F1 / support (classification only)."""
@@ -104,7 +123,7 @@ async def per_class_route(
 
 @router.get("/{task_id}/pr_curve")
 async def pr_curve_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Precision-Recall curve + Average Precision + best-F1 threshold."""
@@ -113,7 +132,7 @@ async def pr_curve_route(
 
 @router.get("/{task_id}/calibration")
 async def calibration_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
     n_bins: int = Query(10, ge=3, le=50),
     db: AsyncSession = Depends(get_db),
 ):
@@ -123,7 +142,7 @@ async def calibration_route(
 
 @router.get("/{task_id}/threshold")
 async def threshold_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
     step: float = Query(0.05, ge=0.01, le=0.5),
     db: AsyncSession = Depends(get_db),
 ):
@@ -133,10 +152,13 @@ async def threshold_route(
 
 @router.get("/{task_id}/distribution")
 async def distribution_route(
-    task_id: str,
+    task_id: str = Depends(owned_task_id),
     bins: int = Query(30, ge=10, le=100),
+    max_samples: int = Query(5000, ge=100, le=20000),
     db: AsyncSession = Depends(get_db),
 ):
     """Prediction distribution — probability histogram (classification)
     or residual histogram (regression)."""
-    return await get_prediction_distribution(task_id, db, bins=bins)
+    return await get_prediction_distribution(
+        task_id, db, bins=bins, max_samples=max_samples
+    )

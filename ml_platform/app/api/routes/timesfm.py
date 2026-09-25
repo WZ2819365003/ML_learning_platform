@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import current_username_from_authorization, owner_scope_username
 from app.models.database import get_db
 from app.models.schemas import ModelMetaUpdateRequest
 from app.services.chronos_service import get_status, is_available, preload_model_async
@@ -103,6 +104,7 @@ async def ts_preload_model(
 async def start_forecast(
     body: ForecastStartRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     if not is_available():
         raise HTTPException(
@@ -117,6 +119,7 @@ async def start_forecast(
         horizon=body.horizon,
         frequency=body.frequency,
         model_name=body.model_name,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -126,18 +129,41 @@ async def list_forecasts(
     page_size: int = Query(default=20, ge=1, le=100),
     status: str | None = Query(default=None, description="Filter by status"),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await list_ts_tasks(db=db, page=page, page_size=page_size, status=status)
+    return await list_ts_tasks(
+        db=db,
+        page=page,
+        page_size=page_size,
+        status=status,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.get("/{task_id}")
-async def get_forecast(task_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    return await get_ts_task(db=db, task_id=task_id)
+async def get_forecast(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
+) -> dict[str, Any]:
+    return await get_ts_task(
+        db=db,
+        task_id=task_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.delete("/{task_id}")
-async def delete_forecast(task_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    await delete_ts_task(db=db, task_id=task_id)
+async def delete_forecast(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
+) -> dict[str, Any]:
+    await delete_ts_task(
+        db=db,
+        task_id=task_id,
+        owner_username=owner_scope_username(username),
+    )
     return {"message": "Forecast task deleted", "id": task_id}
 
 
@@ -145,6 +171,7 @@ async def delete_forecast(task_id: str, db: AsyncSession = Depends(get_db)) -> d
 async def create_task(
     body: TimeSeriesTaskCreateRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     if not is_available():
         raise HTTPException(
@@ -161,6 +188,7 @@ async def create_task(
             time_column=body.time_column,
             horizon=body.horizon,
             frequency=body.frequency,
+            owner_username=owner_scope_username(username),
         )
     else:
         # No deployment selected — auto-create / reuse a default deployment
@@ -172,6 +200,7 @@ async def create_task(
             horizon=body.horizon,
             frequency=body.frequency,
             model_name="amazon/chronos-t5-small",
+            owner_username=owner_scope_username(username),
         )
 
 
@@ -183,6 +212,7 @@ async def list_tasks(
     dataset_id: str | None = Query(default=None),
     deployment_id: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     return await list_ts_tasks(
         db=db,
@@ -191,17 +221,34 @@ async def list_tasks(
         status=status,
         dataset_id=dataset_id,
         deployment_id=deployment_id,
+        owner_username=owner_scope_username(username),
     )
 
 
 @ts_router.get("/tasks/{task_id}")
-async def get_task(task_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    return await get_ts_task(db=db, task_id=task_id)
+async def get_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
+) -> dict[str, Any]:
+    return await get_ts_task(
+        db=db,
+        task_id=task_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @ts_router.delete("/tasks/{task_id}")
-async def delete_task(task_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    await delete_ts_task(db=db, task_id=task_id)
+async def delete_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
+) -> dict[str, Any]:
+    await delete_ts_task(
+        db=db,
+        task_id=task_id,
+        owner_username=owner_scope_username(username),
+    )
     return {"message": "Time-series task deleted", "id": task_id}
 
 
@@ -210,12 +257,14 @@ async def update_task_meta(
     task_id: str,
     body: ModelMetaUpdateRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     return await update_ts_task_meta(
         db=db,
         task_id=task_id,
         notes=body.notes,
         tags=body.tags,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -223,6 +272,7 @@ async def update_task_meta(
 async def create_deployment(
     body: TimeSeriesDeploymentCreateRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     return await create_ts_deployment(
         db=db,
@@ -230,6 +280,7 @@ async def create_deployment(
         description=body.description,
         backend_label=body.backend_label,
         config=body.config,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -238,16 +289,27 @@ async def list_deployments(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await list_ts_deployments(db=db, page=page, page_size=page_size)
+    return await list_ts_deployments(
+        db=db,
+        page=page,
+        page_size=page_size,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @ts_router.get("/deployments/{deployment_id}")
 async def get_deployment(
     deployment_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await get_ts_deployment(db=db, deployment_id=deployment_id)
+    return await get_ts_deployment(
+        db=db,
+        deployment_id=deployment_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @ts_router.patch("/deployments/{deployment_id}/status")
@@ -255,16 +317,27 @@ async def update_deployment_status(
     deployment_id: str,
     status: str = Query(..., pattern="^(active|paused)$"),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await update_ts_deployment_status(db=db, deployment_id=deployment_id, status=status)
+    return await update_ts_deployment_status(
+        db=db,
+        deployment_id=deployment_id,
+        status=status,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @ts_router.delete("/deployments/{deployment_id}")
 async def remove_deployment(
     deployment_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    await delete_ts_deployment(db=db, deployment_id=deployment_id)
+    await delete_ts_deployment(
+        db=db,
+        deployment_id=deployment_id,
+        owner_username=owner_scope_username(username),
+    )
     return {"message": "Time-series deployment deleted", "id": deployment_id}
 
 
@@ -273,6 +346,7 @@ async def predict_with_deployment(
     deployment_id: str,
     body: TimeSeriesDeploymentPredictRequest,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     if not is_available():
         raise HTTPException(
@@ -287,4 +361,5 @@ async def predict_with_deployment(
         time_column=body.time_column,
         horizon=body.horizon,
         frequency=body.frequency,
+        owner_username=owner_scope_username(username),
     )

@@ -24,6 +24,9 @@ the single source of truth for "which metrics/charts apply to this task".
 
 from __future__ import annotations
 
+import threading
+from collections import OrderedDict
+
 import json
 import logging
 import re
@@ -38,18 +41,39 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.model_artifact import is_tabular_artifact
 from app.models.database import (
     Dataset,
+    DLTrainingTask,
     ExperimentRun,
     ModelingTask,
     PlatformExperiment,
     PlatformTask,
     TrainingTask,
 )
-from app.services.prediction_service import load_dataframe, prepare_training_frame
+from app.services.prediction_service import (
+    load_dataframe,
+    prepare_raw_training_frame,
+    prepare_training_frame,
+)
 from app.utils.storage_paths import resolve_runtime_path
+from app.services.object_storage import (
+    restore_dataset_file,
+    restore_file,
+    restore_model_bundle,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _require_dataset_file(dataset: Dataset) -> Dataset:
+    """Restore a dataset from object storage or fail with an actionable 404."""
+    if restore_dataset_file(dataset.id, dataset.file_path) is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Dataset artifact not found for this task",
+        )
+    return dataset
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +83,11 @@ logger = logging.getLogger(__name__)
 
 LEGACY_REGRESSOR_MODEL_TYPES: set[str] = {
     "linear_regression",
+    "ridge",
+    "lasso",
+    "elasticnet",
+    "svr",
+    "mlp_regressor",
     "random_forest_regressor",
     "xgboost_regressor",
     "lightgbm_regressor",
@@ -126,6 +155,8 @@ def load_model(model_path: str):
     """Load a saved model artifact; raise 404 if the file is missing."""
     path = resolve_runtime_path(model_path)
     if not path.exists():
+        restore_model_bundle(model_path)
+    if not path.exists():
         raise HTTPException(status_code=404, detail=f"Model file not found: {model_path}")
     return joblib.load(path)
 
@@ -167,6 +198,56 @@ def load_and_split_data_no_stratify(
     )
     feature_names = list(X.columns)
     return X_train, X_test, y_train, y_test, feature_names
+
+
+def load_and_split_data_for_model(
+    file_path: str,
+    target_column: str,
+    test_size: float,
+    model,
+    *,
+    stratified: bool,
+) -> dict[str, Any]:
+    """Prepare evaluation matrices using persisted state for new artifacts."""
+    if not is_tabular_artifact(model):
+        if stratified:
+            X_train, X_test, y_train, y_test, feature_names, class_labels = (
+                load_and_split_data_stratified(file_path, target_column, test_size)
+            )
+        else:
+            X_train, X_test, y_train, y_test, feature_names = (
+                load_and_split_data_no_stratify(file_path, target_column, test_size)
+            )
+            class_labels = None
+        return {
+            "model": model,
+            "X_train": X_train,
+            "X_test": X_test,
+            "y_train": y_train,
+            "y_test": y_test,
+            "feature_names": feature_names,
+            "class_labels": class_labels,
+        }
+
+    df = load_dataframe(file_path)
+    raw_X, raw_y = prepare_raw_training_frame(df, target_column)
+    stratify_values = raw_y if stratified else None
+    X_train_raw, X_test_raw, y_train_raw, y_test_raw = train_test_split(
+        raw_X,
+        raw_y,
+        test_size=test_size,
+        random_state=42,
+        stratify=stratify_values,
+    )
+    return {
+        "model": model.estimator,
+        "X_train": model.transform_features(X_train_raw),
+        "X_test": model.transform_features(X_test_raw),
+        "y_train": model.encode_target(y_train_raw),
+        "y_test": model.encode_target(y_test_raw),
+        "feature_names": model.feature_names,
+        "class_labels": [str(value) for value in model.class_labels] or None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +429,8 @@ async def synthesize_facade_from_run(
     model_path: str | None = None
     for cid in candidate_ids:
         candidate = settings.storage_models / f"{cid}.joblib"
+        if not candidate.exists():
+            restore_file(candidate, [f"models/{cid}.joblib"])
         if candidate.exists():
             model_path = f"storage/models/{cid}.joblib"
             break
@@ -440,7 +523,7 @@ async def synthesize_facade_from_orphan(
 
 
 async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
-    """Multi-source resolver: TrainingTask → V3 ExperimentRun → on-disk orphan.
+    """Multi-source resolver: ML/DL task → V3 ExperimentRun → on-disk orphan.
 
     The caller gets a `TaskFacade` and `Dataset` back in all three cases,
     so downstream code is oblivious to which data path was taken.
@@ -459,7 +542,28 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
         )).scalar_one_or_none()
         if dataset is None:
             raise HTTPException(status_code=404, detail="Dataset not found")
-        return task, dataset
+        return task, _require_dataset_file(dataset)
+
+    # --- Tier 1b: DLTrainingTask direct ------------------------------------
+    dl_task = (await db.execute(
+        select(DLTrainingTask).where(DLTrainingTask.id == task_id)
+    )).scalar_one_or_none()
+    if dl_task is not None:
+        if dl_task.status != "SUCCESS":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Task not completed (status={dl_task.status})",
+            )
+        if not dl_task.model_path:
+            raise HTTPException(status_code=400, detail="No model saved for this task")
+        if restore_model_bundle(dl_task.model_path) is None:
+            raise HTTPException(status_code=404, detail="Model artifact not found for this task")
+        dataset = (await db.execute(
+            select(Dataset).where(Dataset.id == dl_task.dataset_id)
+        )).scalar_one_or_none()
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        return dl_task, _require_dataset_file(dataset)
 
     # --- Tier 2: V3 ExperimentRun synthesis ---------------------------------
     run = (await db.execute(
@@ -475,11 +579,7 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
             )).scalar_one_or_none()
             if run is None and pt.payload_ref and pt.payload_ref.startswith(("train:", "dl_train:")):
                 legacy_id = pt.payload_ref.split(":", 1)[1]
-                legacy_tt = (await db.execute(
-                    select(TrainingTask).where(TrainingTask.id == legacy_id)
-                )).scalar_one_or_none()
-                if legacy_tt is not None:
-                    return await resolve_task_and_dataset(legacy_id, db)
+                return await resolve_task_and_dataset(legacy_id, db)
 
     if run is not None:
         if run.status != "SUCCESS":
@@ -487,6 +587,18 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
                 status_code=400,
                 detail=f"Run not completed (status={run.status or 'UNKNOWN'})",
             )
+        if run.task_id:
+            platform_task = (await db.execute(
+                select(PlatformTask).where(PlatformTask.id == run.task_id)
+            )).scalar_one_or_none()
+            if (
+                platform_task
+                and platform_task.payload_ref
+                and platform_task.payload_ref.startswith("dl_train:")
+            ):
+                return await resolve_task_and_dataset(
+                    platform_task.payload_ref.split(":", 1)[1], db
+                )
         facade, dataset = await synthesize_facade_from_run(run, db)
         if not facade.model_path:
             raise HTTPException(status_code=404, detail="Model artifact not found for this run")
@@ -494,7 +606,7 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
             raise HTTPException(status_code=400, detail="Target column unavailable for this run")
         if dataset is None:
             raise HTTPException(status_code=404, detail="Dataset not found for this run")
-        return facade, dataset
+        return facade, _require_dataset_file(dataset)
 
     # --- Tier 3: orphan recovery from on-disk artifacts ---------------------
     orphan = await synthesize_facade_from_orphan(task_id, db)
@@ -502,7 +614,7 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
         facade, dataset = orphan
         if dataset is None:
             raise HTTPException(status_code=404, detail="Dataset not found for this task")
-        return facade, dataset
+        return facade, _require_dataset_file(dataset)
 
     raise HTTPException(status_code=404, detail="Training task not found")
 
@@ -512,37 +624,83 @@ async def resolve_task_and_dataset(task_id: str, db: AsyncSession):
 # ---------------------------------------------------------------------------
 
 
+# Prepared bundles are cached because every chart endpoint calls this, and each
+# call re-reads the model off disk and re-splits the whole dataset — on an 87k
+# row set that is most of the wait when opening a result page with six charts.
+#
+# Safe to cache: a finished task's model and dataset never change, and
+# retraining produces a new task id. Small and bounded because each entry holds
+# a model plus the hold-out arrays; four is enough to keep one result page
+# responsive without growing into a memory leak.
+_PREPARED_CACHE: OrderedDict[tuple[str, bool], dict] = OrderedDict()
+_PREPARED_CACHE_MAX = 4
+_PREPARED_CACHE_LOCK = threading.Lock()
+
+
+def _cache_get(key: tuple[str, bool]) -> dict | None:
+    with _PREPARED_CACHE_LOCK:
+        bundle = _PREPARED_CACHE.get(key)
+        if bundle is not None:
+            _PREPARED_CACHE.move_to_end(key)          # least-recently-used order
+        # Shallow copy: callers add their own keys to the returned dict, and
+        # sharing one object would leak those between requests.
+        return dict(bundle) if bundle is not None else None
+
+
+def _cache_put(key: tuple[str, bool], bundle: dict) -> None:
+    with _PREPARED_CACHE_LOCK:
+        _PREPARED_CACHE[key] = bundle
+        _PREPARED_CACHE.move_to_end(key)
+        while len(_PREPARED_CACHE) > _PREPARED_CACHE_MAX:
+            _PREPARED_CACHE.popitem(last=False)
+
+
+def clear_prepared_cache() -> None:
+    """Drop every cached bundle. Used by tests and after a task is deleted."""
+    with _PREPARED_CACHE_LOCK:
+        _PREPARED_CACHE.clear()
+
+
 async def resolve_and_load(task_id: str, db: AsyncSession, *, stratified: bool | None = None):
     """Resolve a task then load model + split dataset.
 
     `stratified` auto-picks based on task_kind when None (False for regression,
     True for classification). Override when the caller explicitly wants a
     non-stratified split even for classification (SHAP sampling, for example).
+
+    The prepared bundle is cached per (task_id, stratified) — see the note on
+    `_PREPARED_CACHE`.
     """
     task, dataset = await resolve_task_and_dataset(task_id, db)
+    if isinstance(task, DLTrainingTask):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "DL task is not supported by the generic ML visualization endpoint; "
+                "use the DL results or SHAP endpoint"
+            ),
+        )
     if stratified is None:
         stratified = task.task_kind == "classification" if isinstance(task, TaskFacade) \
             else not is_regressor(getattr(task, "model_type", None))
 
-    if stratified:
-        X_train, X_test, y_train, y_test, feature_names, class_labels = load_and_split_data_stratified(
-            dataset.file_path, task.target_column, task.test_size
-        )
-    else:
-        X_train, X_test, y_train, y_test, feature_names = load_and_split_data_no_stratify(
-            dataset.file_path, task.target_column, task.test_size
-        )
-        class_labels = None
+    cache_key = (task_id, bool(stratified))
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
 
-    model = load_model(task.model_path)
-    return {
+    loaded_model = load_model(task.model_path)
+    prepared = load_and_split_data_for_model(
+        dataset.file_path,
+        task.target_column,
+        task.test_size,
+        loaded_model,
+        stratified=stratified,
+    )
+    bundle = {
         "task": task,
         "dataset": dataset,
-        "model": model,
-        "X_train": X_train,
-        "X_test": X_test,
-        "y_train": y_train,
-        "y_test": y_test,
-        "feature_names": feature_names,
-        "class_labels": class_labels,
+        **prepared,
     }
+    _cache_put(cache_key, bundle)
+    return dict(bundle)

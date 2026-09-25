@@ -34,9 +34,17 @@ async def override_get_db() -> AsyncSession:
 @pytest.fixture(scope="module", autouse=True)
 async def setup_database():
     """设置测试数据库"""
+    from app.scheduler.scheduler import set_scheduler
+
+    class NoopScheduler:
+        async def submit(self, platform_task_id):
+            return None
+
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    set_scheduler(NoopScheduler())
     yield
+    set_scheduler(None)
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await test_engine.dispose()

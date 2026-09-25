@@ -1,0 +1,417 @@
+import DetailHeader from '../components/layout/DetailHeader'
+import { useMarkTabSaved, useTabGuard } from '../navigation/TabContext'
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import { usePollMs } from '../hooks/useAppSettings'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  Card, Steps, Button, Space, Select, Input, Upload, Form, Row, Col, Tag, Tabs,
+  Typography, message, Divider,
+} from '../ui'
+import {
+  DatabaseOutlined, ExperimentOutlined, ThunderboltOutlined,
+  CloudUploadOutlined, InboxOutlined, PlusOutlined,
+  ArrowLeftOutlined, ArrowRightOutlined,
+  AppstoreOutlined, TrophyOutlined, FileTextOutlined,
+  CodeOutlined,
+} from '@ant-design/icons'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { modelingTaskApi, dataApi } from '../services/api'
+import ModelConfigTabs from '../components/workbench/ModelConfigTabs'
+import ProgressTree from '../components/workbench/ProgressTree'
+import StrategyCompareTab from '../components/workbench/StrategyCompareTab'
+import ModelComparison from '../components/workbench/ModelComparison'
+import DeployStep from '../components/workbench/DeployStep'
+import DataPipelineModal from '../components/workbench/DataPipelineModal'
+
+const { Text } = Typography
+
+const OBJECTIVE_PRESETS = {
+  classification: [
+    { value: 'accuracy', label: 'Accuracy (越高越好)' },
+    { value: 'f1', label: 'F1 (越高越好)' },
+    { value: 'roc_auc', label: 'ROC-AUC (越高越好)' },
+  ],
+  regression: [
+    { value: 'rmse', label: 'RMSE (越低越好)' },
+    { value: 'mae', label: 'MAE (越低越好)' },
+    { value: 'r2', label: 'R² (越高越好)' },
+  ],
+}
+const _dir = (m) => (['rmse', 'mae', 'mse', 'mape'].includes(m) ? 'min' : 'max')
+
+// One height for all three 训练过程 panes, so switching tabs never makes the
+// page jump. The pane is a frame: whatever it holds stretches to fill it, so
+// there is never a band of dead space between a card's bottom edge and the
+// frame's.
+const TRAINING_TAB_BODY_HEIGHT = 620
+
+const STEP_ITEMS = [
+  { title: '导入数据', icon: <DatabaseOutlined /> },
+  { title: '模型配置', icon: <ExperimentOutlined /> },
+  { title: '训练过程', icon: <ThunderboltOutlined /> },
+  { title: '部署上线', icon: <CloudUploadOutlined /> },
+]
+
+export default function ModelingWorkflow() {
+  const pollMs = usePollMs()
+  const markSaved = useMarkTabSaved()
+  const { taskId } = useParams()
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const isNew = !taskId || taskId === 'new'
+
+  const initialStep = isNew ? 0 : Math.min(3, Math.max(0, Number(searchParams.get('step')) || 0))
+  const [trainingTab, setTrainingTab] = useState('progress')
+  const [current, setCurrent] = useState(initialStep)
+  const requestedStep = searchParams.get('step')
+  useEffect(() => {
+    if (!isNew && requestedStep !== null) setCurrent(Math.min(3, Math.max(0, Number(requestedStep) || 0)))
+  }, [isNew, requestedStep])
+  const [task, setTask] = useState(null)
+  const [runs, setRuns] = useState([])
+  const [leaderboard, setLeaderboard] = useState([])
+  const [datasets, setDatasets] = useState([])
+  const [columnInfo, setColumnInfo] = useState(null)
+  const [pipelineOpen, setPipelineOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [form] = Form.useForm()
+  useTabGuard({ busy: saving || uploading })
+
+  const loadDatasets = useCallback(async () => {
+    try {
+      const resp = await dataApi.listDatasets({ page: 1, page_size: 100 })
+      setDatasets(resp?.items || resp?.datasets || [])
+    } catch {/* non-fatal */}
+  }, [])
+
+  const loadTask = useCallback(async () => {
+    if (isNew) return
+    try {
+      const t = await modelingTaskApi.get(taskId)
+      setTask(t)
+      if (!form.isFieldsTouched()) form.setFieldsValue({
+        dataset_id: t.dataset_id, target_column: t.target_column,
+        task_type: t.task_type, objective_metric: t.objective_metric,
+        name: t.name,
+      })
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '加载任务失败')
+    }
+  }, [taskId, isNew, form])
+
+  const loadRuns = useCallback(async () => {
+    if (isNew) return
+    try {
+      const [r, lb] = await Promise.all([
+        modelingTaskApi.runs(taskId),
+        modelingTaskApi.leaderboard(taskId, 50),
+      ])
+      setRuns(r?.items || [])
+      setLeaderboard(Array.isArray(lb) ? lb : [])
+    } catch {/* non-fatal */}
+  }, [taskId, isNew])
+
+  useActiveEffect(() => { loadDatasets() }, [loadDatasets])
+  useActiveEffect(() => { loadTask() }, [loadTask])
+  useActiveEffect(() => { loadRuns() }, [loadRuns])
+
+  // Poll while task running so 训练/可视化 stay fresh
+  useActiveEffect(() => {
+    if (isNew || task?.status !== 'RUNNING') return
+    if (!pollMs) return
+    const id = setInterval(() => { loadTask(); loadRuns() }, pollMs)
+    return () => clearInterval(id)
+  }, [isNew, task?.status, pollMs, loadTask, loadRuns])
+
+  const taskTypeWatch = Form.useWatch('task_type', form) || task?.task_type || 'classification'
+  const datasetIdWatch = Form.useWatch('dataset_id', form)
+
+  // Fetch column headers for target-column dropdown when a dataset is chosen
+  useEffect(() => {
+    if (!datasetIdWatch) { setColumnInfo(null); return }
+    let cancelled = false
+    dataApi.previewDataset(datasetIdWatch)
+      .then((resp) => { if (!cancelled) setColumnInfo(resp?.columns_info || null) })
+      .catch(() => { if (!cancelled) setColumnInfo(null) })
+    return () => { cancelled = true }
+  }, [datasetIdWatch])
+
+  const targetOptions = useMemo(() => {
+    if (!columnInfo) return []
+    return Object.entries(columnInfo).map(([col, meta]) => ({
+      value: col,
+      label: <Space size={6}><span>{col}</span>
+        <Tag style={{ margin: 0 }}>{meta.dtype}</Tag></Space>,
+    }))
+  }, [columnInfo])
+
+  const handleUpload = async (file) => {
+    setUploading(true)
+    try {
+      const resp = await dataApi.uploadDataset(file)
+      message.success(`已上传 ${resp.name}`)
+      await loadDatasets()
+      form.setFieldsValue({ dataset_id: resp.id, target_column: undefined })
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '上传失败')
+    } finally {
+      setUploading(false)
+    }
+    return false // prevent antd auto-upload
+  }
+
+  // Persist step-1 (create new task or update existing), then go to 配置模型
+  const saveDataStep = async () => {
+    let values
+    try { values = await form.validateFields() } catch { return }
+    setSaving(true)
+    try {
+      const payload = {
+        name: values.name,
+        dataset_id: values.dataset_id || null,
+        target_column: values.target_column || null,
+        task_type: values.task_type,
+        objective_metric: values.objective_metric,
+        objective_direction: _dir(values.objective_metric),
+      }
+      if (isNew) {
+        const created = await modelingTaskApi.create(payload)
+        markSaved(form)
+        message.success('任务已创建')
+        navigate(`/v3/tasks/${created.id}/workflow?step=1`, { replace: true })
+        setTask(created)
+        setCurrent(1)
+      } else {
+        await modelingTaskApi.update(taskId, payload)
+        markSaved(form)
+        message.success('已保存')
+        await loadTask()
+        setCurrent(1)
+      }
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const bestRunId = leaderboard.find(r => r.rank === 1)?.run_id
+  const finalizationLocked = task?.final_evaluation?.state && task.final_evaluation.state !== 'OPEN'
+  const runStatusCounts = runs.reduce((acc, r) => {
+    const s = String(r.status).toUpperCase()
+    acc[s] = (acc[s] || 0) + 1
+    return acc
+  }, {})
+
+  // ── Step renderers ─────────────────────────────────────────────────────────
+  const dataStep = (
+    <Card size="small" bodyStyle={{ padding: 20 }}>
+      <Form form={form} layout="vertical" initialValues={{ task_type: 'classification', objective_metric: 'accuracy' }}>
+        <Form.Item name="name" label="任务名称" rules={[{ required: true, min: 2, message: '至少 2 个字符' }]}>
+          <Input placeholder="例：鸢尾花分类 v1" style={{ maxWidth: 420 }} />
+        </Form.Item>
+
+        <Upload.Dragger accept=".csv,.xlsx,.parquet" showUploadList={false}
+          beforeUpload={handleUpload} disabled={uploading} style={{ marginBottom: 16 }}>
+          <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+          <p className="ant-upload-text">{uploading ? '上传中…' : '点击或拖拽上传新数据集（CSV / Excel / Parquet）'}</p>
+          <p className="ant-upload-hint" style={{ fontSize: 12 }}>也可以直接在下方选择已上传的数据集</p>
+        </Upload.Dragger>
+
+        <Row gutter={12}>
+          <Col span={14}>
+            <Form.Item name="dataset_id" label="数据集" rules={[{ required: true, message: '请选择数据集' }]}>
+              <Select showSearch allowClear placeholder="选择已上传的数据集"
+                options={datasets.map(d => ({ value: d.id, label: `${d.name} (${d.row_count || '?'} 行)` }))}
+                filterOption={(i, o) => String(o.label).toLowerCase().includes(i.toLowerCase())}
+                onChange={() => form.setFieldValue('target_column', undefined)} />
+            </Form.Item>
+          </Col>
+          <Col span={10}>
+            <Form.Item name="target_column" label="目标列" rules={[{ required: true, message: '请选择目标列' }]}>
+              <Select showSearch placeholder={datasetIdWatch ? '选择目标列' : '请先选择数据集'}
+                disabled={!datasetIdWatch} options={targetOptions} optionFilterProp="value" />
+            </Form.Item>
+          </Col>
+        </Row>
+        <div style={{ marginTop: -4, marginBottom: 4 }}>
+          <Button icon={<CodeOutlined />} disabled={!datasetIdWatch} onClick={() => setPipelineOpen(true)}>
+            数据处理 Pipeline（代码）
+          </Button>
+          <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+            对所选数据集用 Python 做清洗 / 特征工程，一键生成新数据集
+          </Text>
+        </div>
+        <Row gutter={12}>
+          <Col span={10}>
+            <Form.Item name="task_type" label="任务类型" rules={[{ required: true }]}>
+              <Select options={[{ value: 'classification', label: '分类' }, { value: 'regression', label: '回归' }]}
+                onChange={(t) => form.setFieldValue('objective_metric', t === 'regression' ? 'rmse' : 'accuracy')} />
+            </Form.Item>
+          </Col>
+          <Col span={14}>
+            <Form.Item name="objective_metric" label="优化目标" rules={[{ required: true }]}>
+              <Select options={OBJECTIVE_PRESETS[taskTypeWatch]} />
+            </Form.Item>
+          </Col>
+        </Row>
+      </Form>
+    </Card>
+  )
+
+  const configStep = (
+    <Card size="small" bodyStyle={{ padding: 20 }}>
+      {task
+        ? <ModelConfigTabs task={task}
+            onSubmitted={async () => { await loadTask(); await loadRuns(); setCurrent(2) }} />
+        : <Text type="secondary">请先在「导入数据」步骤创建任务。</Text>}
+      {task?.experiments?.length > 0 && (
+        <>
+          <Divider style={{ margin: '12px 0' }}><Text type="secondary" style={{ fontSize: 12 }}>已配置的实验批次</Text></Divider>
+          <Space wrap>
+            {task.experiments.map(e => (
+              <Tag key={e.id} color="blue">{e.name} · {(e.selected_models || []).length} 模型</Tag>
+            ))}
+          </Space>
+        </>
+      )}
+    </Card>
+  )
+
+  // 训练过程 = 编排进度 / 模型排名 / 策略对比，三个 Tab。
+  //
+  // These used to stack in one column — tree, leaderboard, metric chart,
+  // strategy panel — roughly 2000px that grew another row on every 再加一组.
+  // They answer three different questions ("what is running?", "which run
+  // won?", "which strategy pays off?"), so they take turns instead of
+  // queueing.
+  //
+  // All three panes share TRAINING_TAB_BODY_HEIGHT so switching tabs does not
+  // make the page jump around; each pane scrolls inside that box.
+  const trainingStep = (
+    <Card
+      size="small"
+      styles={{ body: { padding: '4px 12px 12px' } }}
+      variant="outlined"
+    >
+      <Tabs
+        activeKey={trainingTab}
+        onChange={setTrainingTab}
+        size="small"
+        items={[
+          {
+            key: 'progress',
+            label: <span><AppstoreOutlined /> 编排进度</span>,
+            children: task ? (
+              // Same fixed box as the other two panes, and the only scroller
+              // here: maxBodyHeight={null} turns off ProgressTree's own inner
+              // scroll container, which would otherwise put a second scrollbar
+              // inside this one for the same list.
+              <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflow: 'hidden' }}>
+                <ProgressTree
+                  modelingTaskId={task.id}
+                  taskName={task.name}
+                  statusCounts={runStatusCounts}
+                  fillHeight
+                  headerExtra={
+                    <Button size="small" type="primary" ghost icon={<PlusOutlined />}
+                      disabled={finalizationLocked} onClick={() => setCurrent(1)}>
+                      再加一组
+                    </Button>
+                  }
+                />
+              </div>
+            ) : null,
+          },
+          {
+            key: 'ranking',
+            label: <span><TrophyOutlined /> 模型排名</span>,
+            children: task ? (
+              <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflow: 'hidden' }}>
+                <ModelComparison task={task} rows={leaderboard} loading={false} error={null}
+                  fillHeight
+                  onRefresh={async () => { await Promise.all([loadTask(), loadRuns()]) }} />
+              </div>
+            ) : null,
+          },
+          {
+            key: 'strategy',
+            label: <span><ExperimentOutlined /> 策略对比</span>,
+            children: task ? (
+              <div style={{ height: TRAINING_TAB_BODY_HEIGHT, overflowY: 'auto' }}>
+                <StrategyCompareTab taskId={task.id} />
+              </div>
+            ) : null,
+          },
+        ]}
+      />
+    </Card>
+  )
+
+  // Capped, not fixed. With both panels folded this step is a few lines, and
+  // holding it open to the training tabs' height would be a screen of nothing.
+  // It grows as panels are expanded and scrolls once it reaches that height.
+  const reportLink = task && (
+    <Button size="small" icon={<FileTextOutlined />}
+      onClick={() => navigate(`/v3/tasks/${task.id}`, { state: { tab: 'report' } })}>
+      查看 AI 报告
+    </Button>
+  )
+
+  const deployStep = (
+    <Card size="small" styles={{ body: { padding: '4px 12px 4px' } }} variant="outlined">
+      {/* DeployStep reserves one shared minimum for its tab panes, so the outer
+          frame just wraps them rather than imposing a second bound. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+        {reportLink}
+      </div>
+      <DeployStep task={task} runs={runs} bestRunId={bestRunId} />
+    </Card>
+  )
+
+  const stepContent = [dataStep, configStep, trainingStep, deployStep][current]
+
+  return (
+    <div style={{ padding: 16 }}>
+      <DetailHeader onBack={() => navigate('/v3/tasks')} backLabel="返回建模任务"
+        title={isNew ? '新建建模任务' : (task?.name || '建模工作流')}
+        tags={task && <Tag color={task.task_type === 'regression' ? 'geekblue' : 'cyan'}>
+          {task.task_type === 'regression' ? '回归' : '分类'}</Tag>} />
+      <Card bordered={false} styles={{ body: { padding: '16px 0 24px' } }} style={{ marginBottom: 16 }}>
+        <Steps current={current} items={STEP_ITEMS}
+          onChange={(c) => { if (!isNew || c === 0) setCurrent(c) }} />
+      </Card>
+
+      {stepContent}
+
+      {/* Footer nav */}
+      <Card bordered={false} bodyStyle={{ padding: '12px 20px' }}
+        style={{ marginTop: 12, boxShadow: '0 1px 2px rgba(15,23,42,0.04)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <Button disabled={current === 0} icon={<ArrowLeftOutlined />}
+            onClick={() => setCurrent(c => Math.max(0, c - 1))}>上一步</Button>
+          {current === 0 ? (
+            <Button type="primary" loading={saving} onClick={saveDataStep}>
+              {isNew ? '创建并继续' : '保存并继续'} <ArrowRightOutlined />
+            </Button>
+          ) : current < STEP_ITEMS.length - 1 ? (
+            <Button type="primary" disabled={isNew && !task}
+              onClick={() => setCurrent(c => c + 1)}>下一步 <ArrowRightOutlined /></Button>
+          ) : (
+            <Button type="primary" onClick={() => navigate('/v3/tasks')}>完成</Button>
+          )}
+        </div>
+      </Card>
+
+      <DataPipelineModal open={pipelineOpen} datasetId={datasetIdWatch}
+        onClose={() => setPipelineOpen(false)}
+        onCreated={async (ds) => {
+          setPipelineOpen(false)
+          await loadDatasets()
+          form.setFieldsValue({ dataset_id: ds.id, target_column: undefined })
+          message.success('已切换到新数据集，请重新选择目标列')
+        }} />
+    </div>
+  )
+}

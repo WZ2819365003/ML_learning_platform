@@ -8,7 +8,7 @@
  *   notMerge - passed to setOption (default true)
  */
 import { useEffect, useRef } from 'react';
-import * as echarts from 'echarts';
+import echarts from '../utils/echarts';
 
 export default function EChart({ option, style = { height: 300 }, notMerge = true }) {
   const divRef      = useRef(null);
@@ -19,10 +19,22 @@ export default function EChart({ option, style = { height: 300 }, notMerge = tru
     if (!divRef.current) return;
     chartRef.current = echarts.init(divRef.current);
 
-    const onResize = () => chartRef.current?.resize();
+    const onResize = () => {
+      if (!chartRef.current || !divRef.current) return;
+      if (divRef.current.clientWidth > 0 && divRef.current.clientHeight > 0) {
+        chartRef.current.resize();
+      }
+    };
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(onResize);
+    resizeObserver?.observe(divRef.current);
     window.addEventListener('resize', onResize);
+    const resizeFrame = window.requestAnimationFrame(onResize);
 
     return () => {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeObserver?.disconnect();
       window.removeEventListener('resize', onResize);
       chartRef.current?.dispose();
       chartRef.current = null;
@@ -36,5 +48,5 @@ export default function EChart({ option, style = { height: 300 }, notMerge = tru
     }
   }, [option, notMerge]);
 
-  return <div ref={divRef} style={style} />;
+  return <div ref={divRef} style={{ width: '100%', ...style }} />;
 }

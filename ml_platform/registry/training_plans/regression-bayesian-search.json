@@ -1,0 +1,83 @@
+{
+  "name": "回归 · 贝叶斯调优（三种提升/集成树）",
+  "description": "XGBoost / LightGBM / 随机森林用 Optuna TPE 在连续区间里搜索，每个模型 20 次试验（约 6 次随机探索 + 14 次模型引导）。适合参数范围还不确定、想用有限次数逼近较优解的场景。区间取自 registry/tuning_spaces.yaml 的 distribution。",
+  "task_type": "regression",
+  "strategy_type": "bayesian_search",
+  "model_family": "ml",
+  "selected_models": [
+    "xgboost_regressor",
+    "lightgbm_regressor",
+    "random_forest_regressor"
+  ],
+  "search_space": {
+    "xgboost_regressor": {
+      "n_estimators": {
+        "type": "int",
+        "low": 100,
+        "high": 800,
+        "step": 50
+      },
+      "learning_rate": {
+        "type": "float",
+        "low": 0.01,
+        "high": 0.3,
+        "log": true
+      },
+      "max_depth": {
+        "type": "int",
+        "low": 3,
+        "high": 10
+      }
+    },
+    "lightgbm_regressor": {
+      "n_estimators": {
+        "type": "int",
+        "low": 100,
+        "high": 800,
+        "step": 50
+      },
+      "learning_rate": {
+        "type": "float",
+        "low": 0.01,
+        "high": 0.3,
+        "log": true
+      },
+      "num_leaves": {
+        "type": "int",
+        "low": 16,
+        "high": 256
+      }
+    },
+    "random_forest_regressor": {
+      "n_estimators": {
+        "type": "int",
+        "low": 50,
+        "high": 600,
+        "step": 50
+      },
+      "max_depth": {
+        "type": "int",
+        "low": 3,
+        "high": 24
+      },
+      "min_samples_leaf": {
+        "type": "int",
+        "low": 1,
+        "high": 8
+      }
+    }
+  },
+  "budget_config": {
+    "n_trials_per_model": 20,
+    "max_trials": 60,
+    "cv_folds": 5,
+    "test_size": 0.2
+  },
+  "eval_metrics": [
+    "rmse",
+    "mae",
+    "r2"
+  ],
+  "default_objective_metric": "rmse",
+  "default_objective_direction": "min"
+}

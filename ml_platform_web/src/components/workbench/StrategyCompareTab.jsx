@@ -1,3 +1,4 @@
+import { useActiveEffect } from '../../hooks/useActiveEffect'
 /**
  * StrategyCompareTab — baseline vs grid_search vs bayesian_search.
  *
@@ -16,22 +17,27 @@
  *     so clicking a row opens RunInspector on the SHAP tab (matches the
  *     navigation pattern introduced in v3.1.2 for drill-down).
  */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import {
-  Alert, Card, Col, Empty, Row, Space, Spin, Statistic, Table, Tag, Typography,
-} from 'antd'
+  Alert, Card, Col, Empty, Row, Space, Spin, Statistic, Tag, Typography,
+} from '../../ui'
 import { TrophyOutlined, ReloadOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { modelingTaskApi } from '../../services/api'
+import { buildStrategyCardVM } from '../../utils/comparison'
 import EChart from '../EChart'
 
 const { Text } = Typography
 
 const CANONICAL = ['baseline', 'grid_search', 'bayesian_search']
 
+// Tall enough for the populated card (Statistic + model + run count + link)
+// so the empty ones stretch up to meet it rather than the reverse.
+const STRATEGY_CARD_BODY_HEIGHT = 150
+
 const STRATEGY_META = {
-  baseline:        { label: 'Baseline',        color: '#10b981', desc: '默认超参，一轮快速建模' },
-  grid_search:     { label: 'Grid Search',     color: '#2563eb', desc: '笛卡尔积穷举超参' },
-  bayesian_search: { label: 'Bayesian (TPE)',  color: '#8b5cf6', desc: 'Optuna TPE 自适应采样' },
+  baseline:        { label: 'Baseline',        color: '#00a870', desc: '默认超参，一轮快速建模' },
+  grid_search:     { label: 'Grid Search',     color: '#1a8dff', desc: '笛卡尔积穷举超参' },
+  bayesian_search: { label: 'Bayesian (TPE)',  color: '#8e7cff', desc: 'Optuna TPE 自适应采样' },
 }
 
 function fmt(v, digits = 4) {
@@ -58,7 +64,7 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
     }
   }, [taskId])
 
-  useEffect(() => { void load() }, [load])
+  useActiveEffect(() => { void load() }, [load])
 
   const strategyMap = useMemo(() => {
     const out = {}
@@ -73,12 +79,6 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
     return strategies
       .filter(s => s.stats && s.run_count >= 2)
       .map(s => [s.stats.min, s.stats.q1, s.stats.median, s.stats.q3, s.stats.max])
-  }, [data])
-
-  const boxCategories = useMemo(() => {
-    return (data?.strategies || [])
-      .filter(s => s.stats && s.run_count >= 2)
-      .map(s => STRATEGY_META[s.strategy_type]?.label || s.strategy_type)
   }, [data])
 
   // Strip plot points (one dot per SUCCESS run) so single-run strategies
@@ -114,7 +114,7 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
           name: '分布（箱线）',
           type: 'boxplot',
           data: boxSeriesData,
-          itemStyle: { borderColor: '#2563eb', color: 'rgba(37, 99, 235, 0.2)' },
+          itemStyle: { borderColor: '#1a8dff', color: 'rgba(37, 99, 235, 0.2)' },
         },
         {
           name: '单个 Run',
@@ -124,7 +124,7 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
           itemStyle: {
             color: p => {
               const strat = p.data.strategy_type
-              return STRATEGY_META[strat]?.color || '#94a3b8'
+              return STRATEGY_META[strat]?.color || 'var(--text-muted)'
             },
             opacity: 0.75,
           },
@@ -142,50 +142,6 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
     }
   }, [data, boxSeriesData, stripPoints])
 
-  const tableData = useMemo(() => {
-    const pts = data?.raw_points || []
-    const reverse = data?.objective_direction === 'max'
-    return [...pts].sort((a, b) => (reverse ? b.value - a.value : a.value - b.value))
-  }, [data])
-
-  const tableColumns = [
-    {
-      title: '排名',
-      key: 'rank',
-      width: 60,
-      render: (_, __, idx) => idx === 0
-        ? <Tag color="gold" icon={<TrophyOutlined />}>1</Tag>
-        : idx + 1,
-    },
-    {
-      title: '策略',
-      dataIndex: 'strategy_type',
-      key: 'strategy_type',
-      width: 130,
-      render: v => <Tag color={STRATEGY_META[v]?.color || 'default'}>
-        {STRATEGY_META[v]?.label || v}
-      </Tag>,
-    },
-    { title: '模型', dataIndex: 'model_type', key: 'model_type', width: 140,
-      render: v => v ? <Text code>{v}</Text> : '-' },
-    { title: 'Trial #', dataIndex: 'trial_no', key: 'trial_no', width: 80 },
-    {
-      title: data?.metric_name || '目标值',
-      dataIndex: 'value',
-      key: 'value',
-      width: 120,
-      align: 'right',
-      render: v => <Text strong style={{ color: '#2563eb' }}>{fmt(v)}</Text>,
-    },
-    {
-      title: 'Run',
-      dataIndex: 'run_id',
-      key: 'run_id',
-      render: v => v
-        ? <a onClick={() => onInspect?.(v)}><Text code style={{ fontSize: 11 }}>{v.slice(0, 8)}</Text></a>
-        : '-',
-    },
-  ]
 
   if (loading && !data) {
     return <div style={{ textAlign: 'center', padding: 60 }}><Spin tip="加载策略对比…" /></div>
@@ -213,21 +169,35 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
         {CANONICAL.map(key => {
           const s = strategyMap[key]
           const meta = STRATEGY_META[key]
-          const best = s?.best_run
+          const card = s ? buildStrategyCardVM(s) : null
+          const best = card?.bestRun
           return (
-            <Col xs={24} md={8} key={key}>
+            <Col xs={24} md={8} key={key} style={{ display: 'flex' }}>
               <Card
                 variant="outlined"
                 size="small"
+                // A strategy that never ran renders a small Empty while a
+                // populated one renders a Statistic block, so the three cards
+                // came out at three different heights. Fixing the body height
+                // keeps the row flush whatever each card has to say.
+                style={{ width: '100%' }}
                 title={
                   <Space>
-                    <Tag color={meta.color} style={{ fontWeight: 500 }}>{meta.label}</Tag>
+                    <Tag color={meta.color}>{meta.label}</Tag>
                     <Text type="secondary" style={{ fontSize: 11 }}>{meta.desc}</Text>
                   </Space>
                 }
-                styles={{ body: { padding: '12px 16px' } }}
+                styles={{
+                  body: {
+                    padding: '12px 16px',
+                    height: STRATEGY_CARD_BODY_HEIGHT,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'center',
+                  },
+                }}
               >
-                {s ? (
+                {s && card.hasBestRun ? (
                   <Space direction="vertical" size={6} style={{ width: '100%' }}>
                     <Statistic
                       title={`最佳 ${data.metric_name}`}
@@ -236,16 +206,18 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
                       valueStyle={{ fontSize: 22, color: meta.color }}
                       prefix={<TrophyOutlined style={{ fontSize: 16 }} />}
                     />
-                    <div style={{ fontSize: 12, color: '#475569' }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                       <Text type="secondary">模型: </Text>
                       <Text code>{best?.model_type || '-'}</Text>
                       <br />
                       <Text type="secondary">Run 数: </Text>
-                      <Text>{s.run_count}/{s.full_run_count}（成功/总）</Text>
-                      {best?.run_id && (
+                      <Text>{card.runCount}/{card.fullRunCount}（成功/总）</Text>
+                      {/* Only offered when the host actually wired a handler —
+                          otherwise this rendered a link that swallowed the click. */}
+                      {best?.run_id && onInspect && (
                         <>
                           <br />
-                          <a onClick={() => onInspect?.(best.run_id)}>查看最佳 Run →</a>
+                          <a onClick={() => onInspect(best.run_id)}>查看最佳 Run →</a>
                         </>
                       )}
                     </div>
@@ -253,7 +225,9 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
                 ) : (
                   <Empty
                     imageStyle={{ height: 50 }}
-                    description={<Text type="secondary" style={{ fontSize: 12 }}>该策略未运行</Text>}
+                    description={<Text type="secondary" style={{ fontSize: 12 }}>
+                      {s ? `暂无成功 Run（0/${card.fullRunCount}）` : '该策略未运行'}
+                    </Text>}
                   />
                 )}
               </Card>
@@ -276,17 +250,10 @@ export default function StrategyCompareTab({ taskId, onInspect }) {
         )}
       </Card>
 
-      {/* Ranking table */}
-      <Card variant="outlined" size="small" title={<Space>🏁 Run 总排行榜</Space>}>
-        <Table
-          size="small"
-          rowKey="run_id"
-          columns={tableColumns}
-          dataSource={tableData}
-          pagination={{ pageSize: 12, size: 'small' }}
-          locale={{ emptyText: <Empty description="暂无成功 Run" /> }}
-        />
-      </Card>
+      {/* The Run 总排行榜 table that used to sit here was the same rows, the
+          same ordering and the same actions as 模型对比 directly above it in
+          the 模型排名 tab — two leaderboards, one screen. This panel now keeps
+          only what is genuinely per-*strategy*: the spread comparison. */}
     </Space>
   )
 }

@@ -1,8 +1,11 @@
 """Training logger — per-task file + metrics logging with event bus."""
 
 import asyncio
+import itertools
 import json
 import logging
+import threading
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,49 +30,120 @@ class EventBus:
     """Simple in-memory pub/sub for bridging training workers to WebSocket clients.
 
     Works without Redis — suitable for single-process dev mode.
+
+    ``publish`` is called from ThreadPoolExecutor workers (sklearn training runs
+    there), while subscribers are coroutines parked on ``await queue.get()``.
+    ``asyncio.Queue`` is not thread-safe: a bare ``put_nowait`` from a worker
+    thread wakes the consumer through ``loop.call_soon``, which neither is
+    thread-safe nor interrupts a sleeping event loop — so entries sat in the
+    queue until some unrelated request happened to wake it. Measured worst-case
+    delivery on an otherwise-idle loop was ~2.9s. Each queue therefore remembers
+    the loop it was created on, and off-loop publishes hop back via
+    ``call_soon_threadsafe``.
     """
 
     def __init__(self):
-        self._subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
+        # channel -> list of (queue, owning event loop)
+        self._subscribers: dict[
+            str, list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]]
+        ] = defaultdict(list)
 
     def subscribe(self, channel: str) -> asyncio.Queue:
         queue = asyncio.Queue()
-        self._subscribers[channel].append(queue)
+        # subscribe() is only ever called from a coroutine (the WebSocket
+        # handler), so the running loop here is the one that will consume.
+        self._subscribers[channel].append((queue, asyncio.get_event_loop()))
         return queue
 
     def unsubscribe(self, channel: str, queue: asyncio.Queue):
         if channel in self._subscribers:
             self._subscribers[channel] = [
-                q for q in self._subscribers[channel] if q is not queue
+                entry for entry in self._subscribers[channel] if entry[0] is not queue
             ]
             if not self._subscribers[channel]:
                 del self._subscribers[channel]
 
     def publish(self, channel: str, message: dict):
-        for queue in self._subscribers.get(channel, []):
+        for queue, loop in list(self._subscribers.get(channel, [])):
             try:
-                queue.put_nowait(message)
-            except asyncio.QueueFull:
-                pass  # drop if consumer is too slow
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is loop:
+                # Already on the consumer's loop — a direct put is correct.
+                try:
+                    queue.put_nowait(message)
+                except asyncio.QueueFull:
+                    pass  # drop if consumer is too slow
+                continue
+            try:
+                loop.call_soon_threadsafe(_put_nowait_dropping_full, queue, message)
+            except RuntimeError:
+                pass  # loop already closed; the subscriber is gone
 
 
-# Global event bus singleton
-event_bus = EventBus()
+def _put_nowait_dropping_full(queue: asyncio.Queue, message: dict) -> None:
+    """Queue put that mirrors publish()'s drop-on-full policy. Runs on the loop."""
+    try:
+        queue.put_nowait(message)
+    except asyncio.QueueFull:
+        pass  # drop if consumer is too slow
+
+
+def _build_event_bus():
+    settings = get_settings()
+    if settings.event_bus_mode == "redis":
+        from app.core.event_bus_redis import RedisEventBus
+
+        return RedisEventBus(redis_url=settings.redis_url)
+    if settings.event_bus_mode != "memory":
+        logger.warning(
+            "Unknown EVENT_BUS_MODE=%r; falling back to memory",
+            settings.event_bus_mode,
+        )
+    return EventBus()
+
+
+# Global event bus singleton. The default branch is the original in-memory
+# implementation, preserving synchronous publish semantics and call paths.
+event_bus = _build_event_bus()
 
 
 class TrainingLogger:
     """Per-task logger that writes to files, publishes to event bus, and
-    buffers entries for eventual persistence to the `training_logs` table.
+    buffers entries for periodic persistence to the `training_logs` table.
 
-    Persistence is deliberately deferred: sklearn trials emit ~10-50 log
-    lines, so we accumulate in memory and flush once via `flush_to_db()`
-    at the end of the Run (called from `_run_training_sync`). That avoids
-    one DB round-trip per log line without sacrificing durability for
-    anything short of a worker crash mid-training — in which case the
-    .log file on disk still has the entries.
+    Persistence is batched rather than per-line: sklearn trials emit ~10-50
+    log lines, and one DB round-trip each would be wasteful. It used to be
+    deferred entirely to a single `flush_to_db()` at the end of the Run, which
+    meant `training_logs` stayed empty for the whole run — so opening the log
+    panel mid-training showed nothing at all, and a crash left the rows only in
+    the on-disk .log file. Now a flush also happens once the buffer reaches
+    ``_FLUSH_EVERY_N_ENTRIES`` or ``_FLUSH_INTERVAL_SECONDS`` have passed,
+    whichever comes first, and `_run_training_sync` still flushes at the end to
+    drain the tail.
+
+    ``log()`` runs on a ThreadPoolExecutor worker while `flush_to_db()` may also
+    be called from the owning coroutine's thread at the end of a run, so buffer
+    handoff is guarded by a lock.
+
+    Set ``persist_to_db=False`` for task families that are not rows in
+    ``training_tasks``. ``training_logs.task_id`` is a FK onto that table, so a
+    DL task id (which lives in ``dl_training_tasks``) cannot be inserted there —
+    every flush would fail the constraint, get pushed back, and be retried
+    forever. DL already persists each line through ``_store_dl_log_record`` on
+    its own path, so its buffer was pure waste even before batching existed.
     """
 
-    def __init__(self, task_id: str, model_type: str = ""):
+    # Small enough that a run's logs show up while it is still running, large
+    # enough that a chatty trial does not turn into one INSERT per line.
+    _FLUSH_EVERY_N_ENTRIES = 25
+    _FLUSH_INTERVAL_SECONDS = 2.0
+    # Bound the retry buffer: a persistently failing flush must not grow without
+    # limit and turn an observability feature into an OOM.
+    _MAX_BUFFERED_ENTRIES = 1000
+
+    def __init__(self, task_id: str, model_type: str = "", *, persist_to_db: bool = True):
         self.task_id = task_id
         self.model_type = model_type
         settings = get_settings()
@@ -80,8 +154,15 @@ class TrainingLogger:
         self.metrics_file = self.log_dir / f"{task_id}_metrics.json"
 
         # In-memory buffer of (level, message, extra, created_at) tuples
-        # awaiting a DB flush.
+        # awaiting a DB flush, plus the bookkeeping that decides when to flush.
         self._db_buffer: list[dict[str, Any]] = []
+        self._buffer_lock = threading.Lock()
+        # 日志的排序键。挂钟时间只说明"大概什么时候"，说不清"谁先谁后"——一个几秒
+        # 跑完的任务，几十条日志会落在同一个时间戳上，读回来的顺序就随存储引擎
+        # 心情了。itertools.count 是原子的，log() 可能被多个 worker 线程调用。
+        self._seq = itertools.count()
+        self._last_flush_at = time.monotonic()
+        self._persist_to_db = persist_to_db
 
         # Initialize metrics JSON
         self._metrics_data: dict[str, Any] = {
@@ -93,6 +174,7 @@ class TrainingLogger:
 
     def log(self, level: str, message: str, **extra):
         """Write a log entry to file, buffer for DB, and publish to bus."""
+        seq = next(self._seq)
         timestamp_dt = datetime.now(timezone.utc)
         timestamp = timestamp_dt.isoformat()
 
@@ -108,15 +190,19 @@ class TrainingLogger:
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(line + "\n")
 
-        # Buffer for eventual DB flush
-        self._db_buffer.append(
-            {
-                "level": level,
-                "message": message,
-                "extra": dict(extra) if extra else None,
-                "created_at": timestamp_dt,
-            }
-        )
+        # Buffer for DB flush (skipped when this task family has no row in
+        # training_tasks — see the class docstring).
+        if self._persist_to_db:
+            with self._buffer_lock:
+                self._db_buffer.append(
+                    {
+                        "level": level,
+                        "message": message,
+                        "extra": dict(extra) if extra else None,
+                        "created_at": timestamp_dt,
+                        "seq": seq,
+                    }
+                )
 
         # Publish to event bus
         event_bus.publish(
@@ -128,8 +214,28 @@ class TrainingLogger:
                 "message": message,
                 "extra": extra if extra else None,
                 "timestamp": timestamp,
+                "seq": seq,
             },
         )
+
+        self._maybe_flush()
+
+    def _maybe_flush(self) -> None:
+        """Flush if the buffer is big enough or old enough. Never raises."""
+        if not self._persist_to_db:
+            return
+        with self._buffer_lock:
+            pending = len(self._db_buffer)
+            if pending == 0:
+                return
+            due = (
+                pending >= self._FLUSH_EVERY_N_ENTRIES
+                or (time.monotonic() - self._last_flush_at) >= self._FLUSH_INTERVAL_SECONDS
+            )
+        if due:
+            # Outside the lock: flush_to_db takes it itself for the handoff,
+            # and the INSERT must not block other threads appending log lines.
+            self.flush_to_db()
 
     def flush_to_db(self) -> int:
         """Persist all buffered log entries to `training_logs`.
@@ -140,9 +246,13 @@ class TrainingLogger:
         Any exception is logged but NOT re-raised: losing observability
         data must never break a successful Run.
         """
-        if not self._db_buffer:
+        if not self._persist_to_db:
             return 0
-        buffered, self._db_buffer = self._db_buffer, []
+        with self._buffer_lock:
+            if not self._db_buffer:
+                return 0
+            buffered, self._db_buffer = self._db_buffer, []
+            self._last_flush_at = time.monotonic()
         try:
             from app.models.database import TrainingLog, sync_session_factory
 
@@ -156,6 +266,7 @@ class TrainingLogger:
                             "message": entry["message"],
                             "extra": entry["extra"],
                             "created_at": entry["created_at"],
+                            "seq": entry["seq"],
                         }
                         for entry in buffered
                     ],
@@ -168,8 +279,11 @@ class TrainingLogger:
                 self.task_id,
                 exc,
             )
-            # Push entries back so a later flush can retry.
-            self._db_buffer = buffered + self._db_buffer
+            # Push entries back so a later flush can retry, keeping the most
+            # recent entries if the backlog has grown past the cap.
+            with self._buffer_lock:
+                merged = buffered + self._db_buffer
+                self._db_buffer = merged[-self._MAX_BUFFERED_ENTRIES:]
             return 0
 
     def log_metrics(self, step: int, total_steps: int, metrics: dict):

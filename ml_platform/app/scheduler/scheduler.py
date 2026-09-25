@@ -16,8 +16,8 @@ Phase 2 replaced the branching with two decoupled pieces:
      gate (``PlatformTask.depends_on``) and delegates to the executor via
      ``run_with_status`` so status/metrics write-back is standardized.
 
-Phase 5 additions
-=================
+M2 scheduling contract
+======================
 * ``CeleryScheduler`` — routes submissions through ``apply_async`` so
   executors run in a separate worker process (essential for GPU-heavy DL
   training that must not block the FastAPI event loop).
@@ -26,59 +26,27 @@ Phase 5 additions
   upstream reports SUCCESS.  The gate treats FAILED/CANCELLED upstream as
   "blocked forever" — a dependent task is marked CANCELLED rather than
   orphaned.
-* ``get_scheduler()`` chooses Celery vs InProcess based on
-  ``settings.scheduler_mode``.  Tests always run InProcess.
-
-⚠ TECH DEBT — Scheduler abstraction is bypassed in production hot paths
-=======================================================================
-As of v3.3.0 the only caller that actually goes through ``get_scheduler()``
-→ ``dispatch_platform_task`` is ``POST /api/platform/tasks/{id}/retry``.
-Every primary submission path takes a shortcut and runs the executor
-inline as ``asyncio.create_task(...)`` inside the FastAPI process:
-
-    Path                                         Where it bypasses the scheduler
-    ------------------------------------------   -------------------------------------
-    POST /api/training/start (legacy ML)         training_service.py — bg_task = asyncio.create_task(_execute_training)
-    POST /api/v3/tasks/{id}/experiments (V3)     tuning_service.py — asyncio.create_task(_run_concurrent_batch)
-    POST /api/dl/train                           dl_service.py — bg = asyncio.create_task(_execute_dl_training)
-    POST /api/platform/tasks (manual create)     asyncio.create_task on accept
-    _schedule_shap_for_top_runs (auto-SHAP)      asyncio.create_task
-
-Consequences:
-  - SCHEDULER_MODE=celery is effectively a no-op for normal use; an attached
-    worker container would only execute tasks submitted via the retry route.
-  - A backend restart kills every in-flight training run.
-  - GPU/CPU-heavy work still blocks the FastAPI event loop for its duration.
-
-The proper fix is non-trivial (estimated 5–8 days, see doc/TECH_DEBT.md):
-  1. Replace each ``asyncio.create_task(executor(...))`` with
-     ``await get_scheduler().submit(platform_task_id)``.
-  2. Make ``_execute_single_trial`` purely orchestrate (no inline ``await
-     executor(...)``); rely on Celery callbacks to update ExperimentRun /
-     PlatformExperiment when each trial finishes.
-  3. Bayesian search uses Optuna's in-memory study which assumes a single
-     process — the study state must be moved to RDBStorage (MySQL) so that
-     trials dispatched to different workers see prior results.
-  4. Update mirror logic in ``tuning_service._mirror_logs_to_v3`` (added in
-     v3.3.0) — currently called inline after ``await executor(...)`` returns;
-     after the refactor it has to fire from a Celery success callback.
-  5. Every Playwright milestone gate spec assumes synchronous in-process
-     completion (4 s baseline turnaround).  After Celery is wired in,
-     specs need polling + longer timeouts.
-
-Until that work is scheduled, do not enable SCHEDULER_MODE=celery in
-production — it adds operational complexity without functional benefit.
+* ``get_scheduler(kind)`` selects Celery per kind through ``CELERY_KINDS``;
+  ``SCHEDULER_MODE=celery`` remains the all-kinds compatibility override.
+* Every migrated submission happens after the domain and PlatformTask rows
+  commit. Celery acknowledgements are stored in ``celery_task_id`` and stale
+  rows without an acknowledgement are repaired by the reconciler.
+* V3 in-process trials deliberately retain ``_execute_single_trial`` as their
+  writeback wrapper. Cross-process run writeback and distributed Optuna state
+  remain later M2c/M2d work, so deployments should gray Celery by safe kinds
+  (``explain`` first) rather than enabling all training kinds immediately.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Protocol, runtime_checkable
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.scheduler.executors import has_executor, run_with_status
+from app.scheduler.queues import DEFAULT, KIND_TO_QUEUE
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +64,7 @@ class Scheduler(Protocol):
     DAG-aware schedulers use it as a hook to re-evaluate downstream tasks.
     """
 
-    async def submit(self, platform_task_id: str) -> None: ...
+    async def submit(self, platform_task_id: str) -> asyncio.Task | None: ...
     async def on_task_done(self, platform_task_id: str) -> None: ...
 
 
@@ -118,7 +86,6 @@ def _utcnow() -> datetime:
 # DAG gate constants
 _TERMINAL_SUCCESS = {"SUCCESS", "COMPLETED"}
 _TERMINAL_FAILURE = {"FAILED", "CANCELLED"}
-_ACTIVE_STATUSES  = {"PENDING", "QUEUED", "RUNNING", "RETRY"}
 
 
 async def _gate_upstream(depends_on: Iterable[str] | None) -> tuple[str, list[str]]:
@@ -228,7 +195,7 @@ class InProcessScheduler:
         for forward-compat with services that haven't migrated to the registry.
     """
 
-    async def submit(self, platform_task_id: str) -> None:
+    async def submit(self, platform_task_id: str) -> asyncio.Task | None:
         kind, payload_ref, depends_on = await _load_task_fields(platform_task_id)
         if kind is None:
             raise ValueError(f"PlatformTask {platform_task_id!r} not found")
@@ -256,11 +223,26 @@ class InProcessScheduler:
                 f"PlatformTask {platform_task_id!r} has invalid payload_ref {payload_ref!r}"
             )
 
+        v3_trial = await _load_v3_trial_context(platform_task_id)
+        if v3_trial is not None:
+            run_id, experiment_id, modeling_task_id, strategy_type = v3_trial
+            return asyncio.create_task(
+                _run_v3_trial_and_propagate(
+                    self,
+                    kind,
+                    domain_id,
+                    platform_task_id,
+                    run_id,
+                    experiment_id,
+                    modeling_task_id,
+                    strategy_type,
+                )
+            )
+
         if has_executor(kind):
-            asyncio.create_task(
+            return asyncio.create_task(
                 _run_and_propagate(self, kind, domain_id, platform_task_id)
             )
-            return
 
         # Legacy fallback — kept for services that haven't migrated yet.
         logger.debug(
@@ -274,6 +256,7 @@ class InProcessScheduler:
             payload_ref=payload_ref,
             priority=5,
         )
+        return None
 
     async def on_task_done(self, platform_task_id: str) -> None:
         """
@@ -310,14 +293,6 @@ class CeleryScheduler:
     to the executor registry, so we don't need a per-kind Celery task body.
     """
 
-    _KIND_TO_QUEUE = {
-        "train":       "train",
-        "dl_train":    "train",
-        "explain":     "explain",
-        "ts_forecast": "forecast",
-        "forecast":    "forecast",
-    }
-
     async def submit(self, platform_task_id: str) -> None:
         kind, payload_ref, depends_on = await _load_task_fields(platform_task_id)
         if kind is None:
@@ -343,14 +318,40 @@ class CeleryScheduler:
                 f"PlatformTask {platform_task_id!r} has invalid payload_ref {payload_ref!r}"
             )
 
-        queue = self._KIND_TO_QUEUE.get(kind, "celery")
+        queue = KIND_TO_QUEUE.get(kind, DEFAULT)
         # Lazy import — Celery app construction hits Redis eagerly on some
         # brokers, and tests run with SCHEDULER_MODE=inprocess.
         from app.scheduler.celery_tasks import run_platform_task_generic
-        run_platform_task_generic.apply_async(
-            args=[platform_task_id],
-            queue=queue,
-        )
+        try:
+            async_result = run_platform_task_generic.apply_async(
+                args=[platform_task_id],
+                queue=queue,
+            )
+        except Exception as exc:  # broker outage: leave row for reconciler
+            logger.error(
+                "Celery submission failed for PlatformTask %s: %s",
+                platform_task_id,
+                exc,
+            )
+            return
+
+        celery_task_id = getattr(async_result, "id", None)
+        if celery_task_id:
+            try:
+                await _store_celery_task_id(platform_task_id, str(celery_task_id))
+            except Exception:
+                logger.exception(
+                    "Celery task %s was published but its id could not be "
+                    "persisted for PlatformTask %s; reconciler will retry",
+                    celery_task_id,
+                    platform_task_id,
+                )
+        else:
+            logger.warning(
+                "Celery submission for PlatformTask %s returned no task id; "
+                "reconciler will retry",
+                platform_task_id,
+            )
 
     async def on_task_done(self, platform_task_id: str) -> None:
         """Re-submit dependents whose upstream constraint is now satisfied."""
@@ -384,45 +385,238 @@ async def _run_and_propagate(
             logger.exception("on_task_done raised after %s", platform_task_id)
 
 
+async def _run_v3_trial_and_propagate(
+    scheduler: Scheduler,
+    kind: str,
+    domain_id: str,
+    platform_task_id: str,
+    run_id: str,
+    experiment_id: str,
+    modeling_task_id: str | None,
+    strategy_type: str,
+) -> dict[str, Any]:
+    """Keep the existing V3 trial writeback sequence on the in-process path."""
+    from app.services.tuning_service import _execute_single_trial
+
+    try:
+        # M2c: batch finalisation AND DAG propagation are owned by
+        # ``run_writeback.complete_platform_task``. Propagating here as well is
+        # not a harmless no-op — ``on_task_done`` has no atomic claim, so two
+        # callers can both observe a dependent as PENDING and submit it twice.
+        # ``_execute_single_trial`` funnels every exit (including unexpected
+        # exceptions) through the write-back, so propagation is guaranteed.
+        return await _execute_single_trial(
+            domain_id,
+            platform_task_id,
+            run_id,
+            experiment_id,
+            kind=kind,
+        )
+    except Exception:
+        logger.exception("V3 trial wrapper failed for %s", platform_task_id)
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Module-level singleton accessor
 # ---------------------------------------------------------------------------
 
-_scheduler: Scheduler | None = None
+_scheduler_override: Scheduler | None = None
+_inprocess_scheduler = InProcessScheduler()
+_celery_scheduler = CeleryScheduler()
 
 
-def get_scheduler() -> Scheduler:
-    global _scheduler
-    if _scheduler is None:
-        _scheduler = _build_scheduler()
-    return _scheduler
+def get_scheduler(kind: str) -> Scheduler:
+    """Return the scheduler selected for one PlatformTask kind."""
+    if _scheduler_override is not None:
+        return _scheduler_override
+    return _build_scheduler(kind)
 
 
-def set_scheduler(scheduler: Scheduler) -> None:
-    """Dependency-injection hook for tests."""
-    global _scheduler
-    _scheduler = scheduler
+def set_scheduler(scheduler: Scheduler | None) -> None:
+    """Dependency-injection hook for tests; pass ``None`` to clear it."""
+    global _scheduler_override
+    _scheduler_override = scheduler
 
 
-def _build_scheduler() -> Scheduler:
+def _build_scheduler(kind: str) -> Scheduler:
     """
-    Factory — reads ``settings.scheduler_mode`` to pick an implementation.
+    Factory — reads the global mode and per-kind allowlist.
 
     Defaults to ``InProcessScheduler`` so unit tests, single-process dev,
-    and legacy deployments keep working.  Ops flip to Celery via
-    ``SCHEDULER_MODE=celery`` in the env file once a Redis + worker pair
-    is part of the deployment.
+    and legacy deployments keep working. ``CELERY_KINDS`` enables a safe
+    per-kind rollout; the legacy global mode routes all kinds to Celery.
     """
     from app.config import get_settings
-    mode = (get_settings().scheduler_mode or "inprocess").lower()
+    settings = get_settings()
+    mode = (settings.scheduler_mode or "inprocess").lower()
     if mode == "celery":
         logger.info("Scheduler: using CeleryScheduler (SCHEDULER_MODE=celery)")
-        return CeleryScheduler()
+        return _celery_scheduler
     if mode not in ("inprocess", "celery"):
         logger.warning(
             "Unknown SCHEDULER_MODE=%r; falling back to inprocess", mode,
         )
-    return InProcessScheduler()
+    celery_kinds = {
+        item.strip()
+        for item in (getattr(settings, "celery_kinds", "") or "").split(",")
+        if item.strip()
+    }
+    if kind in celery_kinds:
+        return _celery_scheduler
+    return _inprocess_scheduler
+
+
+async def reconcile_queued_tasks(
+    *,
+    older_than: timedelta = timedelta(minutes=2),
+    now: datetime | None = None,
+    limit: int = 100,
+) -> list[str]:
+    """Re-submit stale Celery-routed rows left without a broker task id.
+
+    This is an at-least-once outbox repair. In-process kinds are skipped so
+    the default ``CELERY_KINDS=''`` startup remains behavior-neutral.
+    """
+    from app.models.database import PlatformTask, async_session_factory
+
+    cutoff = (now or _utcnow()) - older_than
+    async with async_session_factory() as db:
+        rows = await db.execute(
+            select(PlatformTask.id, PlatformTask.kind)
+            .where(
+                PlatformTask.status == "QUEUED",
+                PlatformTask.celery_task_id.is_(None),
+                PlatformTask.queued_at.is_not(None),
+                PlatformTask.queued_at <= cutoff,
+            )
+            .order_by(PlatformTask.queued_at, PlatformTask.id)
+            .limit(limit)
+        )
+        candidates = rows.all()
+
+    submitted: list[str] = []
+    for task_id, kind in candidates:
+        scheduler = get_scheduler(kind)
+        if not isinstance(scheduler, CeleryScheduler):
+            continue
+        await scheduler.submit(task_id)
+        submitted.append(task_id)
+    return submitted
+
+
+async def recover_stalled_tasks(
+    *,
+    older_than: timedelta = timedelta(hours=6),
+    now: datetime | None = None,
+    limit: int = 100,
+) -> list[str]:
+    """Re-arm Celery tasks stuck non-terminal with no one left to finish them.
+
+    ``reconcile_queued_tasks`` only repairs rows that never reached the broker.
+    It cannot help the other hole: a worker that *executed* the task but died
+    before the terminal commit landed. Those rows sit at RUNNING/RETRY with a
+    ``celery_task_id`` already set, so nothing re-drives them and the trial
+    hangs forever. That is exactly the tail a ``WritebackError`` leaves behind
+    when every write-back attempt fails.
+
+    We cannot recover the lost *result* — it was never persisted anywhere
+    durable — so the only honest recovery is re-execution. The row is reset to
+    QUEUED and resubmitted, and the normal claim/complete path takes over.
+
+    Consequences, stated precisely:
+
+    * This is at-least-once. A genuine trial that runs longer than
+      ``older_than`` will be executed a second time. The threshold must sit
+      above the training hard time limit; the default is deliberately generous.
+    * Only the **terminal write-back is idempotent**. Whichever attempt commits
+      first wins and the loser's ``complete_platform_task`` is a no-op. That is
+      NOT the same as the duplicate being harmless: the executors are not
+      attempt-fenced, so two attempts write the same domain task, the same log
+      files and the same ``storage/models/{task_id}.joblib``. A loser that
+      finishes after the winner can overwrite the winner's artifact, leaving
+      the recorded metrics describing a model that is no longer on disk.
+      Artifact fencing is required before Celery ``train`` is enabled in
+      production — see the known-limits list in the M2c commit.
+    * The re-arm is a compare-and-set on ``status`` plus the ``attempt_token``
+      we observed. A task that reached a terminal state, or that was re-claimed
+      into a *fresh* attempt between the scan and the write, no longer matches
+      and is left alone. The token exists precisely because the obvious
+      candidates cannot do this job: Celery reuses one task id across retries,
+      and ``started_at`` is stamped only on the first claim.
+    """
+    from app.models.database import ExperimentRun, PlatformTask, async_session_factory
+
+    stalled = ["RUNNING", "RETRY"]
+    cutoff = (now or _utcnow()) - older_than
+    async with async_session_factory() as db:
+        rows = await db.execute(
+            select(
+                PlatformTask.id,
+                PlatformTask.kind,
+                PlatformTask.attempt_token,
+            )
+            .where(
+                PlatformTask.status.in_(stalled),
+                PlatformTask.started_at.is_not(None),
+                PlatformTask.started_at <= cutoff,
+            )
+            .order_by(PlatformTask.started_at, PlatformTask.id)
+            .limit(limit)
+        )
+        candidates = rows.all()
+
+    recovered: list[str] = []
+    for task_id, kind, seen_attempt in candidates:
+        scheduler = get_scheduler(kind)
+        if not isinstance(scheduler, CeleryScheduler):
+            continue
+
+        # Compare-and-set on the attempt we observed, not just on status.
+        # Between the scan and here the task may have been re-claimed; the
+        # claim mints a new attempt_token, so a fresh attempt no longer
+        # matches and is left running.
+        identity = [
+            PlatformTask.attempt_token.is_(None)
+            if seen_attempt is None
+            else PlatformTask.attempt_token == seen_attempt
+        ]
+
+        async with async_session_factory() as db:
+            async with db.begin():
+                result = await db.execute(
+                    update(PlatformTask)
+                    .where(
+                        PlatformTask.id == task_id,
+                        PlatformTask.status.in_(stalled),
+                        *identity,
+                    )
+                    .values(
+                        status="QUEUED",
+                        attempt_token=None,
+                        celery_task_id=None,
+                        queued_at=_utcnow(),
+                        started_at=None,
+                        finished_at=None,
+                    )
+                )
+                if not result.rowcount:
+                    # Finished, or re-claimed into a fresh attempt, since the
+                    # scan. Either way there is nothing stalled to recover.
+                    continue
+                await db.execute(
+                    update(ExperimentRun)
+                    .where(
+                        ExperimentRun.task_id == task_id,
+                        ExperimentRun.status.in_(stalled),
+                    )
+                    .values(status="PENDING", started_at=None)
+                )
+
+        await scheduler.submit(task_id)
+        recovered.append(task_id)
+        logger.warning("Recovered stalled task %s (kind=%s) by re-queueing", task_id, kind)
+    return recovered
 
 
 # ---------------------------------------------------------------------------
@@ -446,3 +640,52 @@ async def _load_task_fields(
     if row is None:
         return None, None, None
     return row[0], row[1], row[2]
+
+
+async def _store_celery_task_id(platform_task_id: str, celery_task_id: str) -> None:
+    """Persist the broker acknowledgement after ``apply_async`` returns."""
+    from app.models.database import PlatformTask, async_session_factory
+
+    async with async_session_factory() as db:
+        task = await db.get(PlatformTask, platform_task_id)
+        if task is None:
+            logger.error(
+                "Cannot persist Celery id %s: PlatformTask %s disappeared",
+                celery_task_id,
+                platform_task_id,
+            )
+            return
+        task.celery_task_id = celery_task_id
+        await db.commit()
+
+
+async def _load_v3_trial_context(
+    platform_task_id: str,
+) -> tuple[str, str, str | None, str] | None:
+    """Return V3 workbench run and batch context for in-process writeback."""
+    from app.models.database import (
+        ExperimentRun,
+        PlatformExperiment,
+        async_session_factory,
+    )
+
+    async with async_session_factory() as db:
+        row = (
+            await db.execute(
+                select(
+                    ExperimentRun.id,
+                    ExperimentRun.experiment_id,
+                    PlatformExperiment.config,
+                    PlatformExperiment.modeling_task_id,
+                    PlatformExperiment.strategy_type,
+                )
+                .join(
+                    PlatformExperiment,
+                    PlatformExperiment.id == ExperimentRun.experiment_id,
+                )
+                .where(ExperimentRun.task_id == platform_task_id)
+            )
+        ).first()
+    if row is None or (row[2] or {}).get("submitted_from") != "v3_workbench":
+        return None
+    return row[0], row[1], row[3], row[4]

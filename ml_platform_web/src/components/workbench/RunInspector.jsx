@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import {
   Drawer, Descriptions, Tag, Space, Table, Tabs, Empty, Spin,
   Typography, Divider, Alert, Tooltip,
-} from 'antd'
+} from '../../ui'
 import {
   CheckCircleFilled, CloseCircleFilled, ClockCircleFilled,
   DatabaseOutlined, ExperimentOutlined, LineChartOutlined,
@@ -14,8 +14,9 @@ import ShapView from './ShapView'
 import TrainingViz from './TrainingViz'
 import TrainingHistoryChart from '../viz/TrainingHistoryChart'
 import CrossValidationView from '../viz/CrossValidationView'
+import { formatDateTime, parseServerDate } from '../../utils/formatters'
 
-const { Text, Paragraph } = Typography
+const { Text } = Typography
 
 const STATUS_TAG = {
   SUCCESS:  <Tag icon={<CheckCircleFilled />} color="success">成功</Tag>,
@@ -26,10 +27,6 @@ const STATUS_TAG = {
   CANCELED: <Tag color="warning">已取消</Tag>,
 }
 
-const LEVEL_COLOR = {
-  INFO: '#3b82f6', WARN: '#f59e0b', WARNING: '#f59e0b', ERROR: '#ef4444', DEBUG: '#94a3b8',
-}
-
 function MetricsGrid({ metrics }) {
   if (!metrics || Object.keys(metrics).length === 0) return <Empty description="无指标" image={Empty.PRESENTED_IMAGE_SIMPLE} />
   const entries = Object.entries(metrics).filter(([, v]) => typeof v === 'number')
@@ -37,11 +34,22 @@ function MetricsGrid({ metrics }) {
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
       {entries.map(([k, v]) => (
         <div key={k} style={{
-          padding: '8px 12px', borderRadius: 6,
+          padding: '8px 12px', borderRadius: 4,
           background: 'rgba(37, 99, 235, 0.04)', border: '1px solid rgba(37, 99, 235, 0.1)',
+          minWidth: 0,
         }}>
-          <div style={{ fontSize: 11, color: '#64748b' }}>{k}</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', fontFamily: 'monospace' }}>
+          <Tooltip title={k}>
+            <div style={{
+              fontSize: 11,
+              color: 'var(--text-secondary)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {k}
+            </div>
+          </Tooltip>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
             {typeof v === 'number' ? v.toFixed(4) : String(v)}
           </div>
         </div>
@@ -62,12 +70,63 @@ function ParamsTable({ params }) {
         { title: '参数', dataIndex: 'key', width: '40%',
           render: (v) => <code style={{ fontSize: 12 }}>{v}</code> },
         { title: '取值', dataIndex: 'value',
-          render: (v) => <code style={{ fontSize: 12, color: '#2563eb' }}>
+          render: (v) => <code style={{ fontSize: 12, color: '#1a8dff' }}>
             {typeof v === 'object' ? JSON.stringify(v) : String(v)}
           </code> },
       ]}
     />
   )
+}
+
+export const DASH = '—'
+
+/**
+ * `progress` on both TrainingTask and DLTrainingTask is already a percentage:
+ * training_service and dl_service both write `task.progress = 100.0` on
+ * completion. (It is PlatformTask.progress that is a 0–1 fraction.) The drawer
+ * used to multiply by 100 anyway and rendered a finished run as "10000%".
+ */
+export function formatProgress(progress) {
+  if (progress == null) return DASH
+  const n = Number(progress)
+  if (!Number.isFinite(n)) return DASH
+  return `${n.toFixed(0)}%`
+}
+
+/**
+ * Resolve the drawer's identity fields from the inspector payload.
+ *
+ * The modeling *contract* — target column, dataset identity, and where this run
+ * placed overall — belongs to the ModelingTask, not to the legacy TrainingTask
+ * execution record the drawer used to read. `training_task` stays the source
+ * for everything only it knows (hyperparameters, arch/opt config, model path).
+ *
+ * Two distinct ranks, deliberately kept apart:
+ *   - taskRank       — position on the task leaderboard, across all experiments
+ *   - experimentRank — ExperimentRun.rank, position inside one experiment
+ * Showing the second under a bare 「排名」 label was the original bug; they are
+ * both surfaced now, each with its own label.
+ */
+export function deriveRunFields(data) {
+  const run = data?.run
+  const mtask = data?.modeling_task
+  const ttask = data?.training_task
+  const taskRank = mtask?.rank ?? null
+
+  return {
+    modelingTaskName: mtask?.name || DASH,
+    // TrainingTask.target_column is a correct answer when it exists — it is
+    // simply absent on DL runs and on runs whose legacy row was purged. So it
+    // stays as a fallback rather than being dropped.
+    targetColumn: mtask?.target_column || ttask?.target_column || DASH,
+    // Dataset.name is the original uploaded filename; ModelingTask copies it at
+    // creation, so it survives the legacy row being purged.
+    datasetFile: mtask?.dataset_name || DASH,
+    taskRank: taskRank ?? DASH,
+    experimentRank: run?.rank ?? DASH,
+    progressLabel: formatProgress(ttask?.progress),
+    isTopOne: (taskRank ?? run?.rank ?? null) === 1,
+  }
 }
 
 export default function RunInspector({ open, runId, onClose, defaultTab = 'overview' }) {
@@ -101,12 +160,23 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
   const siblings = data?.siblings || []
   const logs = data?.logs || []
   const diagnosis = data?.diagnosis
+  const {
+    modelingTaskName, targetColumn, datasetFile,
+    taskRank, experimentRank, progressLabel, isTopOne,
+  } = deriveRunFields(data)
+  const isDlRun = ttask?.family === 'dl'
+  const taskKind = isDlRun
+    ? ttask?.task_type || run?.params?.task_type || 'classification'
+    : String(ttask?.model_type || '').toLowerCase().includes('regress')
+      ? 'regression'
+      : 'classification'
+  const resolvedTaskKind = taskKind === 'regression' ? 'regression' : 'classification'
 
   return (
     <Drawer
       title={
         <Space>
-          <LineChartOutlined style={{ color: '#2563eb' }} />
+          <LineChartOutlined style={{ color: '#1a8dff' }} />
           <span>Run 诊断</span>
           {run && <Text type="secondary" style={{ fontSize: 12 }}>#{run.id?.slice(0, 8)}</Text>}
           {run && STATUS_TAG[run.status]}
@@ -149,7 +219,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                       }[run.status] || run.status
                       let duration = null
                       if (ptask?.started_at && ptask?.finished_at) {
-                        const dur = (new Date(ptask.finished_at) - new Date(ptask.started_at)) / 1000
+                        const dur = (parseServerDate(ptask.finished_at) - parseServerDate(ptask.started_at)) / 1000
                         if (dur >= 0) duration = dur < 60 ? `${dur.toFixed(1)} 秒` : `${(dur / 60).toFixed(1)} 分`
                       }
                       return (
@@ -159,29 +229,29 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                           message={
                             <span>
                               Trial #{run.trial_no ?? '?'} · {ttask?.model_type || '模型'}
-                              {run.rank === 1 && <Tag color="gold" style={{ marginLeft: 8 }}>🏆 Top-1</Tag>}
+                              {isTopOne && <Tag color="gold" style={{ marginLeft: 8 }}>🏆 Top-1</Tag>}
                             </span>
                           }
                           description={
                             <div style={{ fontSize: 13 }}>
                               本次 Run 在实验
-                              <code style={{ margin: '0 4px', color: '#2563eb' }}>{exp?.name || '未命名'}</code>
+                              <code style={{ margin: '0 4px', color: '#1a8dff' }}>{exp?.name || '未命名'}</code>
                               下以
                               <Tag color="blue" style={{ margin: '0 4px' }}>{strategy}</Tag>
                               策略
-                              <Text strong style={{ color: run.status === 'SUCCESS' ? '#16a34a' : run.status === 'FAILED' ? '#dc2626' : '#2563eb' }}>
+                              <Text strong style={{ color: run.status === 'SUCCESS' ? '#00a870' : run.status === 'FAILED' ? '#e34d59' : '#1a8dff' }}>
                                 {statusCN}
                               </Text>
                               {objVal != null && (
                                 <span>
-                                  ，<code>{objective}</code> = <code style={{ color: '#2563eb' }}>
+                                  ，<code>{objective}</code> = <code style={{ color: '#1a8dff' }}>
                                     {typeof objVal === 'number' ? objVal.toFixed(4) : String(objVal)}
                                   </code>
                                   （{exp?.objective_direction === 'min' ? '越低越好' : '越高越好'}）
                                 </span>
                               )}
                               {duration && <span>；耗时 <code>{duration}</code></span>}
-                              {ttask?.target_column && <span>；目标列 <code>{ttask.target_column}</code></span>}
+                              {targetColumn !== DASH && <span>；目标列 <code>{targetColumn}</code></span>}
                               {ds?.name && <span>；数据集 <code>{ds.name}</code>（{ds.row_count ?? '?'} 行 × {ds.column_count ?? '?'} 列）</span>}
                               。
                             </div>
@@ -191,28 +261,38 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                     })()}
 
                     <Descriptions size="small" column={2} bordered
-                      labelStyle={{ background: '#f8fafc', width: 110 }}>
+                      labelStyle={{ background: 'var(--surface-1)', width: 110 }}>
                       <Descriptions.Item label="Trial 号">{run?.trial_no ?? '-'}</Descriptions.Item>
-                      <Descriptions.Item label="排名">{run?.rank ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label={
+                        <Tooltip title="本 Run 在所属建模任务排行榜上的名次 —— 按任务的目标指标，跨该任务下的所有实验排序。未成功或没有目标指标值的 Run 不参与排名。">
+                          <span>排名 <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 11 }} /></span>
+                        </Tooltip>
+                      }>{taskRank}</Descriptions.Item>
+                      <Descriptions.Item label={
+                        <Tooltip title="本 Run 在它自己那一个实验内部的名次，范围比上面的「排名」窄。两者不同是正常的。">
+                          <span>实验内排名 <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 11 }} /></span>
+                        </Tooltip>
+                      }>{experimentRank}</Descriptions.Item>
+                      <Descriptions.Item label="建模任务">{modelingTaskName}</Descriptions.Item>
                       <Descriptions.Item label="所属实验">{exp?.name || '-'}</Descriptions.Item>
                       <Descriptions.Item label="策略">
                         <Tag color="blue">{exp?.strategy_type || exp?.source_experiment_type || '-'}</Tag>
                       </Descriptions.Item>
                       <Descriptions.Item label={
                         <Tooltip title="本次实验用于挑选最优 Run 的指标；Run 的 metrics 里对应的值就是它的 'score'。">
-                          <span>优化指标 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+                          <span>优化指标 <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 11 }} /></span>
                         </Tooltip>
                       }>{exp?.objective_metric}</Descriptions.Item>
                       <Descriptions.Item label={
                         <Tooltip title="max = 越大越好（accuracy/f1/r2 等）；min = 越小越好（rmse/mae 等）。">
-                          <span>方向 <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} /></span>
+                          <span>方向 <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 11 }} /></span>
                         </Tooltip>
                       }>{exp?.objective_direction}</Descriptions.Item>
                       <Descriptions.Item label="开始时间">
-                        {ptask?.started_at ? new Date(ptask.started_at).toLocaleString('zh-CN', { hour12: false }) : '-'}
+                        {ptask?.started_at ? formatDateTime(ptask.started_at) : '-'}
                       </Descriptions.Item>
                       <Descriptions.Item label="结束时间">
-                        {ptask?.finished_at ? new Date(ptask.finished_at).toLocaleString('zh-CN', { hour12: false }) : '-'}
+                        {ptask?.finished_at ? formatDateTime(ptask.finished_at) : '-'}
                       </Descriptions.Item>
                     </Descriptions>
 
@@ -227,8 +307,8 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                       <div>
                         <Text strong style={{ fontSize: 13 }}>搜索元数据</Text>
                         <pre style={{
-                          marginTop: 4, fontSize: 11, padding: 8, borderRadius: 6,
-                          background: '#f8fafc', border: '1px solid #e2e8f0',
+                          marginTop: 4, fontSize: 11, padding: 8, borderRadius: 4,
+                          background: 'var(--surface-1)', border: '1px solid var(--border)',
                           maxHeight: 140, overflow: 'auto',
                         }}>
                           {JSON.stringify(run.search_meta, null, 2)}
@@ -254,7 +334,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                 label: <span>训练可视化</span>,
                 children: (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    {run?.metrics?.history && (
+                    {!isDlRun && run?.metrics?.history && (
                       <div>
                         <Text strong style={{ fontSize: 13 }}>Epoch 训练历史</Text>
                         <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
@@ -263,11 +343,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                         <div style={{ marginTop: 6 }}>
                           <TrainingHistoryChart
                             history={run.metrics.history}
-                            taskType={
-                              String(ttask?.model_type || '').toLowerCase().includes('regress')
-                                ? 'regression'
-                                : 'classification'
-                            }
+                            taskType={resolvedTaskKind}
                             height={280}
                             xAxisName="Epoch"
                           />
@@ -279,17 +355,13 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                         a learning_curve-shaped payload, use the same shared
                         CrossValidationView the Results page uses. The shape
                         check matches `learning_curve.steps[]`. */}
-                    {Array.isArray(run?.metrics?.cv_fold_metrics) && run.metrics.cv_fold_metrics.length > 0 && (
+                    {!isDlRun && Array.isArray(run?.metrics?.cv_fold_metrics) && run.metrics.cv_fold_metrics.length > 0 && (
                       <div>
                         <Text strong style={{ fontSize: 13 }}>K-Fold 交叉验证</Text>
                         <div style={{ marginTop: 6 }}>
                           <CrossValidationView
                             payload={{ steps: run.metrics.cv_fold_metrics }}
-                            taskKind={
-                              String(ttask?.model_type || '').toLowerCase().includes('regress')
-                                ? 'regression'
-                                : 'classification'
-                            }
+                            taskKind={resolvedTaskKind}
                             height={260}
                           />
                         </div>
@@ -300,6 +372,10 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                       trainingTaskId={ttask?.id}
                       modelType={ttask?.model_type}
                       taskStatus={run?.status}
+                      family={ttask?.family}
+                      taskType={resolvedTaskKind}
+                      history={run?.metrics?.history}
+                      metrics={run?.metrics}
                     />
                   </Space>
                 ),
@@ -345,14 +421,18 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                     )}
                     <div>
                       <Text strong><DatabaseOutlined /> 数据集</Text>
-                      {ds ? (
+                      {/* The modeling task knows the dataset even when the legacy
+                          TrainingTask row (and with it `ds`) has been purged, so
+                          the panel opens on either source rather than collapsing
+                          to 无数据集记录 in exactly the case the fallback is for. */}
+                      {(ds || datasetFile !== DASH) ? (
                         <Descriptions size="small" column={2} style={{ marginTop: 6 }} bordered
-                          labelStyle={{ background: '#f8fafc', width: 100 }}>
-                          <Descriptions.Item label="名称">{ds.name}</Descriptions.Item>
-                          <Descriptions.Item label="行数">{ds.row_count ?? '-'}</Descriptions.Item>
-                          <Descriptions.Item label="列数">{ds.column_count ?? '-'}</Descriptions.Item>
-                          <Descriptions.Item label="文件">
-                            <Text ellipsis style={{ maxWidth: 220, fontSize: 12 }}>{ds.file_path || '-'}</Text>
+                          labelStyle={{ background: 'var(--surface-1)', width: 100 }}>
+                          <Descriptions.Item label="名称">{ds?.name || datasetFile}</Descriptions.Item>
+                          <Descriptions.Item label="行数">{ds?.row_count ?? '-'}</Descriptions.Item>
+                          <Descriptions.Item label="列数">{ds?.column_count ?? '-'}</Descriptions.Item>
+                          <Descriptions.Item label="数据集文件">
+                            <Text ellipsis style={{ maxWidth: 220, fontSize: 12 }}>{datasetFile}</Text>
                           </Descriptions.Item>
                         </Descriptions>
                       ) : <Empty description="无数据集记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
@@ -362,11 +442,11 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                       <Text strong><ExperimentOutlined /> 训练任务</Text>
                       {ttask ? (
                         <Descriptions size="small" column={2} style={{ marginTop: 6 }} bordered
-                          labelStyle={{ background: '#f8fafc', width: 100 }}>
+                          labelStyle={{ background: 'var(--surface-1)', width: 100 }}>
                           <Descriptions.Item label="模型">{ttask.model_type}</Descriptions.Item>
                           <Descriptions.Item label="状态">{STATUS_TAG[ttask.status] || ttask.status}</Descriptions.Item>
-                          <Descriptions.Item label="进度">{ttask.progress != null ? `${(ttask.progress * 100).toFixed(0)}%` : '-'}</Descriptions.Item>
-                          <Descriptions.Item label="目标列">{ttask.target_column || '-'}</Descriptions.Item>
+                          <Descriptions.Item label="进度">{progressLabel}</Descriptions.Item>
+                          <Descriptions.Item label="目标列">{targetColumn}</Descriptions.Item>
                           <Descriptions.Item label="模型文件" span={2}>
                             <Text ellipsis style={{ maxWidth: 400, fontSize: 12 }}>{ttask.model_path || '-'}</Text>
                           </Descriptions.Item>
@@ -401,7 +481,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                   <Table
                     size="small"
                     rowKey="id"
-                    pagination={{ pageSize: 10, size: 'small' }}
+                    pagination={{showTotal: total => `共 ${total} 条`, showSizeChanger: false,  pageSize: 10, size: 'small' }}
                     dataSource={siblings}
                     columns={[
                       { title: '#', dataIndex: 'trial_no', width: 50 },
@@ -414,7 +494,7 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                           const m = exp?.objective_metric
                           const v = m && r.metrics?.[m]
                           return <Tooltip title={JSON.stringify(r.metrics)}>
-                            <code style={{ color: '#2563eb' }}>{typeof v === 'number' ? v.toFixed(4) : '-'}</code>
+                            <code style={{ color: '#1a8dff' }}>{typeof v === 'number' ? v.toFixed(4) : '-'}</code>
                           </Tooltip>
                         } },
                     ]}
@@ -436,7 +516,6 @@ export default function RunInspector({ open, runId, onClose, defaultTab = 'overv
                 children: run ? (
                   <ShapView
                     runId={run.id}
-                    initialSummary={shap}
                     experimentId={run.experiment_id || exp?.id}
                     runStatus={run.status}
                   />

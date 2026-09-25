@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useMarkTabSaved } from '../navigation/TabContext'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   Button, Card, Divider, Form, Input, InputNumber, Select,
   Space, Switch, Tabs, Tooltip, Typography, message,
-} from 'antd';
+} from '../ui';
 import { QuestionCircleOutlined, RocketOutlined, SettingOutlined } from '@ant-design/icons';
 import { dataApi, dlApi } from '../services/api';
 
@@ -16,7 +17,7 @@ function ParamLabel({ displayName, description }) {
       {displayName}
       {description && (
         <Tooltip title={description}>
-          <QuestionCircleOutlined style={{ marginLeft: 4, color: '#999', fontSize: 12 }} />
+          <QuestionCircleOutlined style={{ marginLeft: 4, color: 'var(--text-muted)', fontSize: 12 }} />
         </Tooltip>
       )}
     </span>
@@ -110,6 +111,7 @@ function ParamGroup({ params = [], prefix, advancedMode }) {
 const DLConfig = () => {
   const [form] = Form.useForm();
   const navigate = useNavigate();
+  const markSaved = useMarkTabSaved();
 
   const [datasets, setDatasets] = useState([]);
   const [registry, setRegistry] = useState({ categories: [], models: [], optimizer_params: [], train_params: [] });
@@ -197,6 +199,7 @@ const DLConfig = () => {
         train_config: values.train_config || {},
       });
       message.success('深度学习训练任务已启动');
+      markSaved(form);
       navigate(`/dl/monitor?taskId=${task.id}`);
     } catch (err) {
       console.error('启动深度学习训练失败:', err);
@@ -305,7 +308,7 @@ const DLConfig = () => {
           </Form.Item>
 
           {selectedModelSpec && (
-            <Card size="small" style={{ marginBottom: 16, background: '#f9f9f9' }}>
+            <Card size="small" style={{ marginBottom: 16, background: 'var(--surface-1)' }}>
               <Text type="secondary">{selectedModelSpec.description}</Text>
             </Card>
           )}
@@ -389,7 +392,6 @@ const DLConfig = () => {
               htmlType="submit"
               icon={<RocketOutlined />}
               loading={submitting}
-              size="large"
             >
               启动训练
             </Button>

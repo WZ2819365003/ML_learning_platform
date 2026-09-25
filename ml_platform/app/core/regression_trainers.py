@@ -1,10 +1,12 @@
 """Regression trainers using KFold CV and regression metrics (MSE/RMSE/MAE/R²/MAPE)."""
 from typing import Any, Callable
 import numpy as np
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-from app.core.trainer import BaseTrainer
+from app.core.model_artifact import fit_tabular_artifact
+from app.core.trainer import BaseTrainer, _take_rows
+from app.core.validation_split import is_temporal_feature_frame
 
 MetricsCallback = Callable[[int, int, dict], None] | None
 
@@ -31,18 +33,37 @@ class RegressionMixin:
     ) -> dict:
         eval_metrics = eval_metrics or ["rmse", "mae", "r2"]
 
-        kf = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
-
-        X_full = np.vstack([X_train, X_val]) if X_val is not None and len(X_val) > 0 else X_train
-        y_full = np.concatenate([y_train, y_val]) if y_val is not None and len(y_val) > 0 else y_train
+        temporal_validation = is_temporal_feature_frame(X_train)
+        kf = (
+            TimeSeriesSplit(n_splits=cv_folds)
+            if temporal_validation else
+            KFold(n_splits=cv_folds, shuffle=True, random_state=42)
+        )
+        tabular_input = hasattr(X_train, "iloc")
+        base_model = self.model
 
         fold_results = []
-        for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_full)):
-            X_f_tr, X_f_val = X_full[train_idx], X_full[val_idx]
-            y_f_tr, y_f_val = y_full[train_idx], y_full[val_idx]
+        # The last fold's out-of-sample pairs. Under selection the sealed
+        # hold-out is withheld (X_val is None), so these are the only
+        # predictions the model made on rows it never trained on — and with
+        # TimeSeriesSplit the last fold is the most recent contiguous window.
+        last_fold_pairs = None
+        for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_train)):
+            X_f_tr, X_f_val = _take_rows(X_train, train_idx), _take_rows(X_train, val_idx)
+            y_f_tr, y_f_val = _take_rows(y_train, train_idx), _take_rows(y_train, val_idx)
 
-            self.model.fit(X_f_tr, y_f_tr)
-            y_pred = self.model.predict(X_f_val)
+            fold_model = (
+                fit_tabular_artifact(
+                    base_model,
+                    X_f_tr,
+                    y_f_tr,
+                    task_kind="regression",
+                )
+                if tabular_input
+                else self.model.fit(X_f_tr, y_f_tr)
+            )
+            y_pred = fold_model.predict(X_f_val)
+            last_fold_pairs = (y_f_val, y_pred)
 
             fold_metrics = self._compute_regression_metrics(y_f_val, y_pred, eval_metrics)
             fold_metrics["fold"] = fold_idx + 1
@@ -52,10 +73,19 @@ class RegressionMixin:
                 callback(fold_idx + 1, cv_folds, fold_metrics)
 
         # Final fit on training split only
-        self.model.fit(X_train, y_train)
+        if tabular_input:
+            self.model = fit_tabular_artifact(
+                base_model,
+                X_train,
+                y_train,
+                task_kind="regression",
+            )
+        else:
+            self.model.fit(X_train, y_train)
 
         # Final eval on validation set
         final_metrics = {}
+        y_val_pred = None
         if X_val is not None and len(X_val) > 0:
             y_val_pred = self.model.predict(X_val)
             final_metrics = self._compute_regression_metrics(y_val, y_val_pred, eval_metrics)
@@ -66,11 +96,34 @@ class RegressionMixin:
         for key in metric_keys:
             values = [fr[key] for fr in fold_results if fr[key] is not None]
             if values:
-                avg_metrics[f"cv_avg_{key}"] = round(float(np.mean(values)), 4)
-                avg_metrics[f"cv_std_{key}"] = round(float(np.std(values)), 4)
+                mean_value = round(float(np.mean(values)), 4)
+                std_value = round(float(np.std(values)), 4)
+                avg_metrics[f"cv_avg_{key}"] = mean_value
+                avg_metrics[f"cv_std_{key}"] = std_value
+                avg_metrics[f"selection_cv_mean_{key}"] = mean_value
+                avg_metrics[f"selection_cv_std_{key}"] = std_value
 
+        final_metrics.update({
+            f"final_test_{key}": value for key, value in final_metrics.items()
+        })
         final_metrics.update(avg_metrics)
         final_metrics["cv_folds"] = fold_results
+        final_metrics["validation_strategy"] = (
+            "time_series_expanding" if temporal_validation else "shuffled_kfold"
+        )
+        # Attached after the final_test_ mirror above, so it is not duplicated
+        # under a final_test_val_scatter key.
+        scatter = _validation_scatter(y_val, y_val_pred)
+        source = "holdout"
+        if scatter is None and last_fold_pairs is not None:
+            # No hold-out was offered (selection keeps the sealed set sealed),
+            # so the chart draws the last cross-validation fold instead. The
+            # source is recorded so the report can say which it is showing.
+            scatter = _validation_scatter(*last_fold_pairs)
+            source = "cv_last_fold"
+        if scatter is not None:
+            final_metrics["val_scatter"] = scatter
+            final_metrics["val_scatter_source"] = source
         return final_metrics
 
     @staticmethod
@@ -98,6 +151,36 @@ class RegressionMixin:
             except Exception:
                 metrics[name] = None
         return metrics
+
+
+_SCATTER_POINTS = 500
+
+
+def _validation_scatter(y_val, y_pred) -> dict[str, Any] | None:
+    """The tail of the validation split, actual next to predicted.
+
+    The deep-learning trainer has kept this window since the predicted-vs-actual
+    chart was added; the tree models computed the same predictions and threw
+    them away, so their sub-reports had no such chart. A contiguous trailing
+    window is kept rather than a random sample so the pairs can be drawn in
+    order as well as as a scatter.
+    """
+    if y_pred is None or y_val is None:
+        return None
+    try:
+        actual = np.asarray(y_val, dtype=float).ravel()
+        predicted = np.asarray(y_pred, dtype=float).ravel()
+    except (TypeError, ValueError):
+        return None
+    n = min(len(actual), len(predicted))
+    if n == 0:
+        return None
+    start = n - min(n, _SCATTER_POINTS)
+    return {
+        "actual": [round(float(v), 6) for v in actual[start:n]],
+        "predicted": [round(float(v), 6) for v in predicted[start:n]],
+        "ordered": True,
+    }
 
 
 # ---------------------------------------------------------------------------

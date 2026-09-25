@@ -8,7 +8,7 @@
  * Two summary rows (macro avg / weighted avg) are pinned at the bottom
  * with a divider; the header shows an accuracy Statistic.
  */
-import { Card, Empty, Space, Statistic, Table, Typography } from 'antd'
+import { Card, Empty, Space, Statistic, Table, Typography } from '../../ui'
 
 const { Text } = Typography
 

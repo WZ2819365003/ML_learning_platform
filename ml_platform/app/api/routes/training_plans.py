@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import current_username_from_authorization, owner_scope_username
 from app.models.database import get_db
 from app.services import training_plan_service
 
@@ -29,9 +30,14 @@ async def list_plans(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     return await training_plan_service.list_plans(
-        db, task_type=task_type, page=page, page_size=page_size
+        db,
+        task_type=task_type,
+        page=page,
+        page_size=page_size,
+        owner_username=owner_scope_username(username),
     )
 
 
@@ -39,16 +45,26 @@ async def list_plans(
 async def create_plan(
     payload: dict[str, Any],
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await training_plan_service.create_plan(db, payload)
+    return await training_plan_service.create_plan(
+        db,
+        payload,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.get("/{plan_id}", summary="Get one training plan")
 async def get_plan(
     plan_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await training_plan_service.get_plan(db, plan_id)
+    return await training_plan_service.get_plan(
+        db,
+        plan_id,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.patch("/{plan_id}", summary="Update a training plan (partial)")
@@ -56,16 +72,27 @@ async def update_plan(
     plan_id: str,
     payload: dict[str, Any],
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await training_plan_service.update_plan(db, plan_id, payload)
+    return await training_plan_service.update_plan(
+        db,
+        plan_id,
+        payload,
+        owner_username=owner_scope_username(username),
+    )
 
 
 @router.delete("/{plan_id}", summary="Delete a training plan")
 async def delete_plan(
     plan_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    await training_plan_service.delete_plan(db, plan_id)
+    await training_plan_service.delete_plan(
+        db,
+        plan_id,
+        owner_username=owner_scope_username(username),
+    )
     return {"deleted": True, "id": plan_id}
 
 
@@ -73,5 +100,10 @@ async def delete_plan(
 async def mark_used(
     plan_id: str,
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
-    return await training_plan_service.mark_used(db, plan_id)
+    return await training_plan_service.mark_used(
+        db,
+        plan_id,
+        owner_username=owner_scope_username(username),
+    )

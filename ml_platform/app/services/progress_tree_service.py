@@ -136,11 +136,18 @@ def _avg(values: Iterable[float]) -> float:
 # Public entrypoint
 # ---------------------------------------------------------------------------
 
-async def get_progress_tree(db: AsyncSession, modeling_task_id: str) -> dict[str, Any]:
+async def get_progress_tree(
+    db: AsyncSession,
+    modeling_task_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
     """Build the {modeling_task, experiments:[{runs:[…]}]} tree."""
     # 1. Modeling task itself
+    mt_stmt = select(ModelingTask).where(ModelingTask.id == modeling_task_id)
+    if owner_username:
+        mt_stmt = mt_stmt.where(ModelingTask.owner_username == owner_username)
     mt_row = await db.execute(
-        select(ModelingTask).where(ModelingTask.id == modeling_task_id)
+        mt_stmt
     )
     mt = mt_row.scalar_one_or_none()
     if mt is None:

@@ -16,10 +16,20 @@ from sklearn.model_selection import train_test_split
 from app.config import get_settings
 from app.core.trainer import detect_task_type, get_trainer, list_available_models
 from app.core.logger import TrainingLogger
-from app.models.database import AsyncSession, Dataset, TrainingTask, async_session_factory
-from app.services.prediction_service import load_dataframe, prepare_training_frame
+from app.core.validation_split import (
+    chronological_train_test_split,
+    is_temporal_feature_frame,
+)
+from app.models.database import (
+    AsyncSession,
+    Dataset,
+    ExperimentRun,
+    TrainingTask,
+    async_session_factory,
+)
+from app.services.prediction_service import load_dataframe, prepare_raw_training_frame
 from app.utils.storage_paths import to_portable_storage_path
-from app.services.object_storage import upload_training_artifacts
+from app.services.object_storage import restore_dataset_file, upload_training_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +80,9 @@ def _make_platform_progress_callback(
     return _callback
 
 def _prepare_data(file_path: str, target_column: str, test_size: float, is_regression: bool = False):
-    """Load data, encode labels, split into train/val sets."""
+    """Load data and split raw rows before any fitted transformation."""
     df = load_dataframe(file_path)
-    X, y, _, _ = prepare_training_frame(df, target_column)
+    X, y = prepare_raw_training_frame(df, target_column)
 
     # Regression targets are continuous — stratify is not applicable
     stratify = None
@@ -89,12 +99,44 @@ def _prepare_data(file_path: str, target_column: str, test_size: float, is_regre
                 f"分类目标列 {target_column!r} 的最小类别样本数为 {min_class_count}，"
                 "无法进行分层切分；请不要选择 ID/序号列，改选真实标签列。"
             )
-        stratify = y.values
-    X_train, X_val, y_train, y_val = train_test_split(
-        X.values, y.values, test_size=test_size, random_state=42, stratify=stratify
+        stratify = y
+    if is_regression and is_temporal_feature_frame(X):
+        X_train, X_val, y_train, y_val = chronological_train_test_split(
+            X, y, test_size,
+        )
+    else:
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=stratify
+        )
+
+    return (
+        X_train.reset_index(drop=True),
+        X_val.reset_index(drop=True),
+        y_train.reset_index(drop=True),
+        y_val.reset_index(drop=True),
     )
 
-    return X_train, X_val, y_train, y_val
+
+def _trainer_validation_inputs(evaluation_mode: str, X_val, y_val):
+    if evaluation_mode == "selection":
+        return None, None
+    return X_val, y_val
+
+
+async def _resolve_evaluation_mode(
+    db: AsyncSession,
+    platform_task_id: str | None,
+) -> str:
+    if not platform_task_id:
+        return "standard"
+    run = (
+        await db.execute(
+            select(ExperimentRun).where(ExperimentRun.task_id == platform_task_id)
+        )
+    ).scalar_one_or_none()
+    if run is not None and (run.search_meta or {}).get("evaluation_mode") == "selection":
+        return "selection"
+    return "standard"
 
 
 def _apply_class_weight(
@@ -104,6 +146,8 @@ def _apply_class_weight(
     y_train,
 ) -> dict:
     """Translate the top-level class_weight field into model-specific hyperparameter keys."""
+    if not class_weight:
+        class_weight = hyperparameters.get("class_weight")
     if not class_weight:
         return hyperparameters
 
@@ -153,6 +197,11 @@ def _try_init_mlflow():
         return None
 
 
+def _log_model_artifact(mlflow, model_file: Path) -> None:
+    """Store the self-contained joblib without assuming an sklearn model shape."""
+    mlflow.log_artifact(str(model_file), artifact_path="model")
+
+
 def _run_training_sync(
     task_id: str,
     file_path: str,
@@ -165,6 +214,7 @@ def _run_training_sync(
     model_save_dir: str,
     class_weight: str | None = None,
     progress_callback: Callable[[int, int, dict], None] | None = None,
+    evaluation_mode: str = "standard",
 ) -> dict:
     """Synchronous training function to run in thread pool."""
     # Initialize per-task logger
@@ -175,7 +225,7 @@ def _run_training_sync(
         return _run_training_sync_inner(
             tl, task_id, file_path, target_column, model_type,
             hyperparameters, test_size, eval_metrics, cv_folds,
-            model_save_dir, class_weight, progress_callback,
+            model_save_dir, class_weight, progress_callback, evaluation_mode,
         )
     except Exception as exc:
         # Record the failure explicitly so the Inspector can show WHY it
@@ -209,6 +259,7 @@ def _run_training_sync_inner(
     model_save_dir: str,
     class_weight: str | None,
     progress_callback: Callable[[int, int, dict], None] | None,
+    evaluation_mode: str = "standard",
 ) -> dict:
     # Try MLflow integration (optional)
     mlflow = _try_init_mlflow()
@@ -218,9 +269,15 @@ def _run_training_sync_inner(
     tl.log("INFO", "Loading and preparing data...")
     is_regression = detect_task_type(model_type) == "regression"
     X_train, X_val, y_train, y_val = _prepare_data(file_path, target_column, test_size, is_regression)
+    split_strategy = (
+        "chronological_holdout"
+        if is_regression and is_temporal_feature_frame(X_train)
+        else "random_holdout"
+    )
     tl.log("INFO", "Data prepared",
            train_samples=len(X_train), val_samples=len(X_val),
-           features=X_train.shape[1], target=target_column)
+           features=X_train.shape[1], target=target_column,
+           evaluation_mode=evaluation_mode, validation_strategy=split_strategy)
 
     # Translate class_weight into model-specific hyperparameter keys
     effective_hp = _apply_class_weight(hyperparameters, model_type, class_weight, y_train)
@@ -262,8 +319,11 @@ def _run_training_sync_inner(
 
     # Train
     tl.log("INFO", f"Starting training with {cv_folds}-fold cross validation")
+    trainer_X_val, trainer_y_val = _trainer_validation_inputs(
+        evaluation_mode, X_val, y_val
+    )
     result_metrics = trainer.train(
-        X_train, y_train, X_val, y_val,
+        X_train, y_train, trainer_X_val, trainer_y_val,
         eval_metrics=eval_metrics,
         cv_folds=cv_folds,
         callback=on_fold_complete,
@@ -298,7 +358,7 @@ def _run_training_sync_inner(
             mlflow.log_metrics({f"final_{k}": v for k, v in final_log.items() if isinstance(v, (int, float))})
             mlflow.log_artifact(str(tl.log_file))
             mlflow.log_artifact(str(tl.metrics_file))
-            mlflow.sklearn.log_model(trainer.model, "model")
+            _log_model_artifact(mlflow, model_file)
             mlflow.end_run()
             tl.log("INFO", "MLflow run completed")
         except Exception as e:
@@ -318,7 +378,7 @@ async def create_training_task_record(db: AsyncSession, candidate: dict) -> Trai
     """
     Create a TrainingTask DB row from a candidate dict WITHOUT launching execution.
 
-    Used by experiment_service.submit_automl_experiment to pre-create domain tasks
+    Used by the V3 batch pipeline to pre-create domain tasks
     before dispatching them to Celery via PlatformTask.
 
     candidate keys (all optional except dataset_id, model_type, target_column):
@@ -332,6 +392,7 @@ async def create_training_task_record(db: AsyncSession, candidate: dict) -> Trai
     dataset = result.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id!r} not found")
+    owner_username = candidate.get("owner_username") or dataset.owner_username
 
     available = list_available_models()
     model_type = candidate["model_type"]
@@ -344,11 +405,17 @@ async def create_training_task_record(db: AsyncSession, candidate: dict) -> Trai
     cv_config = candidate.get("cross_validation") or {}
     cv_folds = int(candidate.get("cv_folds") or cv_config.get("folds") or 5)
     short_id = str(_uuid_mod.uuid4())[:8]
+    hyperparameters = dict(candidate.get("hyperparameters", {}))
+    if candidate.get("class_weight"):
+        # Scheduler executors reconstruct their input solely from this
+        # committed domain row, so persist the top-level option with it.
+        hyperparameters["class_weight"] = candidate["class_weight"]
     task = TrainingTask(
+        owner_username=owner_username,
         dataset_id=dataset_id,
         model_type=model_type,
         name=f"{model_type}_{short_id}",
-        hyperparameters=candidate.get("hyperparameters", {}),
+        hyperparameters=hyperparameters,
         target_column=candidate["target_column"],
         test_size=candidate.get("test_size", 0.2),
         cv_folds=cv_folds,
@@ -385,13 +452,17 @@ async def _run_training_sync_by_id(
         dataset = ds_result.scalar_one_or_none()
         if dataset is None:
             raise ValueError(f"Dataset {task.dataset_id!r} not found for TrainingTask {training_task_id!r}")
-        file_path     = dataset.file_path
+        restored_dataset = restore_dataset_file(dataset.id, dataset.file_path)
+        if restored_dataset is None:
+            raise ValueError(f"Dataset artifact {dataset.id!r} not found for TrainingTask {training_task_id!r}")
+        file_path     = str(restored_dataset)
         target_column = task.target_column
         model_type    = task.model_type
         hyperparams   = task.hyperparameters or {}
         test_size     = task.test_size or 0.2
         eval_metrics  = task.eval_metrics or ["accuracy"]
         cv_folds      = int(getattr(task, "cv_folds", None) or 5)
+        evaluation_mode = await _resolve_evaluation_mode(db, platform_task_id)
 
     # Mark domain task RUNNING
     async with async_session_factory() as db:
@@ -410,9 +481,14 @@ async def _run_training_sync_by_id(
             _run_training_sync,
             training_task_id, file_path, target_column, model_type,
             hyperparams, test_size, eval_metrics, cv_folds,
-            str(settings.storage_models), None, progress_callback,
+            str(settings.storage_models), None, progress_callback, evaluation_mode,
         )
-        metrics = {k: v for k, v in training_result["result_metrics"].items() if k != "cv_folds"}
+        # cv_folds (per-fold scores) used to be dropped here. It is what turns
+        # "mean ± std" into a picture of *where* the spread comes from — one bad
+        # fold reads very differently from uniform noise — and it is tiny: five
+        # folds times a handful of numbers. The log line still strips it, since
+        # a log entry is not the place for a nested list.
+        metrics = dict(training_result["result_metrics"])
 
         async with async_session_factory() as db:
             result = await db.execute(select(TrainingTask).where(TrainingTask.id == training_task_id))
@@ -439,16 +515,21 @@ async def _run_training_sync_by_id(
         raise
 
 
-async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
+async def start_training(
+    request_data: dict,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> TrainingTask:
     """Create a training task, register it in the unified platform, and launch it."""
-    settings = get_settings()
-
     # Validate dataset exists
     dataset_id = request_data["dataset_id"]
     result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
     dataset = result.scalar_one_or_none()
-    if dataset is None:
+    if dataset is None or (owner_username and dataset.owner_username != owner_username):
         raise HTTPException(status_code=404, detail="Dataset not found")
+    restored_dataset = restore_dataset_file(dataset.id, dataset.file_path)
+    if restored_dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset artifact not found")
 
     # Validate model type
     available = list_available_models()
@@ -463,11 +544,15 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     cv_folds = cv_config.get("folds", 5) if cv_config.get("enabled", True) else 3
     import uuid as _uuid_mod
     short_id = str(_uuid_mod.uuid4())[:8]
+    hyperparameters = dict(request_data.get("hyperparameters", {}))
+    if request_data.get("class_weight"):
+        hyperparameters["class_weight"] = request_data["class_weight"]
     task = TrainingTask(
+        owner_username=owner_username or dataset.owner_username,
         dataset_id=dataset_id,
         model_type=request_data["model_type"],
         name=f"{request_data['model_type']}_{short_id}",
-        hyperparameters=request_data.get("hyperparameters", {}),
+        hyperparameters=hyperparameters,
         target_column=request_data["target_column"],
         test_size=request_data.get("test_size", 0.2),
         cv_folds=cv_folds,
@@ -479,8 +564,6 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     await db.refresh(task)
 
     task_id = task.id
-    file_path = dataset.file_path
-
     # ── Write-back contract: register in unified platform task table ──────────
     from app.scheduler.task_runner import register_domain_task
     platform_task = await register_domain_task(
@@ -492,144 +575,46 @@ async def start_training(request_data: dict, db: AsyncSession) -> TrainingTask:
     # commit both records together
     await db.commit()
 
-    # Launch asyncio background training (dev mode — no Celery worker required)
-    bg_task = asyncio.create_task(_execute_training(
-        task_id=task_id,
-        platform_task_id=platform_task_id,
-        file_path=file_path,
-        target_column=request_data["target_column"],
-        model_type=request_data["model_type"],
-        hyperparameters=request_data.get("hyperparameters", {}),
-        test_size=request_data.get("test_size", 0.2),
-        eval_metrics=request_data.get("eval_metrics", ["accuracy"]),
-        cv_folds=cv_folds,
-        model_save_dir=str(settings.storage_models),
-        class_weight=request_data.get("class_weight"),
-    ))
-    _running_tasks[task_id] = bg_task
+    from app.scheduler.scheduler import get_scheduler
+
+    scheduled = await get_scheduler("train").submit(platform_task_id)
+    if isinstance(scheduled, asyncio.Task):
+        _running_tasks[task_id] = scheduled
+        scheduled.add_done_callback(
+            lambda _done, domain_id=task_id: _running_tasks.pop(domain_id, None)
+        )
 
     return task
 
 
-async def _execute_training(
+async def get_training_status(
     task_id: str,
-    file_path: str,
-    target_column: str,
-    model_type: str,
-    hyperparameters: dict,
-    test_size: float,
-    eval_metrics: list[str],
-    cv_folds: int,
-    model_save_dir: str,
-    class_weight: str | None = None,
-    platform_task_id: str | None = None,
-):
-    """Background coroutine that runs training in a thread and updates DB.
-
-    Write-back contract: whenever domain task status changes, the corresponding
-    PlatformTask (if platform_task_id is provided) is updated in lock-step.
-    """
-    from app.scheduler.task_runner import update_platform_task_status
-
-    # ── Mark RUNNING ──────────────────────────────────────────────────────────
-    async with async_session_factory() as db:
-        result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
-        task = result.scalar_one_or_none()
-        if task:
-            task.status = "RUNNING"
-            task.started_at = datetime.now(timezone.utc)
-            await db.commit()
-
-    if platform_task_id:
-        await update_platform_task_status(platform_task_id, "RUNNING")
-
-    try:
-        # Run training in thread pool
-        loop = asyncio.get_event_loop()
-        progress_callback = _make_platform_progress_callback(platform_task_id, loop)
-        training_result = await loop.run_in_executor(
-            _executor,
-            _run_training_sync,
-            task_id, file_path, target_column, model_type,
-            hyperparameters, test_size, eval_metrics, cv_folds, model_save_dir,
-            class_weight, progress_callback,
-        )
-
-        # Remove cv_folds detail from stored metrics to keep it clean
-        stored_metrics = {
-            k: v for k, v in training_result["result_metrics"].items() if k != "cv_folds"
-        }
-
-        # ── Mark SUCCESS (domain) ─────────────────────────────────────────────
-        async with async_session_factory() as db:
-            result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
-            task = result.scalar_one_or_none()
-            if task:
-                task.status = "SUCCESS"
-                task.progress = 100.0
-                task.result_metrics = stored_metrics
-                task.model_path = training_result["model_path"]
-                task.finished_at = datetime.now(timezone.utc)
-                await db.commit()
-
-        # ── Write-back: mark PlatformTask SUCCESS with metrics snapshot ───────
-        if platform_task_id:
-            await update_platform_task_status(
-                platform_task_id, "SUCCESS",
-                metrics=stored_metrics,
-            )
-
-        logger.info("Training task %s completed successfully", task_id)
-
-    except Exception as e:
-        logger.error("Training task %s failed: %s", task_id, str(e))
-        # Log error to task-specific log file
-        try:
-            tl = TrainingLogger.__new__(TrainingLogger)
-            settings = get_settings()
-            tl.task_id = task_id
-            tl.model_type = model_type
-            tl.log_dir = settings.storage_logs
-            tl.log_file = tl.log_dir / f"{task_id}.log"
-            tl.metrics_file = tl.log_dir / f"{task_id}_metrics.json"
-            tl._metrics_data = {"task_id": task_id, "model_type": model_type, "steps": []}
-            tl.log("ERROR", f"Training failed: {str(e)}")
-            tl.log_status("FAILED", str(e))
-        except Exception:
-            pass
-
-        # ── Mark FAILED (domain) ──────────────────────────────────────────────
-        async with async_session_factory() as db:
-            result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
-            task = result.scalar_one_or_none()
-            if task:
-                task.status = "FAILED"
-                task.error_message = str(e)
-                task.finished_at = datetime.now(timezone.utc)
-                await db.commit()
-
-        # ── Write-back: mark PlatformTask FAILED ─────────────────────────────
-        if platform_task_id:
-            await update_platform_task_status(platform_task_id, "FAILED", error=str(e))
-
-    finally:
-        _running_tasks.pop(task_id, None)
-
-
-async def get_training_status(task_id: str, db: AsyncSession) -> TrainingTask:
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> TrainingTask:
     """Retrieve the current state of a training task."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
     return task
 
 
-async def stop_training(task_id: str, db: AsyncSession) -> TrainingTask:
+async def stop_training(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> TrainingTask:
     """Cancel a pending or running training task."""
     from app.models.database import PlatformTask
 
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
@@ -664,6 +649,7 @@ async def list_training_tasks(
     page: int = 1,
     page_size: int = 20,
     status_filter: str | None = None,
+    owner_username: str | None = None,
 ) -> dict:
     """Return a paginated list of training tasks."""
     stmt = select(TrainingTask)
@@ -672,6 +658,9 @@ async def list_training_tasks(
     if status_filter:
         stmt = stmt.where(TrainingTask.status == status_filter)
         count_stmt = count_stmt.where(TrainingTask.status == status_filter)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+        count_stmt = count_stmt.where(TrainingTask.owner_username == owner_username)
 
     count_result = await db.execute(count_stmt)
     total = count_result.scalar_one()
@@ -689,9 +678,17 @@ async def list_training_tasks(
     }
 
 
-async def rename_training_task(task_id: str, name: str, db: AsyncSession) -> TrainingTask:
+async def rename_training_task(
+    task_id: str,
+    name: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> TrainingTask:
     """Rename a training task."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
@@ -700,9 +697,16 @@ async def rename_training_task(task_id: str, name: str, db: AsyncSession) -> Tra
     return task
 
 
-async def delete_training_task(task_id: str, db: AsyncSession) -> None:
+async def delete_training_task(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> None:
     """Delete a training task (only if not RUNNING)."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")
@@ -713,10 +717,17 @@ async def delete_training_task(task_id: str, db: AsyncSession) -> None:
 
 
 async def update_training_task_meta(
-    task_id: str, notes: str | None, tags: list[str] | None, db: AsyncSession
+    task_id: str,
+    notes: str | None,
+    tags: list[str] | None,
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> TrainingTask:
     """Update notes and/or tags of a training task."""
-    result = await db.execute(select(TrainingTask).where(TrainingTask.id == task_id))
+    stmt = select(TrainingTask).where(TrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(TrainingTask.owner_username == owner_username)
+    result = await db.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Training task not found")

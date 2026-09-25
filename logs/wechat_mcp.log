@@ -1,0 +1,60 @@
+2026-08-28 10:00:57,721 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-28 10:00:58,022 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-28 10:00:58,024 [INFO] wechat_mcp - Transport: stdio
+2026-08-28 10:00:58,025 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-28 10:01:11,527 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-28 10:01:11,649 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-28 10:01:11,651 [INFO] wechat_mcp - Transport: stdio
+2026-08-28 10:01:11,651 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-28 10:01:12,450 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-28 10:01:12,577 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-28 10:01:12,579 [INFO] wechat_mcp - Transport: stdio
+2026-08-28 10:01:12,579 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-28 15:47:40,951 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-28 15:47:41,098 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-28 15:47:41,100 [INFO] wechat_mcp - Transport: stdio
+2026-08-28 15:47:41,101 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-28 22:51:03,148 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-28 22:51:03,782 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-28 22:51:03,784 [INFO] wechat_mcp - Transport: stdio
+2026-08-28 22:51:03,784 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-29 22:10:01,897 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-29 22:10:02,438 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-29 22:10:02,441 [INFO] wechat_mcp - Transport: stdio
+2026-08-29 22:10:02,442 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-31 20:53:02,574 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-31 20:53:03,028 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-31 20:53:03,029 [INFO] wechat_mcp - Transport: stdio
+2026-08-31 20:53:03,029 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-31 20:53:22,056 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-31 20:53:22,183 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-31 20:53:22,185 [INFO] wechat_mcp - Transport: stdio
+2026-08-31 20:53:22,185 [INFO] wechat_mcp - MCP Debug mode: False
+2026-08-31 20:56:14,215 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-08-31 20:56:14,508 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-08-31 20:56:14,509 [INFO] wechat_mcp - Transport: stdio
+2026-08-31 20:56:14,509 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-02 09:42:59,010 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-02 09:42:59,486 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-02 09:42:59,487 [INFO] wechat_mcp - Transport: stdio
+2026-09-02 09:42:59,487 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-04 09:35:44,039 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-04 09:35:44,305 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-04 09:35:44,306 [INFO] wechat_mcp - Transport: stdio
+2026-09-04 09:35:44,307 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-04 09:36:42,222 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-04 09:36:42,361 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-04 09:36:42,363 [INFO] wechat_mcp - Transport: stdio
+2026-09-04 09:36:42,363 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-04 09:50:14,212 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-04 09:50:14,475 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-04 09:50:14,476 [INFO] wechat_mcp - Transport: stdio
+2026-09-04 09:50:14,476 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-04 15:10:12,750 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-04 15:10:13,113 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-04 15:10:13,114 [INFO] wechat_mcp - Transport: stdio
+2026-09-04 15:10:13,115 [INFO] wechat_mcp - MCP Debug mode: False
+2026-09-05 12:02:24,634 [DEBUG] wechat_mcp - Logging initialized, log file at /Users/petersmith/Public/github_repo/ML_learning_platform/logs/wechat_mcp.log
+2026-09-05 12:02:25,221 [INFO] wechat_mcp - Starting WeChat Helper MCP Server
+2026-09-05 12:02:25,222 [INFO] wechat_mcp - Transport: stdio
+2026-09-05 12:02:25,222 [INFO] wechat_mcp - MCP Debug mode: False

@@ -8,8 +8,8 @@
  *   onChange        - (modelId) => void
  *   taskFilter      - 'classification' | 'regression' | null (null = show all)
  */
-import React, { useMemo, useState } from 'react';
-import { Select, Tabs, Tag, Tooltip } from 'antd';
+import React, { useMemo, useState } from 'react'
+import { Select, Tabs, Tag, Tooltip } from '../ui';
 
 const { Option } = Select;
 
@@ -72,7 +72,7 @@ export default function ModelSelector({ models = [], categories = [], value, onC
               </Tooltip>
               <span>
                 {m.task_types.map(t => (
-                  <Tag key={t} color={TASK_TAG[t]?.color} style={{ marginLeft: 4, fontSize: 11 }}>
+                  <Tag key={t} color={TASK_TAG[t]?.color} style={{ marginLeft: 4 }}>
                     {TASK_TAG[t]?.text ?? t}
                   </Tag>
                 ))}

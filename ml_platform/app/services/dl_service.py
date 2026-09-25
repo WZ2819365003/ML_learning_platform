@@ -1,8 +1,7 @@
 """Deep-learning training service.
 
 Orchestrates DLTrainingTask lifecycle:
-  start_dl_training  → create DB row, launch _execute_dl_training coroutine
-  _execute_dl_training → async: set RUNNING, submit sync work to ThreadPoolExecutor
+  start_dl_training  → create DB row, dispatch through the scheduler
   _run_dl_sync         → sync: actual PyTorch training; publishes epoch events via EventBus
   stop_dl_training    → cancel async task
   get_dl_status / list_dl_tasks → DB queries
@@ -10,6 +9,8 @@ Orchestrates DLTrainingTask lifecycle:
 from __future__ import annotations
 
 import asyncio
+import itertools
+from collections import defaultdict
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -22,8 +23,13 @@ from sklearn.model_selection import train_test_split
 from sqlalchemy import func, select
 
 from app.config import get_settings
-from app.core.dl_registry import get_dl_trainer
+from app.core.dl_registry import clamp_train_config, get_dl_trainer
 from app.core.logger import TrainingLogger, event_bus
+from app.core.model_artifact import fit_dl_preprocessing_artifact
+from app.core.validation_split import (
+    chronological_train_test_split,
+    is_temporal_feature_frame,
+)
 from app.models.database import (
     AsyncSession,
     Dataset,
@@ -33,9 +39,17 @@ from app.models.database import (
     DLTrainingTask,
     async_session_factory,
 )
-from app.services.prediction_service import load_dataframe, prepare_prediction_frame, prepare_training_frame
-from app.utils.storage_paths import resolve_runtime_path, to_portable_storage_path
-from app.services.object_storage import upload_training_artifacts
+from app.services.prediction_service import (
+    load_dataframe,
+    prepare_prediction_frame,
+    prepare_raw_training_frame,
+)
+from app.utils.storage_paths import to_portable_storage_path
+from app.services.object_storage import (
+    restore_dataset_file,
+    restore_model_bundle,
+    upload_training_artifacts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +60,24 @@ _running_tasks: dict[str, asyncio.Task] = {}
 # Task-type auto-detection
 # ---------------------------------------------------------------------------
 
-def _detect_task_type(y: np.ndarray, requested: str) -> str:
+def _detect_task_type(y, requested: str) -> str:
     if requested in ("classification", "regression"):
         return requested
-    # heuristic: ≤20 unique int-valued classes → classification
-    unique = np.unique(y)
-    if len(unique) <= 20 and np.issubdtype(y.dtype, np.integer):
+
+    series = pd.Series(y).dropna()
+    if series.empty:
+        raise ValueError("目标列没有可用于训练的非空值。")
+    if (
+        series.dtype == "object"
+        or series.dtype.name in {"category", "string", "bool", "boolean"}
+    ):
+        return "classification"
+
+    numeric = pd.to_numeric(series, errors="coerce")
+    if numeric.isna().any():
+        return "classification"
+    integer_like = np.allclose(numeric.to_numpy(), np.round(numeric.to_numpy()))
+    if series.nunique() <= 20 and integer_like:
         return "classification"
     return "regression"
 
@@ -60,28 +86,143 @@ def _detect_task_type(y: np.ndarray, requested: str) -> str:
 # Data preparation
 # ---------------------------------------------------------------------------
 
-def _prepare_dl_data(file_path: str, target_column: str, test_size: float, task_type: str):
+# Inner validation ratio used in selection mode — carved out of the OUTER
+# training portion so the sealed hold-out is never touched during selection.
+_SELECTION_INNER_VAL_RATIO = 0.2
+
+
+def _classification_stratify(y, resolved_task_type: str, target_column: str):
+    """Stratify labels for the OUTER split, with actionable validation errors."""
+    if resolved_task_type != "classification":
+        return None
+    counts = pd.Series(y).value_counts(dropna=True)
+    unique_count = int(counts.shape[0])
+    min_class_count = int(counts.min()) if unique_count else 0
+    if unique_count < 2:
+        raise ValueError(
+            f"分类目标列 {target_column!r} 只有 {unique_count} 个类别，至少需要 2 个类别。"
+        )
+    if min_class_count < 2:
+        raise ValueError(
+            f"分类目标列 {target_column!r} 的最小类别样本数为 {min_class_count}，"
+            "无法进行分层切分；请不要选择 ID/序号列，改选真实标签列。"
+        )
+    return y.values
+
+
+def _outer_split(file_path: str, target_column: str, test_size: float, task_type: str):
+    """The canonical OUTER split (seed 42) shared by training AND finalize.
+
+    final_evaluation_service replays this exact function to recover the sealed
+    hold-out, so split parity is guaranteed by construction — never inline a
+    second train_test_split with the same arguments elsewhere.
+    """
     df = load_dataframe(file_path)
-    X, y, _, _ = prepare_training_frame(df, target_column)
-    stratify = None
-    if task_type == "classification":
-        counts = pd.Series(y).value_counts(dropna=True)
-        unique_count = int(counts.shape[0])
-        min_class_count = int(counts.min()) if unique_count else 0
-        if unique_count < 2:
-            raise ValueError(
-                f"分类目标列 {target_column!r} 只有 {unique_count} 个类别，至少需要 2 个类别。"
-            )
-        if min_class_count < 2:
-            raise ValueError(
-                f"分类目标列 {target_column!r} 的最小类别样本数为 {min_class_count}，"
-                "无法进行分层切分；请不要选择 ID/序号列，改选真实标签列。"
-            )
-        stratify = y.values
-    X_train, X_val, y_train, y_val = train_test_split(
-        X.values, y.values, test_size=test_size, random_state=42, stratify=stratify
+    X, y = prepare_raw_training_frame(df, target_column)
+    resolved_task_type = _detect_task_type(y, task_type)
+    if resolved_task_type == "regression" and is_temporal_feature_frame(X):
+        raw_X_train, raw_X_val, raw_y_train, raw_y_val = chronological_train_test_split(
+            X, y, test_size,
+        )
+    else:
+        stratify = _classification_stratify(y, resolved_task_type, target_column)
+        raw_X_train, raw_X_val, raw_y_train, raw_y_val = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=stratify
+        )
+    return raw_X_train, raw_X_val, raw_y_train, raw_y_val, resolved_task_type
+
+
+def split_raw_holdout(file_path: str, target_column: str, test_size: float, task_type: str):
+    """Return (raw_X_holdout, raw_y_holdout, resolved_task_type) — the sealed
+    outer hold-out, untouched by selection-mode training."""
+    _, raw_X_val, _, raw_y_val, resolved = _outer_split(
+        file_path, target_column, test_size, task_type
     )
-    return X_train, X_val, y_train, y_val
+    return raw_X_val, raw_y_val, resolved
+
+
+def _prepare_dl_data(
+    file_path: str,
+    target_column: str,
+    test_size: float,
+    task_type: str,
+    evaluation_mode: str = "standard",
+):
+    """Split + transform for DL training.
+
+    standard  — legacy V2 behaviour: outer split (seed 42), per-epoch
+                validation AND final metrics on the outer val set.
+    selection — B1 semantics: the outer val set is the SEALED hold-out and is
+                discarded here; an inner split of the training portion serves
+                early stopping + selection metrics. final_evaluation_service
+                replays the same outer split at finalize time.
+    """
+    raw_X_train, raw_X_val, raw_y_train, raw_y_val, resolved_task_type = _outer_split(
+        file_path, target_column, test_size, task_type
+    )
+
+    if evaluation_mode == "selection":
+        # Seal the outer hold-out: replace (train, val) with an inner split of
+        # the training portion. Stratify when possible; tiny classes fall back
+        # to a plain split rather than failing the whole run.
+        inner_stratify = (
+            raw_y_train.values
+            if resolved_task_type == "classification"
+            and pd.Series(raw_y_train).value_counts(dropna=True).min() >= 2
+            else None
+        )
+        if resolved_task_type == "regression" and is_temporal_feature_frame(raw_X_train):
+            raw_X_train, raw_X_val, raw_y_train, raw_y_val = chronological_train_test_split(
+                raw_X_train, raw_y_train, _SELECTION_INNER_VAL_RATIO,
+            )
+        else:
+            raw_X_train, raw_X_val, raw_y_train, raw_y_val = train_test_split(
+                raw_X_train,
+                raw_y_train,
+                test_size=_SELECTION_INNER_VAL_RATIO,
+                random_state=42,
+                stratify=inner_stratify,
+            )
+
+    artifact = fit_dl_preprocessing_artifact(
+        raw_X_train,
+        raw_y_train,
+        task_kind=resolved_task_type,
+    )
+    return (
+        artifact.transform_features(raw_X_train),
+        artifact.transform_features(raw_X_val),
+        artifact.encode_target(raw_y_train),
+        artifact.encode_target(raw_y_val),
+        artifact,
+        resolved_task_type,
+    )
+
+
+def _prepare_dl_prediction_input(
+    metadata: dict,
+    training_df: pd.DataFrame | None,
+    rows: list[dict],
+    target_column: str,
+) -> tuple[np.ndarray, list[str]]:
+    artifact = metadata.get("preprocessing_artifact")
+    if artifact is not None:
+        values = artifact.transform_features(pd.DataFrame(rows))
+        return values.astype(np.float32), artifact.feature_names
+
+    if training_df is None:
+        raise ValueError("Legacy DL inference requires the original training dataset")
+    prediction_frame = prepare_prediction_frame(
+        training_df,
+        rows,
+        target_column,
+    )
+    values = (
+        prediction_frame.apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .to_numpy(dtype=np.float32)
+    )
+    return values, list(prediction_frame.columns)
 
 
 def _format_dl_log_number(value: float) -> str:
@@ -160,6 +301,11 @@ async def _store_dl_epoch_record(task_id: str, epoch: int, total_epochs: int, me
         await db.commit()
 
 
+# 每个 DL 任务一个单调计数器。DL 日志是逐条 INSERT 的，一个 epoch 内几条日志会
+# 落在同一个时间戳上，只按 created_at 排序读回来的顺序就是乱的。
+_dl_log_seq: dict[str, "itertools.count[int]"] = defaultdict(itertools.count)
+
+
 async def _store_dl_log_record(
     task_id: str,
     level: str,
@@ -173,6 +319,7 @@ async def _store_dl_log_record(
                 level=level,
                 message=message,
                 extra=extra or None,
+                seq=next(_dl_log_seq[task_id]),
             )
         )
         await db.commit()
@@ -194,12 +341,16 @@ def _run_dl_sync(
     model_save_dir: str,
     loop: asyncio.AbstractEventLoop,
     platform_task_id: str | None = None,
+    evaluation_mode: str = "standard",
 ) -> dict:
     epochs    = int(train_config.get("epochs", 50))
     test_size = float(train_config.get("test_size", 0.2))
     best_logged_val_loss: float | None = None
 
-    task_logger = TrainingLogger(task_id, model_type=model_type)
+    # persist_to_db=False: training_logs.task_id is a FK onto training_tasks,
+    # and a DL task lives in dl_training_tasks — the insert could never succeed.
+    # Each line is persisted by _store_dl_log_record below instead.
+    task_logger = TrainingLogger(task_id, model_type=model_type, persist_to_db=False)
 
     def emit_log(level: str, message: str, **extra) -> None:
         task_logger.log(level, message, **extra)
@@ -217,21 +368,15 @@ def _run_dl_sync(
 
     logger.info("[DL %s] Starting %s | epochs=%d", task_id, model_type, epochs)
 
-    X_train, X_val, y_train, y_val = _prepare_dl_data(
-        file_path, target_column, test_size, task_type)
+    X_train, X_val, y_train, y_val, preprocessing_artifact, task_type = _prepare_dl_data(
+        file_path, target_column, test_size, task_type, evaluation_mode)
 
-    # Infer feature column names (best-effort from DataFrame)
-    try:
-        df = load_dataframe(file_path)
-        feature_columns = [c for c in df.columns if c != target_column]
-    except Exception:
-        feature_columns = []
-
-    # Resolve task_type from data if "auto"
-    task_type = _detect_task_type(y_train, task_type)
+    feature_columns = preprocessing_artifact.feature_names
     emit_log(
         "INFO",
-        f"任务类型确认: {task_type}",
+        f"任务类型确认: {task_type}"
+        + ("（selection 模式：外层 hold-out 已封存，验证用内层切分）"
+           if evaluation_mode == "selection" else ""),
         train_samples=str(len(X_train)),
         val_samples=str(len(X_val)),
         feature_count=str(X_train.shape[1]),
@@ -297,6 +442,11 @@ def _run_dl_sync(
         task_type=task_type,
         epoch_callback=epoch_callback,
     )
+    result["validation_strategy"] = (
+        "chronological_holdout"
+        if task_type == "regression" and is_temporal_feature_frame(preprocessing_artifact.feature_names)
+        else "random_holdout"
+    )
 
     # Save model (with arch metadata for future inference)
     save_dir = Path(model_save_dir)
@@ -308,6 +458,7 @@ def _run_dl_sync(
         input_dim=X_train.shape[1],
         task_type=task_type,
         feature_columns=feature_columns,
+        preprocessing_artifact=preprocessing_artifact,
     )
     model_path = to_portable_storage_path(model_file)
     logger.info("[DL %s] Saved → %s", task_id, model_path)
@@ -319,15 +470,23 @@ def _run_dl_sync(
     # Upload artifacts to object storage (MinIO)
     settings = get_settings()
     scaler_file = Path(str(model_file) + ".scaler.joblib")
+    preprocessing_file = Path(str(model_file) + ".preprocessor.joblib")
     log_file = settings.storage_logs / f"{task_id}.log"
     metrics_file = settings.storage_logs / f"{task_id}_metrics.json"
     upload_training_artifacts(
         task_id=task_id,
-        model_files=[f for f in [model_file, scaler_file] if f.exists()],
+        model_files=[
+            f for f in [model_file, scaler_file, preprocessing_file] if f.exists()
+        ],
         log_files=[f for f in [log_file, metrics_file] if f.exists()],
     )
 
-    return {"result_metrics": result, "model_path": model_path, "task_type": task_type}
+    return {
+        "result_metrics": result,
+        "model_path": model_path,
+        "task_type": task_type,
+        "evaluation_mode": evaluation_mode,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -357,14 +516,21 @@ async def _run_dl_training_by_id(
         dataset = dataset_result.scalar_one_or_none()
         if dataset is None:
             raise ValueError(f"Dataset {task.dataset_id!r} not found for DLTask {dl_task_id!r}")
-
-        file_path     = resolve_runtime_path(dataset.file_path)
+        file_path = restore_dataset_file(dataset.id, dataset.file_path)
+        if file_path is None:
+            raise ValueError(f"Dataset artifact {dataset.id!r} not found for DLTask {dl_task_id!r}")
         target_column = task.target_column
         model_type    = task.model_type
         task_type_req = task.task_type or "auto"
         arch_config   = task.arch_config or {}
         opt_config    = task.opt_config or {}
         train_config  = task.train_config or {}
+
+        # B1: V3 runs dispatched with evaluation_mode=selection seal the outer
+        # hold-out (same resolution as classic ML in training_service).
+        from app.services.training_service import _resolve_evaluation_mode
+
+        evaluation_mode = await _resolve_evaluation_mode(db, platform_task_id)
 
     # Mark domain task RUNNING
     async with async_session_factory() as db:
@@ -383,7 +549,7 @@ async def _run_dl_training_by_id(
             _run_dl_sync,
             dl_task_id, file_path, target_column, model_type, task_type_req,
             arch_config, opt_config, train_config, str(settings.storage_models), loop,
-            platform_task_id,
+            platform_task_id, evaluation_mode,
         )
         stored_metrics = training_result["result_metrics"]
 
@@ -400,7 +566,11 @@ async def _run_dl_training_by_id(
                 t.finished_at = datetime.now(timezone.utc)
                 await db.commit()
 
-        return {"metrics": stored_metrics, "model_path": training_result["model_path"]}
+        return {
+            "metrics": stored_metrics,
+            "model_path": training_result["model_path"],
+            "evaluation_mode": training_result.get("evaluation_mode", "standard"),
+        }
 
     except Exception as exc:
         async with async_session_factory() as db:
@@ -418,111 +588,42 @@ async def _run_dl_training_by_id(
 # Async orchestration
 # ---------------------------------------------------------------------------
 
-async def _execute_dl_training(
-    task_id:      str,
-    file_path:    str,
-    target_column: str,
-    model_type:   str,
-    task_type:    str,
-    arch_config:  dict,
-    opt_config:   dict,
-    train_config: dict,
-    model_save_dir: str,
-    platform_task_id: str | None = None,
-):
-    """Background coroutine that runs DL training and updates both domain + platform tables."""
-    from app.scheduler.task_runner import update_platform_task_status
-
-    # ── Mark RUNNING ──────────────────────────────────────────────────────────
-    async with async_session_factory() as db:
-        result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-        task = result.scalar_one_or_none()
-        if task:
-            task.status = "RUNNING"
-            task.started_at = datetime.now(timezone.utc)
-            task.total_epochs = int(train_config.get("epochs", 50))
-            await db.commit()
-
-    if platform_task_id:
-        await update_platform_task_status(platform_task_id, "RUNNING")
-
-    loop = asyncio.get_event_loop()
-    try:
-        training_result = await loop.run_in_executor(
-            _executor,
-            _run_dl_sync,
-            task_id, file_path, target_column, model_type, task_type,
-            arch_config, opt_config, train_config, model_save_dir, loop,
-            platform_task_id,
-        )
-
-        stored_metrics = training_result["result_metrics"]
-
-        # ── Mark SUCCESS (domain) ─────────────────────────────────────────────
-        async with async_session_factory() as db:
-            result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-            task = result.scalar_one_or_none()
-            if task:
-                task.status = "SUCCESS"
-                task.progress = 100.0
-                task.current_epoch = int(stored_metrics.get("final_epoch") or task.total_epochs or 0)
-                task.task_type = training_result["task_type"]
-                task.result_metrics = stored_metrics
-                task.model_path = training_result["model_path"]
-                task.finished_at = datetime.now(timezone.utc)
-                await db.commit()
-
-        # ── Write-back: PlatformTask SUCCESS ─────────────────────────────────
-        if platform_task_id:
-            await update_platform_task_status(
-                platform_task_id, "SUCCESS",
-                metrics=stored_metrics,
-            )
-
-        loop.call_soon_threadsafe(event_bus.publish, f"dl:{task_id}", {
-            "type": "done", "status": "SUCCESS", "metrics": stored_metrics,
-        })
-
-    except Exception as exc:
-        logger.error("[DL %s] Failed: %s", task_id, exc, exc_info=True)
-        await _store_dl_log_record(
-            task_id=task_id,
-            level="ERROR",
-            message=f"训练失败: {exc}",
-            extra=None,
-        )
-        # ── Mark FAILED (domain) ──────────────────────────────────────────────
-        async with async_session_factory() as db:
-            result = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-            task = result.scalar_one_or_none()
-            if task:
-                task.status = "FAILED"
-                task.error_message = str(exc)
-                task.finished_at = datetime.now(timezone.utc)
-                await db.commit()
-
-        # ── Write-back: PlatformTask FAILED ──────────────────────────────────
-        if platform_task_id:
-            await update_platform_task_status(platform_task_id, "FAILED", error=str(exc))
-
-        event_bus.publish(f"dl:{task_id}", {"type": "done", "status": "FAILED", "error": str(exc)})
-    finally:
-        _running_tasks.pop(task_id, None)
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingTask:
-    settings = get_settings()
+async def _get_dl_task_or_404(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLTrainingTask:
+    stmt = select(DLTrainingTask).where(DLTrainingTask.id == task_id)
+    if owner_username:
+        stmt = stmt.where(DLTrainingTask.owner_username == owner_username)
+    res = await db.execute(stmt)
+    task = res.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="DL task not found")
+    return task
 
+
+async def start_dl_training(
+    request_data: dict,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLTrainingTask:
     # Validate dataset
     dataset_id = request_data["dataset_id"]
-    res = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    dataset_stmt = select(Dataset).where(Dataset.id == dataset_id)
+    if owner_username:
+        dataset_stmt = dataset_stmt.where(Dataset.owner_username == owner_username)
+    res = await db.execute(dataset_stmt)
     dataset = res.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
+    restored_dataset = restore_dataset_file(dataset.id, dataset.file_path)
+    if restored_dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset artifact not found")
 
     # Validate model type
     from app.core.dl_registry import get_dl_trainer_registry
@@ -536,6 +637,7 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
     import uuid as _uuid_mod
     short_id = str(_uuid_mod.uuid4())[:8]
     task = DLTrainingTask(
+        owner_username=owner_username or dataset.owner_username,
         dataset_id=dataset_id,
         name=f"{request_data['model_type']}_{short_id}",
         target_column=request_data["target_column"],
@@ -543,7 +645,10 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
         task_type=request_data.get("task_type", "auto"),
         arch_config=request_data.get("arch_config", {}),
         opt_config=request_data.get("opt_config", {}),
-        train_config=request_data.get("train_config", {}),
+        # Clamp here rather than trusting the caller: the config form bounds
+        # these inputs from the same registry, but a direct API call or a stale
+        # frontend bypasses the form entirely.
+        train_config=clamp_train_config(request_data.get("train_config", {})),
         status="PENDING",
     )
     db.add(task)
@@ -560,29 +665,25 @@ async def start_dl_training(request_data: dict, db: AsyncSession) -> DLTrainingT
     platform_task_id = platform_task.id
     await db.commit()
 
-    bg = asyncio.create_task(_execute_dl_training(
-        task_id=task.id,
-        file_path=dataset.file_path,
-        target_column=request_data["target_column"],
-        model_type=request_data["model_type"],
-        task_type=request_data.get("task_type", "auto"),
-        arch_config=request_data.get("arch_config", {}),
-        opt_config=request_data.get("opt_config", {}),
-        train_config=request_data.get("train_config", {}),
-        model_save_dir=str(settings.storage_models),
-        platform_task_id=platform_task_id,
-    ))
-    _running_tasks[task.id] = bg
+    from app.scheduler.scheduler import get_scheduler
+
+    scheduled = await get_scheduler("dl_train").submit(platform_task_id)
+    if isinstance(scheduled, asyncio.Task):
+        _running_tasks[task.id] = scheduled
+        scheduled.add_done_callback(
+            lambda _done, domain_id=task.id: _running_tasks.pop(domain_id, None)
+        )
     return task
 
 
-async def stop_dl_training(task_id: str, db: AsyncSession) -> DLTrainingTask:
+async def stop_dl_training(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLTrainingTask:
     from app.models.database import PlatformTask
 
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     if task.status not in ("PENDING", "RUNNING"):
         raise HTTPException(status_code=400, detail=f"Cannot stop task with status '{task.status}'")
     if task_id in _running_tasks:
@@ -605,22 +706,29 @@ async def stop_dl_training(task_id: str, db: AsyncSession) -> DLTrainingTask:
     return task
 
 
-async def get_dl_status(task_id: str, db: AsyncSession) -> DLTrainingTask:
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
-    return task
+async def get_dl_status(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLTrainingTask:
+    return await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
 
 
 async def list_dl_tasks(
-    db: AsyncSession, page: int = 1, page_size: int = 20, status_filter: str | None = None
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+    status_filter: str | None = None,
+    owner_username: str | None = None,
 ) -> dict:
     stmt = select(DLTrainingTask)
     count_stmt = select(func.count(DLTrainingTask.id))
     if status_filter:
         stmt = stmt.where(DLTrainingTask.status == status_filter)
         count_stmt = count_stmt.where(DLTrainingTask.status == status_filter)
+    if owner_username:
+        stmt = stmt.where(DLTrainingTask.owner_username == owner_username)
+        count_stmt = count_stmt.where(DLTrainingTask.owner_username == owner_username)
 
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
@@ -629,23 +737,26 @@ async def list_dl_tasks(
     return {"items": tasks, "total": total, "page": page, "page_size": page_size}
 
 
-async def rename_dl_task(task_id: str, name: str, db: AsyncSession) -> DLTrainingTask:
+async def rename_dl_task(
+    task_id: str,
+    name: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLTrainingTask:
     """Rename a DL training task."""
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     task.name = name
     await db.flush()
     return task
 
 
-async def delete_dl_task(task_id: str, db: AsyncSession) -> None:
+async def delete_dl_task(
+    task_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> None:
     """Delete a DL training task (not allowed while RUNNING)."""
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     if task.status == "RUNNING":
         raise HTTPException(status_code=422, detail="Cannot delete a running task. Stop it first.")
     await db.delete(task)
@@ -653,11 +764,17 @@ async def delete_dl_task(task_id: str, db: AsyncSession) -> None:
 
 
 async def list_dl_trained_models(
-    db: AsyncSession, page: int = 1, page_size: int = 20
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+    owner_username: str | None = None,
 ) -> dict:
     """Return paginated list of successfully completed DL tasks (i.e. trained models)."""
     stmt = select(DLTrainingTask).where(DLTrainingTask.status == "SUCCESS")
     count_stmt = select(func.count(DLTrainingTask.id)).where(DLTrainingTask.status == "SUCCESS")
+    if owner_username:
+        stmt = stmt.where(DLTrainingTask.owner_username == owner_username)
+        count_stmt = count_stmt.where(DLTrainingTask.owner_username == owner_username)
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
     stmt = stmt.order_by(DLTrainingTask.created_at.desc()).offset(offset).limit(page_size)
@@ -666,9 +783,14 @@ async def list_dl_trained_models(
 
 
 async def list_dl_epochs(
-    task_id: str, db: AsyncSession, page: int = 1, page_size: int = 100
+    task_id: str,
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 100,
+    owner_username: str | None = None,
 ) -> dict:
     """Return paginated epoch records for a DL task (ordered by epoch asc)."""
+    await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     count_stmt = select(func.count(DLTrainingEpoch.id)).where(DLTrainingEpoch.task_id == task_id)
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
@@ -684,9 +806,14 @@ async def list_dl_epochs(
 
 
 async def list_dl_epoch_history(
-    task_id: str, db: AsyncSession, page: int = 1, page_size: int = 20
+    task_id: str,
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+    owner_username: str | None = None,
 ) -> dict:
     """Return paginated epoch records ordered by newest epoch first."""
+    await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     count_stmt = select(func.count(DLTrainingEpoch.id)).where(DLTrainingEpoch.task_id == task_id)
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
@@ -707,8 +834,10 @@ async def list_dl_logs(
     level: str | None = None,
     page: int = 1,
     page_size: int = 200,
+    owner_username: str | None = None,
 ) -> dict:
     """Return paginated persisted DL log entries ordered by creation time."""
+    await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     stmt = select(DLTrainingLog).where(DLTrainingLog.task_id == task_id)
     count_stmt = select(func.count(DLTrainingLog.id)).where(DLTrainingLog.task_id == task_id)
     if level:
@@ -718,7 +847,7 @@ async def list_dl_logs(
 
     total = (await db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * page_size
-    stmt = stmt.order_by(DLTrainingLog.created_at.asc()).offset(offset).limit(page_size)
+    stmt = stmt.order_by(DLTrainingLog.created_at.asc(), DLTrainingLog.seq.asc()).offset(offset).limit(page_size)
     entries = (await db.execute(stmt)).scalars().all()
     return {
         "task_id": task_id,
@@ -730,13 +859,14 @@ async def list_dl_logs(
 
 
 async def update_dl_task_meta(
-    task_id: str, notes: str | None, tags: list[str] | None, db: AsyncSession
+    task_id: str,
+    notes: str | None,
+    tags: list[str] | None,
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> DLTrainingTask:
     """Update notes and/or tags of a DL training task."""
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     if notes is not None:
         task.notes = notes
     if tags is not None:
@@ -750,12 +880,13 @@ async def update_dl_task_meta(
 # ---------------------------------------------------------------------------
 
 async def create_dl_deployment(
-    dl_task_id: str, name: str, description: str | None, db: AsyncSession
+    dl_task_id: str,
+    name: str,
+    description: str | None,
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> DLModelDeployment:
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == dl_task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(dl_task_id, db, owner_username=owner_username)
     if task.status != "SUCCESS":
         raise HTTPException(status_code=422, detail="只有训练成功的模型才能部署")
     dep = DLModelDeployment(
@@ -767,26 +898,46 @@ async def create_dl_deployment(
     return dep
 
 
-async def list_dl_deployments(db: AsyncSession) -> dict:
-    stmt = select(DLModelDeployment).order_by(DLModelDeployment.created_at.desc())
+async def list_dl_deployments(
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> dict:
+    stmt = select(DLModelDeployment)
+    if owner_username:
+        stmt = stmt.join(
+            DLTrainingTask,
+            DLTrainingTask.id == DLModelDeployment.dl_task_id,
+        ).where(DLTrainingTask.owner_username == owner_username)
+    stmt = stmt.order_by(DLModelDeployment.created_at.desc())
     deps = (await db.execute(stmt)).scalars().all()
     return {"deployments": deps, "total": len(deps)}
 
 
-async def delete_dl_deployment(dep_id: str, db: AsyncSession) -> None:
+async def delete_dl_deployment(
+    dep_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> None:
     res = await db.execute(select(DLModelDeployment).where(DLModelDeployment.id == dep_id))
     dep = res.scalar_one_or_none()
     if dep is None:
         raise HTTPException(status_code=404, detail="DL deployment not found")
+    await _get_dl_task_or_404(dep.dl_task_id, db, owner_username=owner_username)
     await db.delete(dep)
     await db.flush()
 
 
-async def toggle_dl_deployment_status(dep_id: str, status: str, db: AsyncSession) -> DLModelDeployment:
+async def toggle_dl_deployment_status(
+    dep_id: str,
+    status: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> DLModelDeployment:
     res = await db.execute(select(DLModelDeployment).where(DLModelDeployment.id == dep_id))
     dep = res.scalar_one_or_none()
     if dep is None:
         raise HTTPException(status_code=404, detail="DL deployment not found")
+    await _get_dl_task_or_404(dep.dl_task_id, db, owner_username=owner_username)
     if status not in ("active", "paused"):
         raise HTTPException(status_code=422, detail="status must be 'active' or 'paused'")
     dep.status = status
@@ -795,7 +946,10 @@ async def toggle_dl_deployment_status(dep_id: str, status: str, db: AsyncSession
 
 
 async def predict_dl_deployment(
-    dep_id: str, rows: list[dict], db: AsyncSession
+    dep_id: str,
+    rows: list[dict],
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> dict:
     """Load DL model and run inference for the given deployment."""
 
@@ -809,10 +963,11 @@ async def predict_dl_deployment(
     if dep.status == "paused":
         raise HTTPException(status_code=422, detail="部署已暂停，请先恢复部署")
 
-    res2 = await db.execute(
-        select(DLTrainingTask).where(DLTrainingTask.id == dep.dl_task_id)
+    task = await _get_dl_task_or_404(
+        dep.dl_task_id,
+        db,
+        owner_username=owner_username,
     )
-    task = res2.scalar_one_or_none()
     if task is None or not task.model_path:
         raise HTTPException(status_code=404, detail="模型文件不存在")
 
@@ -821,20 +976,29 @@ async def predict_dl_deployment(
     dataset = ds_res.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="训练数据集不存在，无法推断特征编码")
+    if restore_dataset_file(dataset.id, dataset.file_path) is None:
+        raise HTTPException(status_code=404, detail="训练数据集文件不存在，无法推断特征编码")
+    model_path = restore_model_bundle(task.model_path)
+    if model_path is None:
+        raise HTTPException(status_code=404, detail="模型文件不存在")
 
     loop = asyncio.get_event_loop()
 
     def _load_and_predict():
-        # Build properly-encoded feature matrix (mirrors training preprocessing)
-        training_df = load_dataframe(dataset.file_path)
-        X_df = prepare_prediction_frame(training_df, rows, task.target_column)
-        # Explicitly coerce all columns to numeric (handles object dtype after label encoding)
-        X = X_df.apply(pd.to_numeric, errors='coerce').fillna(0).values.astype(np.float32)
-        feature_cols = list(X_df.columns)
-
         trainer = get_dl_trainer(task.model_type)
-        meta = trainer.load_for_inference(str(resolve_runtime_path(task.model_path)))
+        meta = trainer.load_for_inference(str(model_path))
         task_type = meta["task_type"]
+        training_df = (
+            load_dataframe(dataset.file_path)
+            if meta.get("preprocessing_artifact") is None
+            else None
+        )
+        X, feature_cols = _prepare_dl_prediction_input(
+            meta,
+            training_df,
+            rows,
+            task.target_column,
+        )
 
         preds, probas = trainer.predict(X, task_type)
         return task_type, preds.tolist(), probas, feature_cols
@@ -865,13 +1029,13 @@ async def predict_dl_deployment(
 
 
 async def predict_dl_task_direct(
-    task_id: str, rows: list[dict], db: AsyncSession
+    task_id: str,
+    rows: list[dict],
+    db: AsyncSession,
+    owner_username: str | None = None,
 ) -> dict:
     """Direct inference against a DL task without requiring a deployment."""
-    res = await db.execute(select(DLTrainingTask).where(DLTrainingTask.id == task_id))
-    task = res.scalar_one_or_none()
-    if task is None:
-        raise HTTPException(status_code=404, detail="DL task not found")
+    task = await _get_dl_task_or_404(task_id, db, owner_username=owner_username)
     if task.status != "SUCCESS" or not task.model_path:
         raise HTTPException(status_code=422, detail="模型未就绪（训练未完成或文件不存在）")
 
@@ -880,20 +1044,29 @@ async def predict_dl_task_direct(
     dataset = ds_res.scalar_one_or_none()
     if dataset is None:
         raise HTTPException(status_code=404, detail="训练数据集不存在，无法推断特征编码")
+    if restore_dataset_file(dataset.id, dataset.file_path) is None:
+        raise HTTPException(status_code=404, detail="训练数据集文件不存在，无法推断特征编码")
+    model_path = restore_model_bundle(task.model_path)
+    if model_path is None:
+        raise HTTPException(status_code=404, detail="模型文件不存在")
 
     loop = asyncio.get_event_loop()
 
     def _predict():
-        # Build properly-encoded feature matrix (mirrors training preprocessing)
-        training_df = load_dataframe(dataset.file_path)
-        X_df = prepare_prediction_frame(training_df, rows, task.target_column)
-        # Explicitly coerce all columns to numeric (handles object dtype after label encoding)
-        X = X_df.apply(pd.to_numeric, errors='coerce').fillna(0).values.astype(np.float32)
-        feature_cols = list(X_df.columns)
-
         trainer = get_dl_trainer(task.model_type)
-        meta = trainer.load_for_inference(str(resolve_runtime_path(task.model_path)))
+        meta = trainer.load_for_inference(str(model_path))
         task_type = meta["task_type"]
+        training_df = (
+            load_dataframe(dataset.file_path)
+            if meta.get("preprocessing_artifact") is None
+            else None
+        )
+        X, feature_cols = _prepare_dl_prediction_input(
+            meta,
+            training_df,
+            rows,
+            task.target_column,
+        )
 
         preds, probas = trainer.predict(X, task_type)
         return task_type, preds.tolist(), probas, feature_cols

@@ -2,18 +2,24 @@
 ML Training Platform -- FastAPI application entry point.
 """
 
+import logging
 import shutil
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
+from datetime import timedelta
 from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from app.config import get_settings
+from app.core.auth import request_is_authorized
 from app.models.database import Base, async_engine, Dataset, ModelTagLibrary, async_session_factory
 from app.api.routes import data, training, logs, experiment, visualization, model_mgmt
+from app.api.routes.auth import router as auth_router
 from app.api.routes.deploy import deploy_router, inference_router
 from app.api.routes.dl import router as dl_router
 from app.api.routes.timesfm import router as timesfm_router, ts_router
@@ -25,8 +31,11 @@ from app.api.routes.v3_runs import router as v3_runs_router
 from app.api.routes.training_plans import router as training_plans_router
 from app.api.websocket import router as ws_router
 from app.services.timeseries_service import resume_unfinished_ts_tasks
+from app.services.object_storage import upload_dataset_file
 from app.utils.file_utils import generate_unique_filename
 from app.utils.storage_paths import to_portable_storage_path
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Preset tag definitions — seeded once on first startup
@@ -130,8 +139,50 @@ async def _seed_example_datasets() -> None:
                 columns_info=_build_columns_info(df),
             )
             db.add(dataset)
+            await db.flush()
+            upload_dataset_file(dataset.id, dest)
 
         await db.commit()
+
+
+# Floor on the sweep interval, kept as a module constant so tests can drive
+# the loop without sleeping for real.
+_SWEEP_MIN_INTERVAL_SECONDS = 30
+
+
+async def _recovery_sweep_loop(reconcile_queued_tasks, recover_stalled_tasks) -> None:
+    """Periodically re-drive rows that no live worker will ever finish.
+
+    Two distinct holes, both at-least-once repairs:
+
+    * ``reconcile_queued_tasks`` — queued but never handed to the broker.
+    * ``recover_stalled_tasks``  — executed, but the worker died before the
+      terminal commit landed (the tail a ``WritebackError`` leaves behind).
+
+    Failures are logged and the loop continues: a transient DB outage must not
+    silently stop recovery for the rest of the process lifetime.
+    """
+    cfg = get_settings()
+    interval = max(_SWEEP_MIN_INTERVAL_SECONDS, cfg.recovery_sweep_interval_seconds)
+    stall_timeout = timedelta(seconds=cfg.stalled_task_timeout_seconds)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            requeued = await reconcile_queued_tasks()
+            if requeued:
+                logger.info("Recovery sweep re-submitted %d queued task(s)", len(requeued))
+        except Exception:
+            logger.exception("Recovery sweep: queued-task reconciliation failed")
+        try:
+            recovered = await recover_stalled_tasks(older_than=stall_timeout)
+            if recovered:
+                logger.warning(
+                    "Recovery sweep re-drove %d stalled task(s): %s",
+                    len(recovered),
+                    recovered,
+                )
+        except Exception:
+            logger.exception("Recovery sweep: stalled-task recovery failed")
 
 
 @asynccontextmanager
@@ -140,31 +191,73 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
 
     # --- Startup ---
+    # A0: fail fast (before any table create / seed) when production is about
+    # to boot with development defaults — misconfig must not start silently.
+    settings.validate_for_production()
+    if settings.is_production and not settings.auth_enabled:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "⚠️ 生产环境显式关闭了鉴权（AUTH_ENABLED=false）——平台对公网完全裸奔，请确认这是有意为之。"
+        )
     # Ensure storage directories exist
     settings.ensure_storage_dirs()
 
-    # Create all database tables
-    async with async_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    # Apply V3 workbench schema migrations (idempotent, safe to rerun)
-    from app.core.migrations import run_startup_migrations
-    await run_startup_migrations(async_engine)
-    # V3 Phase 2 — force-import services so their module-level
-    # ``register_executor`` calls populate the Scheduler registry before any
-    # task dispatch happens.  The router imports already cover training_service
-    # and dl_service, but explain_service is only imported lazily inside
-    # handlers — so pull it in explicitly here.
-    import app.services.training_service  # noqa: F401
-    import app.services.dl_service        # noqa: F401
-    import app.services.explain_service   # noqa: F401
-    await _seed_tag_library()
-    await _seed_example_datasets()
-    await resume_unfinished_ts_tasks()
+    # Production schema changes are owned by the deployment-time Alembic
+    # command. Local and test environments keep the legacy bootstrap path so
+    # existing SQLite workflows remain unchanged.
+    if not settings.is_production:
+        async with async_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        from app.core.migrations import run_startup_migrations
 
-    yield
+        await run_startup_migrations(async_engine)
+    from app.core.logger import event_bus
+    from app.scheduler.executors import load_executor_modules
+    from app.scheduler.scheduler import reconcile_queued_tasks, recover_stalled_tasks
 
-    # --- Shutdown ---
-    await async_engine.dispose()
+    load_executor_modules()
+    start_event_bus = getattr(event_bus, "start", None)
+    stop_event_bus = getattr(event_bus, "stop", None)
+    if start_event_bus is not None:
+        await start_event_bus()
+
+    # Bound before the try so the finally can always test it: any failure in
+    # the startup steps below would otherwise raise UnboundLocalError here and
+    # mask the real error *and* skip event-bus / engine cleanup.
+    sweep_task: asyncio.Task | None = None
+    try:
+        try:
+            reconciled = await reconcile_queued_tasks()
+            if reconciled:
+                logger.info("Reconciled %d stale queued task(s)", len(reconciled))
+        except Exception:
+            # Recovery is best-effort; a transient DB outage should not make
+            # the API permanently unbootable.
+            logger.exception("Queued-task reconciliation failed during startup")
+
+        await _seed_tag_library()
+        await _seed_example_datasets()
+        await resume_unfinished_ts_tasks()
+
+        # A one-shot sweep at startup is not enough: a worker can die at any
+        # moment, and ``MLBaseTask.on_failure`` delegates correctness for the
+        # "succeeded but never recorded" case to this sweep. Without a periodic
+        # runner those rows stay non-terminal until the next restart.
+        sweep_task = asyncio.create_task(
+            _recovery_sweep_loop(reconcile_queued_tasks, recover_stalled_tasks)
+        )
+
+        yield
+    finally:
+        # --- Shutdown ---
+        if sweep_task is not None:
+            sweep_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await sweep_task
+        if stop_event_bus is not None:
+            await stop_event_bus()
+        await async_engine.dispose()
 
 
 def create_app() -> FastAPI:
@@ -173,7 +266,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="ML Training Platform",
-        version="3.3.0",
+        version="2.0.0",
         lifespan=lifespan,
     )
 
@@ -186,7 +279,22 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Auth guard (single-admin). Everything under /api and /inference needs a
+    # bearer token when AUTH_ENABLED=true; login itself is the only exception.
+    # WebSocket routes are guarded separately at the handshake (?token=).
+    _AUTH_PUBLIC_PATHS = {"/api/auth/login"}
+
+    @app.middleware("http")
+    async def auth_guard(request, call_next):
+        path = request.url.path
+        guarded = path.startswith("/api") or path.startswith("/inference")
+        if guarded and path not in _AUTH_PUBLIC_PATHS and request.method != "OPTIONS":
+            if not request_is_authorized(request.headers.get("authorization")):
+                return JSONResponse(status_code=401, content={"detail": "未登录或登录已过期"})
+        return await call_next(request)
+
     # Register routers under /api prefix
+    app.include_router(auth_router, prefix="/api")          # → /api/auth/...
     app.include_router(data.router, prefix="/api")
     app.include_router(training.router, prefix="/api")
     app.include_router(logs.router, prefix="/api")
@@ -210,7 +318,15 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["Health"])
     async def health_check():
-        return {"status": "ok", "version": "3.3.0"}
+        settings = get_settings()
+        return {
+            "status": "ok",
+            "version": "2.0.0",
+            "environment": settings.environment,
+            # 前端「系统设置」把上传上限当只读信息展示，避免页面上再放一个
+            # 改不动后端的假滑块。
+            "max_upload_size_mb": round(settings.max_upload_size / (1024 * 1024)),
+        }
 
     return app
 

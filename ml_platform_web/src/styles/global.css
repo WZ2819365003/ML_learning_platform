@@ -4,51 +4,17 @@
 
 /* ── Design tokens ─────────────────────────────────────────────────────────── */
 :root {
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-
-  /* Brand palette */
-  --brand-50:  #eff6ff;
-  --brand-100: #dbeafe;
-  --brand-200: #bfdbfe;
-  --brand-400: #60a5fa;
-  --brand-500: #3b82f6;
-  --brand-600: #2563eb;
-  --brand-700: #1d4ed8;
-  --brand-900: #1e3a8a;
-
-  /* Sidebar */
-  --sidebar-bg-from: #090f1e;
-  --sidebar-bg-to:   #0d1b38;
-  --sidebar-width:   220px;
-  --sidebar-collapsed: 80px;
-
-  /* Surface */
-  --surface-0: #ffffff;
-  --surface-1: #f8fafc;
-  --surface-2: #f1f5f9;
-  --content-bg: #f0f5fb;
-
-  /* Text */
-  --text-primary:   #0f172a;
-  --text-secondary: #64748b;
-  --text-muted:     #94a3b8;
-
-  /* Status */
-  --success: #10b981;
-  --warning: #f59e0b;
-  --error:   #ef4444;
-  --info:    #3b82f6;
-
-  /* Border */
-  --border: rgba(148, 163, 184, 0.2);
-  --border-strong: rgba(148, 163, 184, 0.35);
-
-  /* Elevation */
-  --shadow-sm:  0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-md:  0 4px 16px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.05);
-  --shadow-lg:  0 12px 40px rgba(15, 23, 42, 0.1),  0 4px 12px rgba(15, 23, 42, 0.06);
-  --shadow-xl:  0 24px 60px rgba(15, 23, 42, 0.14), 0 8px 20px rgba(15, 23, 42, 0.08);
-  --shadow-glow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  color-scheme: dark;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --brand-50: rgba(26,141,255,.1); --brand-100: rgba(26,141,255,.2); --brand-200: #143d77;
+  --brand-400: #3c9dff; --brand-500: #1a8dff; --brand-600: #1a8dff; --brand-700: #1a8dff; --brand-900: #1a8dff;
+  --sidebar-width: 235px; --sidebar-collapsed: 64px;
+  --surface-0: #0a2558; --surface-1: #0c2f69; --surface-2: #113883; --content-bg: #061a3e;
+  --text-primary: rgba(255,255,255,.9); --text-secondary: rgba(255,255,255,.6); --text-muted: rgba(255,255,255,.4);
+  --success: #00a870; --warning: #ed7b2f; --error: #e34d59; --info: #18c3e3;
+  --border: #143d77; --border-strong: #0d4780; --code-bg: #061a3e; --code-text: #d8e8ff;
+  --shadow-sm: none; --shadow-md: none; --shadow-lg: none; --shadow-xl: 0 8px 28px rgba(0,0,0,.3);
+  --shadow-glow: 0 0 0 2px rgba(26,141,255,.15);
 }
 
 /* ── Base ──────────────────────────────────────────────────────────────────── */
@@ -57,6 +23,7 @@
 html { font-size: 14px; }
 
 body {
+  margin: 0;
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -75,10 +42,6 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: rgba(100, 116, 139, 0.6); }
 
 /* ── Animations ────────────────────────────────────────────────────────────── */
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(16px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
 @keyframes shimmer {
   0%   { background-position: -200% center; }
   100% { background-position: 200% center; }
@@ -88,211 +51,243 @@ body {
   100% { transform: scale(1.5); opacity: 0; }
 }
 
-.animate-fade-in-up { animation: fadeInUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
-
-/* ── Ant Design overrides ──────────────────────────────────────────────────── */
-
-/* Cards */
-.ant-card {
-  border-radius: 16px !important;
-  box-shadow: var(--shadow-md) !important;
-  border: 1px solid var(--border) !important;
-  background: var(--surface-0) !important;
-  transition: box-shadow 0.25s ease, transform 0.25s ease !important;
-}
-.ant-card:hover {
-  box-shadow: var(--shadow-lg) !important;
-}
-.ant-card .ant-card-head {
-  border-bottom: 1px solid var(--border) !important;
-  font-weight: 600 !important;
-  padding: 0 20px !important;
-  min-height: 52px !important;
-  font-size: 14px !important;
-  color: var(--text-primary) !important;
-}
-.ant-card .ant-card-body { padding: 20px !important; }
-
-/* Buttons */
-.ant-btn {
-  border-radius: 8px !important;
-  font-weight: 500 !important;
-  transition: all 0.2s ease !important;
-}
-.ant-btn-primary {
-  background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
-  border-color: transparent !important;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35) !important;
-}
-.ant-btn-primary:hover {
-  background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45) !important;
-  transform: translateY(-1px) !important;
-}
-.ant-btn-default:hover {
-  border-color: var(--brand-500) !important;
-  color: var(--brand-500) !important;
+/* AI report prose */
+.ai-report-prose .ai-report-lead {
+  color: var(--brand-700);
+  font-weight: 700;
 }
 
-/* Tags */
-.ant-tag {
-  border-radius: 6px !important;
-  font-weight: 500 !important;
-  font-size: 11px !important;
-  padding: 1px 8px !important;
-  border: none !important;
+/* AI report reader */
+.ai-report-reader {
+  min-height: 520px;
+}
+.ai-report-body {
+  padding: 16px;
 }
 
-/* Tables */
-.ant-table-wrapper {
-  border-radius: 12px !important;
-  overflow: hidden !important;
+/* Cover: one line of facts, one sentence of judgement. No score, no counts. */
+.ai-report-cover {
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-1);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
 }
-.ant-table {
-  border-radius: 12px !important;
-  overflow: hidden !important;
+.ai-report-cover h1 {
+  margin: 6px 0 8px;
+  font-size: 26px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
-.ant-table-thead > tr > th {
-  background: var(--surface-2) !important;
-  font-weight: 600 !important;
-  font-size: 12px !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.04em !important;
-  color: var(--text-secondary) !important;
-  border-bottom: 1px solid var(--border) !important;
-  padding: 12px 16px !important;
+.ai-report-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--brand-500);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
-.ant-table-tbody > tr > td {
-  border-bottom: 1px solid rgba(148, 163, 184, 0.1) !important;
-  padding: 12px 16px !important;
-  font-size: 13px !important;
+.ai-report-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
 }
-.ant-table-tbody > tr:hover > td {
-  background: rgba(59, 130, 246, 0.04) !important;
+.ai-report-meta-row > span + span::before {
+  content: '·';
+  margin: 0 8px;
+  color: var(--text-muted);
 }
-.ant-table-tbody > tr:last-child > td { border-bottom: none !important; }
-
-/* Progress bars */
-.ant-progress-bg {
-  border-radius: 99px !important;
-}
-
-/* Form & Input */
-.ant-input, .ant-select-selector, .ant-picker {
-  border-radius: 8px !important;
-  border-color: var(--border-strong) !important;
-  transition: all 0.2s ease !important;
-}
-.ant-input:focus, .ant-select-focused .ant-select-selector {
-  border-color: var(--brand-500) !important;
-  box-shadow: var(--shadow-glow) !important;
-}
-
-/* Descriptions */
-.ant-descriptions-item-label {
-  font-weight: 600 !important;
-  color: var(--text-secondary) !important;
-  font-size: 12px !important;
+.ai-report-headline {
+  margin: 14px 0 0;
+  max-width: 760px;
+  color: var(--text-primary);
+  font-size: 21px;
+  line-height: 1.5;
+  font-weight: 700;
+  text-wrap: balance;
 }
 
-/* Tabs */
-.ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
-  color: var(--brand-600) !important;
-  font-weight: 600 !important;
+/* Document: prose with figures placed by marker, appendix folded at the end. */
+.ai-report-document {
+  min-width: 0;
+  margin-top: 14px;
+  padding: 24px 32px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-0);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.07);
 }
-.ant-tabs-ink-bar { background-color: var(--brand-600) !important; }
+.ai-report-prose .ant-typography {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.92;
+}
+.ai-report-prose h1.ant-typography {
+  margin: 0 0 12px !important;
+  color: var(--text-primary);
+  font-size: 22px !important;
+  line-height: 1.25 !important;
+}
+.ai-report-prose h2.ant-typography {
+  margin: 6px 0 14px !important;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 22px !important;
+  line-height: 1.25 !important;
+}
+.ai-report-document-body > .ai-report-prose:first-child > h2.ant-typography:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.ai-report-prose h3.ant-typography {
+  margin: 18px 0 8px !important;
+  color: var(--brand-500);
+  font-size: 17px !important;
+}
+.ai-report-prose h4.ant-typography,
+.ai-report-prose h5.ant-typography {
+  margin: 16px 0 8px !important;
+  color: var(--text-primary);
+  font-size: 15px !important;
+}
+.ai-report-prose .ai-report-lead {
+  display: inline;
+  color: var(--brand-500);
+  font-weight: 800;
+}
 
-/* Statistic */
-.ant-statistic-title {
-  font-size: 12px !important;
-  font-weight: 500 !important;
-  color: var(--text-secondary) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.04em !important;
+/* Figures: title, chart, and the reading of it directly underneath. The
+   margins are tight because the paragraph after the figure reads it. */
+.ai-report-figure {
+  margin: 6px 0 16px;
+  padding: 12px 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-0);
 }
-.ant-statistic-content-value {
-  font-size: 28px !important;
-  font-weight: 700 !important;
-  color: var(--text-primary) !important;
+.ai-report-figure-title {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.ai-report-figure-caption {
+  display: block;
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.ai-report-tip-head {
+  margin-bottom: 6px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 13px;
+}
+/* Two columns: labels left, values right in a column of their own. Inline
+   `label: value` started every number at a different x. */
+.ai-report-tip-row {
+  display: grid;
+  grid-template-columns: auto minmax(64px, max-content);
+  gap: 4px 18px;
+  align-items: baseline;
+  line-height: 1.85;
+}
+.ai-report-tip-label {
+  color: var(--text-secondary);
+}
+.ai-report-tip-value {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
 }
 
-/* Modal */
-.ant-modal-content {
-  border-radius: 20px !important;
-  overflow: hidden !important;
-  box-shadow: var(--shadow-xl) !important;
-}
-.ant-modal-header {
-  border-radius: 20px 20px 0 0 !important;
-  padding: 20px 24px 16px !important;
-  border-bottom: 1px solid var(--border) !important;
-}
-.ant-modal-title {
-  font-weight: 700 !important;
-  font-size: 16px !important;
-}
-
-/* Upload Dragger */
-.ant-upload-drag {
-  border-radius: 12px !important;
-  border: 2px dashed var(--border-strong) !important;
+/* Appendix: the two wide tables, folded shut, scrolling sideways when open. */
+.ai-report-appendix {
+  margin-top: 24px;
   background: var(--surface-1) !important;
-  transition: all 0.25s ease !important;
+  border-color: var(--border) !important;
 }
-.ant-upload-drag:hover {
-  border-color: var(--brand-500) !important;
-  background: var(--brand-50) !important;
+.ai-report-appendix .ant-collapse-header {
+  font-weight: 600;
+  color: var(--text-primary) !important;
 }
-
-/* Layout */
-.ant-layout { background: var(--content-bg) !important; }
-.ant-layout-content {
-  background: transparent !important;
+.ai-report-appendix-table {
+  margin-bottom: 16px;
 }
-
-/* ── Premium utility classes ───────────────────────────────────────────────── */
-
-/* Gradient stat cards */
-.stat-card-blue {
-  background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%) !important;
-  border: none !important;
-  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35) !important;
+.ai-report-appendix-table:last-child {
+  margin-bottom: 0;
 }
-.stat-card-green {
-  background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
-  border: none !important;
-  box-shadow: 0 8px 24px rgba(5, 150, 105, 0.35) !important;
+.ai-report-appendix-table h4 {
+  margin: 0 0 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
 }
-.stat-card-purple {
-  background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%) !important;
-  border: none !important;
-  box-shadow: 0 8px 24px rgba(124, 58, 237, 0.35) !important;
+.ai-report-appendix-table .ant-table-wrapper {
+  border: 1px solid var(--border);
 }
-.stat-card-amber {
-  background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%) !important;
-  border: none !important;
-  box-shadow: 0 8px 24px rgba(217, 119, 6, 0.35) !important;
-}
-.stat-card-blue .ant-statistic-title,
-.stat-card-green .ant-statistic-title,
-.stat-card-purple .ant-statistic-title,
-.stat-card-amber .ant-statistic-title {
-  color: rgba(255,255,255,0.8) !important;
-}
-.stat-card-blue .ant-statistic-content-value,
-.stat-card-green .ant-statistic-content-value,
-.stat-card-purple .ant-statistic-content-value,
-.stat-card-amber .ant-statistic-content-value {
-  color: #ffffff !important;
+.ai-report-appendix-cell {
+  white-space: nowrap;
 }
 
-/* Glass card */
-.glass-card {
-  background: rgba(255, 255, 255, 0.7) !important;
-  backdrop-filter: blur(16px) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(16px) saturate(180%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.5) !important;
+@media (max-width: 960px) {
+  .ai-report-document {
+    padding: 22px;
+  }
 }
+
+@media (max-width: 640px) {
+  .ai-report-body {
+    padding: 12px;
+  }
+  .ai-report-cover {
+    padding: 20px;
+  }
+  .ai-report-cover h1 {
+    font-size: 22px;
+  }
+  .ai-report-headline {
+    font-size: 18px;
+  }
+}
+
+/* Component geometry follows power-trade; state colors come from ConfigProvider. */
+.ant-card { box-shadow: none; }
+.ant-card .ant-card-head { font-weight: 600; }
+.ant-btn { font-weight: 400; }
+.ant-table-wrapper .ant-table-thead > tr > th,
+.ant-table-wrapper .ant-table-tbody > tr > td { height: 48px; border-bottom: 0; }
+.ant-table-wrapper .ant-table-thead > tr > th { font-weight: 500; }
+.ant-table-wrapper .ant-table-tbody > tr > td { background: #0d2d6e; }
+.ant-table-wrapper .ant-table-tbody > tr:nth-child(even) > td { background: #0b2860; }
+.ant-table-wrapper .ant-table-tbody > tr > td.ant-table-cell-row-hover { background: #0d3a79; }
+.ant-table-wrapper .ant-table-placeholder > td { min-height: 120px; }
+.ant-table-wrapper .ant-pagination { margin-block: 16px 0; }
+.ant-modal { max-width: calc(100vw - 48px); padding-bottom: 0; }
+.ant-modal .ant-modal-content { display: flex; flex-direction: column; max-height: calc(100dvh - 48px); padding: 0; overflow: hidden; }
+.ant-modal .ant-modal-header { flex: none; padding: 24px 24px 16px; margin: 0; }
+.ant-modal .ant-modal-body { padding: 12px 24px 0; overflow-y: auto; min-height: 0; }
+.ant-modal .ant-modal-body:last-child { padding-bottom: 24px; }
+.ant-modal .ant-modal-footer { flex: none; padding: 16px 24px 24px; margin: 0; }
+.ant-modal .ant-modal-close { top: 22px; right: 20px; }
+.ant-drawer .ant-drawer-header { padding: 20px 24px; }
+.ant-drawer .ant-drawer-body { padding: 16px 24px 24px; }
+.ant-drawer .ant-drawer-footer { padding: 16px 24px; }
+.ant-upload-drag { border-radius: 4px; }
+.ant-statistic-title { font-size: 12px; }
+.ant-statistic-content-value { font-size: 26px; font-weight: 600; }
+.glass-card { background: var(--surface-0); border: 1px solid var(--border); }
 
 /* Section label */
 .section-label {
@@ -302,26 +297,6 @@ body {
   text-transform: uppercase;
   color: var(--text-muted);
   margin-bottom: 12px;
-}
-
-/* Hero gradient banner */
-.hero-banner {
-  border-radius: 20px;
-  padding: 32px;
-  background:
-    radial-gradient(ellipse at top right, rgba(59, 130, 246, 0.25) 0%, transparent 50%),
-    radial-gradient(ellipse at bottom left, rgba(99, 102, 241, 0.2) 0%, transparent 50%),
-    linear-gradient(135deg, #090f1e 0%, #0d1b38 50%, #0f2046 100%);
-  color: #f8fafc;
-  position: relative;
-  overflow: hidden;
-}
-.hero-banner::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.02'%3E%3Ccircle cx='30' cy='30' r='2'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
-  pointer-events: none;
 }
 
 /* Status dot */
@@ -345,18 +320,16 @@ body {
 .ts-page-shell {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 .ts-page-hero {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  padding: 24px 28px;
-  border-radius: 20px;
-  background:
-    radial-gradient(circle at top right, rgba(15, 76, 129, 0.14), transparent 32%),
-    linear-gradient(135deg, #f9fcff 0%, #edf5fb 100%);
+  padding: 16px 24px;
+  border-radius: 4px;
+  background: var(--surface-0);
   border: 1px solid var(--border);
 }
 .ts-panel-card { background: var(--surface-1) !important; }
@@ -366,16 +339,16 @@ body {
 .ts-drawer-footer { display: flex; justify-content: flex-end; gap: 12px; }
 .ts-copy-field {
   padding: 14px 16px;
-  border-radius: 14px;
+  border-radius: 4px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.84);
+  background: var(--surface-1);
 }
 .ts-json-block {
   margin: 0;
   padding: 16px;
-  border-radius: 14px;
-  background: #0f172a;
-  color: #e2e8f0;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--code-text);
   font-size: 12px;
   line-height: 1.6;
   overflow: auto;
@@ -385,4 +358,327 @@ body {
   .ts-page-hero { flex-direction: column; }
   .ts-form-footer { justify-content: stretch; flex-direction: column-reverse; }
   .ts-drawer-footer { flex-direction: column-reverse; align-items: stretch; }
+}
+
+@media (max-width: 379px) {
+  .login-page { padding: 10px !important; }
+  .login-card {
+    padding: 32px 22px 24px !important;
+    border-radius: 4px !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .app-content {
+    margin: 0 12px 12px !important;
+    min-width: 0;
+  }
+
+  .model-table-card .ant-card-body {
+    padding: 12px !important;
+  }
+
+  .log-viewer-toolbar .log-search-input {
+    width: 100% !important;
+  }
+
+  .log-level-filters {
+    width: 100%;
+    display: flex !important;
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .log-toolbar-actions {
+    width: 100%;
+    margin-left: 0 !important;
+    justify-content: flex-end;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   AI report: a side rail listing 总报告 with each model nested under it, beside
+   a single-column body. Vertical because a grid search can produce eight models
+   and a horizontal strip wrapped to two ragged rows at that count.
+--------------------------------------------------------------------------- */
+.report-shell { display: flex; align-items: stretch; min-height: 460px; }
+
+.report-nav {
+  width: 208px;
+  flex-shrink: 0;
+  padding: 12px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-1);
+  max-height: 78vh;
+  overflow-y: auto;
+}
+
+/* The elbow: one spine down from 总报告, a stub across to each model. */
+.report-nav-children {
+  margin: 6px 0 0 14px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
+.report-nav-children .report-nav-item::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  width: 12px;
+  height: 1px;
+  background: var(--border);
+}
+
+.report-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background 0.15s, color 0.15s;
+}
+
+/* Model identifiers are long and must not be truncated into ambiguity — they
+   are what the reader matches against the leaderboard. */
+.report-nav-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+}
+.report-nav-label small {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.report-nav-item:hover { background: rgba(0, 0, 0, 0.04); color: var(--brand-500); }
+
+.report-nav-item.is-root { font-weight: 600; color: var(--text-primary); }
+
+.report-nav-item.is-active {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.35);
+  color: var(--brand-500);
+  font-weight: 600;
+}
+
+.report-content {
+  flex: 1;
+  min-width: 0;
+  padding: 18px 24px;
+  max-height: 78vh;
+  overflow-y: auto;
+}
+
+.report-print-document {
+  position: fixed;
+  left: -12000px;
+  top: 0;
+  width: 1000px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.report-print-run {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 2px solid #dbe5f1;
+}
+
+@media (max-width: 767px) {
+  .modeling-task-detail {
+    padding: 8px !important;
+  }
+
+  .task-detail-heading,
+  .task-detail-title-row,
+  .task-detail-actions {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .task-detail-title-row h2 {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .task-detail-actions {
+    display: flex !important;
+    gap: 6px !important;
+  }
+
+  .task-detail-actions .ant-space-item {
+    flex: 1 1 calc(50% - 6px);
+  }
+
+  .task-detail-actions .ant-btn {
+    width: 100%;
+  }
+
+  .report-actions {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 6px !important;
+  }
+
+  .report-shell {
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .report-nav {
+    width: 100%;
+    max-height: none;
+    display: flex;
+    gap: 6px;
+    padding: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .report-nav-children {
+    display: flex;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .report-nav-children .report-nav-item::before {
+    display: none;
+  }
+
+  .report-nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: 240px;
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .report-nav-label {
+    overflow-wrap: normal;
+  }
+
+  .report-content {
+    width: 100%;
+    max-height: none;
+    padding: 12px;
+    overflow: visible;
+  }
+
+  .ai-report-inline .ant-card-head {
+    padding: 0 12px !important;
+  }
+
+  .ai-report-inline .ai-report-body,
+  .ai-report-inline .ai-report-document {
+    padding: 12px;
+  }
+
+  .ai-report-inline .ai-report-cover {
+    padding: 16px;
+  }
+
+  .ai-report-inline .ai-report-cover h1 {
+    font-size: 22px;
+  }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .report-print-document,
+  .report-print-document * {
+    visibility: visible !important;
+  }
+
+  .report-print-document {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    color: #111827;
+    background: #fff;
+    pointer-events: auto;
+  }
+
+  .report-print-document .ai-report-reader,
+  .report-print-document .ai-report-document,
+  .report-print-document .report-body {
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .report-print-document .ai-report-cover,
+  .report-print-document .ai-report-document,
+  .report-print-document .ant-card,
+  .report-print-document .ai-report-figure {
+    box-shadow: none !important;
+  }
+
+  .report-print-document .ai-report-figure,
+  .report-print-document .ai-report-appendix-table,
+  .report-print-document .report-print-run {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .report-print-document canvas {
+    max-width: 100% !important;
+  }
+}
+
+/* 时序预测图：工具条 + 可拖拽高度的手柄 */
+.forecast-chart-toolbar { margin-bottom: 8px; }
+.forecast-chart-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 6px 0 2px;
+  cursor: ns-resize;
+  user-select: none;
+}
+.forecast-chart-handle > span {
+  width: 44px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  flex: none;
+}
+.forecast-chart-handle:hover > span { background: var(--primary); }
+.forecast-chart-hint { font-size: 12px; flex: none; white-space: nowrap; }
+@media (max-width: 720px) { .forecast-chart-hint { display: none; } }
+
+/* 系统设置：偏好项的标签行 */
+.settings-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 4px;
 }

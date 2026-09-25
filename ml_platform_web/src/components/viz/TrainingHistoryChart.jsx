@@ -16,7 +16,7 @@
  * to so we can split cleanly.
  */
 import { useMemo } from 'react'
-import { Empty } from 'antd'
+import { Empty } from '../../ui'
 import EChart from '../EChart'
 
 // Each preset entry: which key in the dict, the display name, the axis it
@@ -24,23 +24,23 @@ import EChart from '../EChart'
 const SERIES_PRESETS = {
   classification: [
     { key: 'train_loss',   name: 'Train Loss', color: '#f97316', axis: 'loss' },
-    { key: 'val_loss',     name: 'Val Loss',   color: '#ef4444', axis: 'loss' },
-    { key: 'val_acc',      name: 'Val Acc',    color: '#10b981', axis: 'metric' },
-    { key: 'accuracy',     name: 'Accuracy',   color: '#10b981', axis: 'metric' },
-    { key: 'val_f1_macro', name: 'Val F1',     color: '#2563eb', axis: 'metric' },
-    { key: 'f1',           name: 'F1',         color: '#2563eb', axis: 'metric' },
-    { key: 'val_auc_roc',  name: 'Val AUC',    color: '#8b5cf6', axis: 'metric' },
-    { key: 'roc_auc',      name: 'AUC',        color: '#8b5cf6', axis: 'metric' },
+    { key: 'val_loss',     name: 'Val Loss',   color: '#e34d59', axis: 'loss' },
+    { key: 'val_acc',      name: 'Val Acc',    color: '#00a870', axis: 'metric' },
+    { key: 'accuracy',     name: 'Accuracy',   color: '#00a870', axis: 'metric' },
+    { key: 'val_f1_macro', name: 'Val F1',     color: '#1a8dff', axis: 'metric' },
+    { key: 'f1',           name: 'F1',         color: '#1a8dff', axis: 'metric' },
+    { key: 'val_auc_roc',  name: 'Val AUC',    color: '#8e7cff', axis: 'metric' },
+    { key: 'roc_auc',      name: 'AUC',        color: '#8e7cff', axis: 'metric' },
   ],
   regression: [
     { key: 'train_loss', name: 'Train Loss', color: '#f97316', axis: 'loss' },
-    { key: 'val_loss',   name: 'Val Loss',   color: '#ef4444', axis: 'loss' },
-    { key: 'val_rmse',   name: 'Val RMSE',   color: '#2563eb', axis: 'metric' },
-    { key: 'rmse',       name: 'RMSE',       color: '#2563eb', axis: 'metric' },
-    { key: 'val_mae',    name: 'Val MAE',    color: '#8b5cf6', axis: 'metric' },
-    { key: 'mae',        name: 'MAE',        color: '#8b5cf6', axis: 'metric' },
-    { key: 'val_r2',     name: 'Val R²',     color: '#10b981', axis: 'metric' },
-    { key: 'r2',         name: 'R²',         color: '#10b981', axis: 'metric' },
+    { key: 'val_loss',   name: 'Val Loss',   color: '#e34d59', axis: 'loss' },
+    { key: 'val_rmse',   name: 'Val RMSE',   color: '#1a8dff', axis: 'metric' },
+    { key: 'rmse',       name: 'RMSE',       color: '#1a8dff', axis: 'metric' },
+    { key: 'val_mae',    name: 'Val MAE',    color: '#8e7cff', axis: 'metric' },
+    { key: 'mae',        name: 'MAE',        color: '#8e7cff', axis: 'metric' },
+    { key: 'val_r2',     name: 'Val R²',     color: '#00a870', axis: 'metric' },
+    { key: 'r2',         name: 'R²',         color: '#00a870', axis: 'metric' },
   ],
 }
 
@@ -117,9 +117,9 @@ export default function TrainingHistoryChart({
     yAxes.push({
       type: 'value',
       name: 'Loss',
-      nameTextStyle: { fontSize: 11, color: '#ef4444' },
+      nameTextStyle: { fontSize: 11, color: '#e34d59' },
       scale: true,
-      axisLine: { show: true, lineStyle: { color: '#ef4444' } },
+      axisLine: { show: true, lineStyle: { color: '#e34d59' } },
       splitLine: { lineStyle: { type: 'dashed', opacity: 0.3 } },
     })
   }
@@ -127,9 +127,9 @@ export default function TrainingHistoryChart({
     yAxes.push({
       type: 'value',
       name: taskType === 'regression' ? '指标 / 误差' : '指标',
-      nameTextStyle: { fontSize: 11, color: '#10b981' },
+      nameTextStyle: { fontSize: 11, color: '#00a870' },
       scale: true,
-      axisLine: { show: true, lineStyle: { color: '#10b981' } },
+      axisLine: { show: true, lineStyle: { color: '#00a870' } },
       splitLine: { show: false },
       ...(taskType === 'classification' ? { min: 0, max: 1 } : {}),
     })

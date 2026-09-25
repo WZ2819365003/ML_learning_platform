@@ -14,7 +14,7 @@ import React, { useState } from 'react'
 import {
   Card, Form, Select, InputNumber, Switch, Row, Col, Tooltip, Tag, Typography,
   Space, Button,
-} from 'antd'
+} from '../../ui'
 import { InfoCircleOutlined, DownOutlined, UpOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
@@ -33,10 +33,10 @@ function ParamField({ spec, value, onChange }) {
       <span>{display_name || name}</span>
       {description && (
         <Tooltip title={description}>
-          <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 11 }} />
+          <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 11 }} />
         </Tooltip>
       )}
-      {advanced && <Tag color="default" style={{ fontSize: 10 }}>高级</Tag>}
+      {advanced && <Tag color="default">高级</Tag>}
     </Space>
   )
 
@@ -101,7 +101,7 @@ function Section({ title, specs, values, onField, cols = 2, hideAdvanced }) {
   const span = 24 / cols
   return (
     <div style={{ marginBottom: 8 }}>
-      <Text strong style={{ fontSize: 12, color: '#475569' }}>{title}</Text>
+      <Text strong style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{title}</Text>
       <Row gutter={[12, 0]} style={{ marginTop: 4 }}>
         {visible.map(s => (
           <Col key={s.name} span={span}>
@@ -151,7 +151,7 @@ export default function DLConfigPanel({
     <Space size={6}>
       <Tag color="purple" style={{ margin: 0 }}>DL</Tag>
       <span style={{ fontWeight: 600 }}>{modelSpec?.display_name || modelId}</span>
-      <code style={{ fontSize: 11, color: '#64748b' }}>{modelId}</code>
+      <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{modelId}</code>
     </Space>
   )
 
@@ -172,7 +172,7 @@ export default function DLConfigPanel({
       size="small"
       title={headerTitle}
       extra={extra}
-      style={{ marginBottom: 10, borderRadius: 8 }}
+      style={{ marginBottom: 10, borderRadius: 4 }}
       styles={{ body: { padding: '12px 14px' } }}
     >
       <Form layout="vertical" size="small">

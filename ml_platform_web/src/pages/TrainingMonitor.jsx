@@ -1,16 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react';
+import DetailHeader from '../components/layout/DetailHeader'
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import React, { useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
-  Button, Card, Descriptions, Input, Modal, Pagination,
+  Button, Card, Descriptions, Input, Pagination,
   Popconfirm, Progress, Space, Table, Tag, Typography, message,
-} from 'antd';
-import {
-  ArrowLeftOutlined, CheckOutlined, CloseOutlined,
-  DeleteOutlined, EditOutlined, EyeOutlined,
-  PlusOutlined, ReloadOutlined, StopOutlined,
-} from '@ant-design/icons';
+} from '../ui';
+import { PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
 import { dataApi, logsApi, trainingApi } from '../services/api';
 import { useLogStream } from '../hooks/useLogStream';
+import { formatDateTime } from '../utils/formatters'
 
 const { Text, Title } = Typography;
 
@@ -70,8 +69,8 @@ function EditableNameCell({ record, onSave }) {
           onPressEnter={save}
           onKeyDown={e => e.key === 'Escape' && cancel(e)}
         />
-        <Button size="small" type="text" icon={<CheckOutlined />} onClick={save} />
-        <Button size="small" type="text" icon={<CloseOutlined />} onClick={cancel} />
+        <Button size="small" onClick={save} type="link" className="table-action">保存</Button>
+        <Button size="small" onClick={cancel} type="link" className="table-action">取消</Button>
       </Space>
     );
   }
@@ -79,13 +78,7 @@ function EditableNameCell({ record, onSave }) {
   return (
     <Space size={4}>
       <Text>{record.name ?? <Text type="secondary">{record.id.slice(0, 8)}</Text>}</Text>
-      <Button
-        size="small"
-        type="text"
-        icon={<EditOutlined />}
-        onClick={startEdit}
-        style={{ opacity: 0.5 }}
-      />
+      <Button size="small" onClick={startEdit} type="link" className="table-action">重命名</Button>
     </Space>
   );
 }
@@ -98,11 +91,11 @@ function TaskListView({ navigate }) {
   const [datasetsById, setDatasetsById] = useState({});
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => { void loadDatasets(); }, []);
-  useEffect(() => { void loadPage(page); }, [page]);
+  useActiveEffect(() => { void loadDatasets(); }, []);
+  useActiveEffect(() => { void loadPage(page); }, [page]);
 
   // Auto-refresh running tasks every 5s
-  useEffect(() => {
+  useActiveEffect(() => {
     const timer = setInterval(() => {
       const hasRunning = tasks.some(t => t.status === 'RUNNING' || t.status === 'PENDING');
       if (hasRunning) void loadPage(page);
@@ -168,6 +161,7 @@ function TaskListView({ navigate }) {
       dataIndex: 'model_type',
       key: 'model_type',
       width: 130,
+      render: v => <Tag color="blue" title={v}>{v}</Tag>,
     },
     {
       title: '数据集',
@@ -208,7 +202,7 @@ function TaskListView({ navigate }) {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 160,
-      render: v => new Date(v).toLocaleString('zh-CN'),
+      render: v => formatDateTime(v),
     },
     {
       title: '操作',
@@ -217,21 +211,12 @@ function TaskListView({ navigate }) {
       render: (_, record) => {
         const s = (record.status ?? '').toUpperCase();
         return (
-          <Space size={4} onClick={e => e.stopPropagation()}>
-            <Button
-              size="small"
-              icon={<EyeOutlined />}
-              onClick={() => navigate(`/training/monitor?taskId=${record.id}`)}
-            >
+          <Space onClick={e => e.stopPropagation()} size={16} className="table-actions">
+            <Button size="small" onClick={() => navigate(`/training/monitor?taskId=${record.id}`)} type="link" className="table-action">
               查看
             </Button>
             {s === 'RUNNING' && (
-              <Button
-                size="small"
-                danger
-                icon={<StopOutlined />}
-                onClick={() => void handleStop(record.id)}
-              >
+              <Button size="small" danger onClick={() => void handleStop(record.id)} type="link" className="table-action">
                 停止
               </Button>
             )}
@@ -243,7 +228,7 @@ function TaskListView({ navigate }) {
                 okButtonProps={{ danger: true }}
                 onConfirm={() => void handleDelete(record.id)}
               >
-                <Button size="small" danger icon={<DeleteOutlined />} />
+                <Button size="small" danger type="link" className="table-action">删除</Button>
               </Popconfirm>
             )}
           </Space>
@@ -306,12 +291,14 @@ function TaskDetailView({ taskId, navigate }) {
     enabled: !!taskId,
     maxEntries: 500,
   });
+  const loadTaskRef = useRef(null);
+  const seedLogsRef = useRef(null);
 
-  useEffect(() => {
-    void loadTask();
-    void seedLogsFromRest();
+  useActiveEffect(() => {
+    void loadTaskRef.current?.();
+    void seedLogsRef.current?.();
     // Keep status/metrics polling at 3s for progress bar (logs now streamed).
-    const timer = setInterval(() => { void loadTask(); }, 3000);
+    const timer = setInterval(() => { void loadTaskRef.current?.(); }, 3000);
     return () => clearInterval(timer);
   }, [taskId]);
 
@@ -337,6 +324,9 @@ function TaskDetailView({ taskId, navigate }) {
     }
   }
 
+  loadTaskRef.current = loadTask;
+  seedLogsRef.current = seedLogsFromRest;
+
   const logText = logs.length
     ? logs.map(e => `${e.timestamp ?? ''} | ${e.level ?? 'INFO'} | ${e.message}`).join('\n')
     : '暂无日志。';
@@ -355,25 +345,11 @@ function TaskDetailView({ taskId, navigate }) {
 
   return (
     <div>
-      <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 24 }}>
-        <Space>
-          <Button
-            icon={<ArrowLeftOutlined />}
-            onClick={() => navigate('/training/monitor')}
-          >
-            返回列表
-          </Button>
-          <Title level={2} style={{ margin: 0 }}>训练任务详情</Title>
-        </Space>
-        <Space>
-          {s === 'RUNNING' && (
-            <Button danger icon={<StopOutlined />} onClick={handleStop}>停止训练</Button>
-          )}
-          <Button icon={<ReloadOutlined />} onClick={() => { void loadTask(); void seedLogsFromRest(); }}>
-            刷新
-          </Button>
-        </Space>
-      </Space>
+      <DetailHeader onBack={() => navigate('/training/monitor')} backLabel="返回训练任务"
+        title="训练任务详情" actions={<>
+          {s === 'RUNNING' && <Button danger icon={<StopOutlined />} onClick={handleStop}>停止训练</Button>}
+          <Button icon={<ReloadOutlined />} onClick={() => { void loadTask(); void seedLogsFromRest(); }}>刷新</Button>
+        </>} />
 
       {loading && <Card><Text type="secondary">正在加载…</Text></Card>}
 
@@ -395,10 +371,10 @@ function TaskDetailView({ taskId, navigate }) {
                 />
               </Descriptions.Item>
               <Descriptions.Item label="开始时间">
-                {task.started_at ? new Date(task.started_at).toLocaleString('zh-CN') : '-'}
+                {task.started_at ? formatDateTime(task.started_at) : '-'}
               </Descriptions.Item>
               <Descriptions.Item label="结束时间">
-                {task.finished_at ? new Date(task.finished_at).toLocaleString('zh-CN') : '-'}
+                {task.finished_at ? formatDateTime(task.finished_at) : '-'}
               </Descriptions.Item>
             </Descriptions>
           </Card>

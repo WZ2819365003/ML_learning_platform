@@ -101,9 +101,12 @@ def test_create_and_list_timeseries_deployments(client: TestClient):
     assert create_response.status_code == 201
     deployment = create_response.json()
     assert deployment["name"] == "TimesFM Production A"
-    assert deployment["predict_url"].endswith(
+    # 必须是网关相对路径。写死 host 会把容器自己的回环地址泄到页面上，
+    # 用户看到的就是调不通的 http://127.0.0.1:8000/...
+    assert deployment["predict_url"] == (
         f"/api/ts/deployments/{deployment['deployment_id']}/predict"
     )
+    assert "://" not in deployment["predict_url"]
 
     list_response = client.get("/api/ts/deployments")
     assert list_response.status_code == 200

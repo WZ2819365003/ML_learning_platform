@@ -1,0 +1,221 @@
+import DetailHeader from '../layout/DetailHeader'
+import { useActiveEffect } from '../../hooks/useActiveEffect'
+import React, { useCallback, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  Alert, Button, Card, Col, Descriptions, Row, Skeleton,
+  Space, Statistic, Tabs, Tag, Typography, message,
+} from '../../ui'
+import { BarChartOutlined, FileTextOutlined, LineChartOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
+
+import ResultLogPanel from './ResultLogPanel'
+import ModelExplainPanel from './ModelExplainPanel'
+import BacktestPanel from './BacktestPanel'
+import TrainingProcessPanel from './TrainingProcessPanel'
+import { getResultViewEntries } from './resultViewRegistry'
+import { dlApi, modelApi } from '../../services/api'
+import { formatDateTime, metricLabels, percentageMetricValue } from '../../utils/formatters'
+
+const { Text } = Typography
+
+const METRIC_PRIORITY = {
+  ml: {
+    classification: ['accuracy', 'f1', 'precision', 'recall', 'roc_auc'],
+    regression: ['r2', 'rmse', 'mae', 'mse'],
+  },
+  dl: {
+    classification: ['val_acc', 'val_f1_macro', 'val_precision', 'val_recall', 'val_auc_roc', 'best_val_loss'],
+    regression: ['val_r2', 'val_rmse', 'val_mae', 'val_mape', 'best_val_loss'],
+  },
+}
+
+function inferTaskType(raw, family) {
+  if (raw?.task_type === 'classification' || raw?.task_type === 'regression') return raw.task_type
+  const modelType = String(raw?.model_type || '').toLowerCase()
+  const metrics = raw?.result_metrics ?? {}
+  if (family === 'dl' && ['classification', 'regression'].includes(raw?.task_type)) return raw.task_type
+  if (modelType.includes('regress') || ['ridge', 'lasso', 'elasticnet', 'svr'].includes(modelType)) return 'regression'
+  if (['r2', 'rmse', 'mae', 'val_r2', 'val_rmse', 'val_mae'].some(key => typeof metrics[key] === 'number')) return 'regression'
+  return 'classification'
+}
+
+export function normalizeTrainConfig(raw = {}) {
+  const nested = raw?.train_config
+  const config = nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? { ...nested }
+    : {}
+  if (config.test_size == null && raw?.test_size != null) config.test_size = raw.test_size
+  if (config.epochs == null && raw?.total_epochs != null) config.epochs = raw.total_epochs
+  return config
+}
+
+function normalizeResult(raw, family, taskId) {
+  const metrics = raw?.result_metrics ?? {}
+  const taskType = inferTaskType(raw, family)
+  return {
+    id: taskId,
+    name: raw?.name || raw?.task_name || `${raw?.model_type || 'model'}_${taskId.slice(0, 8)}`,
+    modelType: raw?.model_type || '-',
+    taskType,
+    status: String(raw?.status || 'SUCCESS').toUpperCase(),
+    datasetName: raw?.dataset?.name || raw?.dataset_name || raw?.dataset_id || '-',
+    targetColumn: raw?.target_column || '-',
+    finishedAt: raw?.finished_at || raw?.updated_at || null,
+    trainConfig: normalizeTrainConfig(raw),
+    metrics,
+  }
+}
+
+function metricValue(key, value) {
+  if (typeof value !== 'number') return { value: '-', precision: undefined }
+  const percentageValue = percentageMetricValue(key, value)
+  if (percentageValue !== null) {
+    return { value: percentageValue, precision: 2, suffix: '%' }
+  }
+  return { value, precision: 4 }
+}
+
+export default function UnifiedResultDetail({ family, taskId }) {
+  const navigate = useNavigate()
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [activeTab, setActiveTab] = useState('logs')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      let raw
+      if (family === 'dl') {
+        const [status, detail] = await Promise.all([
+          dlApi.getStatus(taskId),
+          modelApi.getModelDetail(taskId),
+        ])
+        raw = { ...detail, ...status, dataset: detail?.dataset ?? status?.dataset }
+      } else {
+        raw = await modelApi.getModelDetail(taskId)
+      }
+      setResult(normalizeResult(raw, family, taskId))
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '加载模型结果失败')
+      setResult(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [family, taskId])
+
+  useActiveEffect(() => {
+    setActiveTab('logs')
+    void load()
+  }, [load])
+
+  const metricEntries = useMemo(() => {
+    if (!result) return []
+    const preferred = METRIC_PRIORITY[family]?.[result.taskType] ?? []
+    return preferred
+      .filter(key => typeof result.metrics?.[key] === 'number')
+      .slice(0, 5)
+      .map(key => [key, result.metrics[key]])
+  }, [family, result])
+
+  const tabEntries = result ? getResultViewEntries({
+    family,
+    taskType: result.taskType,
+    status: result.status,
+  }) : []
+
+  const renderers = result ? {
+    logs: (
+      <ResultLogPanel family={family} taskId={taskId} status={result.status} />
+    ),
+    trainingViz: (
+      <TrainingProcessPanel
+        family={family}
+        taskId={taskId}
+        taskType={result.taskType}
+        metrics={result.metrics}
+        trainConfig={result.trainConfig}
+      />
+    ),
+    backtest: (
+      <BacktestPanel family={family} taskId={taskId} taskType={result.taskType} />
+    ),
+    explain: (
+      <ModelExplainPanel taskId={taskId} modelType={result.modelType} />
+    ),
+  } : {}
+
+  const tabIcons = {
+    logs: <FileTextOutlined />,
+    visualization: <BarChartOutlined />,
+    backtest: <LineChartOutlined />,
+    explain: <SafetyCertificateOutlined />,
+  }
+
+  if (loading && !result) {
+    return <Card><Skeleton active paragraph={{ rows: 8 }} /></Card>
+  }
+
+  if (!result) {
+    return (
+      <Alert
+        type="error"
+        showIcon
+        message="模型结果不可用"
+        action={<Button onClick={() => navigate('/models')}>返回模型管理</Button>}
+      />
+    )
+  }
+
+  return (
+    <div>
+      <DetailHeader onBack={() => navigate('/models')} backLabel="返回模型管理"
+        title="模型训练结果" subtitle={result.name}
+        tags={<Tag color={family === 'dl' ? 'purple' : 'blue'}>{family === 'dl' ? '深度学习' : '机器学习'}</Tag>}
+        actions={<Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>刷新</Button>} />
+
+      {result.status === 'FAILED' && (
+        <Alert type="error" showIcon message="训练失败" style={{ marginBottom: 16 }} />
+      )}
+
+      <Card style={{ marginBottom: 16 }} styles={{ body: { padding: 18 } }}>
+        <Descriptions column={{ xs: 1, md: 2, xl: 4 }} size="small">
+          <Descriptions.Item label="模型">{result.modelType}</Descriptions.Item>
+          <Descriptions.Item label="任务类型">
+            {result.taskType === 'regression' ? '回归' : '分类'}
+          </Descriptions.Item>
+          <Descriptions.Item label="数据集">{result.datasetName}</Descriptions.Item>
+          <Descriptions.Item label="目标列">{result.targetColumn}</Descriptions.Item>
+          <Descriptions.Item label="完成时间">{formatDateTime(result.finishedAt)}</Descriptions.Item>
+          <Descriptions.Item label="任务 ID" span={3}><Text code>{taskId}</Text></Descriptions.Item>
+        </Descriptions>
+      </Card>
+
+      {metricEntries.length > 0 && (
+        <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+          {metricEntries.map(([key, value]) => {
+            const display = metricValue(key, value)
+            return (
+              <Col xs={12} md={8} xl={Math.max(4, Math.floor(24 / metricEntries.length))} key={key}>
+                <Card size="small">
+                  <Statistic title={metricLabels[key] ?? key} {...display} />
+                </Card>
+              </Col>
+            )
+          })}
+        </Row>
+      )}
+
+      <Card styles={{ body: { padding: '0 20px 20px' } }}>
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={tabEntries.map(entry => ({
+            key: entry.key,
+            label: <Space size={6}>{tabIcons[entry.key]}{entry.label}</Space>,
+            children: renderers[entry.renderer],
+          }))}
+        />
+      </Card>
+    </div>
+  )
+}

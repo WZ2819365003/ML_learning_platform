@@ -22,6 +22,7 @@ collapsing SHAP output to `feature_importances_`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -33,10 +34,12 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.database import DLTrainingTask
+from app.services.dl_shap_adapter import build_dl_shap_context
 from app.services.resolver import (
     TaskFacade,
     is_regressor,
-    load_and_split_data_no_stratify,
+    load_and_split_data_for_model,
     load_model,
     resolve_task_and_dataset,
 )
@@ -51,6 +54,8 @@ METHOD_PERMUTATION = "permutation"
 
 
 _TREE_MODEL_PREFIXES = ("random_forest", "xgboost", "lightgbm", "gradient_boost", "extra_trees")
+_DL_MAX_BACKGROUND = 20
+_DL_MAX_SAMPLES = 50
 
 
 def _to_f64_list(arr) -> list:
@@ -95,28 +100,37 @@ def _normalize_shap_values(shap_values):
     return sv, selected
 
 
-def _compute_tree(model, X_sample) -> tuple[np.ndarray, float | list | None]:
+def _normalize_base_value(base, selected_class_idx: int | None):
+    if hasattr(base, "tolist"):
+        try:
+            base = base.tolist()
+        except Exception:
+            return None
+    if isinstance(base, list) and selected_class_idx is not None:
+        if selected_class_idx >= len(base):
+            return None
+        base = base[selected_class_idx]
+    try:
+        return float(base) if isinstance(base, (int, float)) else base
+    except Exception:
+        return None
+
+
+def _compute_tree(
+    model, X_sample
+) -> tuple[np.ndarray, float | list | None, int | None]:
     """Tree-based SHAP — returns (sv_per_sample 2D, base_value)."""
     import shap
     explainer = shap.TreeExplainer(model)
     sv = explainer.shap_values(X_sample)
-    sv, _ = _normalize_shap_values(sv)
+    sv, selected = _normalize_shap_values(sv)
     base = getattr(explainer, "expected_value", None)
-    if hasattr(base, "tolist"):
-        try:
-            base = base.tolist()
-            if isinstance(base, list) and len(base) == 2:
-                base = float(base[1])  # positive class for binary
-        except Exception:
-            base = None
-    try:
-        base = float(base) if isinstance(base, (int, float)) else base
-    except Exception:
-        base = None
-    return sv, base
+    return sv, _normalize_base_value(base, selected), selected
 
 
-def _compute_kernel(model, X_train, X_sample, feature_names) -> tuple[np.ndarray, float | list | None]:
+def _compute_kernel(
+    model, X_train, X_sample, feature_names
+) -> tuple[np.ndarray, float | list | None, int | None]:
     """Kernel SHAP — model-agnostic, slower, needs background samples."""
     import shap
     predict_fn = getattr(model, "predict_proba", None) or model.predict
@@ -124,20 +138,9 @@ def _compute_kernel(model, X_train, X_sample, feature_names) -> tuple[np.ndarray
     background = shap.sample(bg_df, min(50, len(bg_df)))
     explainer = shap.KernelExplainer(predict_fn, background)
     sv = explainer.shap_values(X_sample, nsamples=50)
-    sv, _ = _normalize_shap_values(sv)
+    sv, selected = _normalize_shap_values(sv)
     base = getattr(explainer, "expected_value", None)
-    if hasattr(base, "tolist"):
-        try:
-            base = base.tolist()
-            if isinstance(base, list) and len(base) == 2:
-                base = float(base[1])
-        except Exception:
-            base = None
-    try:
-        base = float(base) if isinstance(base, (int, float)) else base
-    except Exception:
-        base = None
-    return sv, base
+    return sv, _normalize_base_value(base, selected), selected
 
 
 def _compute_permutation(model, X_sample, y_sample, feature_names) -> np.ndarray:
@@ -264,13 +267,74 @@ async def compute_shap_summary(
     `task_id` may be a legacy TrainingTask id, a V3 ExperimentRun id, a
     PlatformTask id, or an orphan — `resolver.resolve_task_and_dataset`
     handles the branching.
+
+    Only the task/dataset lookup runs on the event loop (it needs the async
+    DB session). Everything after that — model loading, data prep, and the
+    SHAP computation itself — is synchronous, CPU-bound scikit-learn/shap
+    code with no `await` in it, so it runs in a worker thread via
+    ``asyncio.to_thread``. Without this, one slow explanation (e.g.
+    TreeExplainer on a deep, unbounded-depth RandomForest — its cost scales
+    roughly quadratically with tree depth) blocks the *entire* event loop:
+    every other request, including the container health check, hangs for as
+    long as the computation runs. That is what "the whole backend crashed"
+    actually was on 2026-08-25 — a 6-minute SHAP call with nothing in this
+    file ever yielding control back to the loop.
     """
     task, dataset = await resolve_task_and_dataset(task_id, db)
+    return await asyncio.to_thread(_compute_shap_summary_sync, task_id, task, dataset, max_samples)
 
-    X_train, X_test, y_train, y_test, feature_names = load_and_split_data_no_stratify(
-        dataset.file_path, task.target_column, task.test_size
+
+def _compute_shap_summary_sync(
+    task_id: str,
+    task: Any,
+    dataset: Any,
+    max_samples: int,
+) -> dict[str, Any]:
+    """Synchronous body of ``compute_shap_summary`` — safe to run in a thread."""
+    if isinstance(task, DLTrainingTask):
+        context = build_dl_shap_context(
+            task,
+            dataset,
+            max_background=_DL_MAX_BACKGROUND,
+            max_samples=min(max(1, int(max_samples)), _DL_MAX_SAMPLES),
+        )
+        sv_per_sample, base_value, selected_class_idx = _compute_kernel(
+            context.model,
+            context.X_background,
+            context.X_sample,
+            context.feature_names,
+        )
+        mean_abs_shap = np.abs(
+            np.asarray(sv_per_sample, dtype=np.float64)
+        ).mean(axis=0)
+        payload = _build_payload(
+            method=METHOD_KERNEL,
+            feature_names=context.feature_names,
+            mean_abs_shap=mean_abs_shap,
+            sv_per_sample=sv_per_sample,
+            feature_values=context.X_sample,
+            base_value=base_value,
+            sample_count=len(context.X_sample),
+            class_index=selected_class_idx,
+            task_kind=context.task_kind,
+        )
+        payload["task_id"] = task.id
+        return payload
+
+    loaded_model = load_model(task.model_path)
+    prepared = load_and_split_data_for_model(
+        dataset.file_path,
+        task.target_column,
+        task.test_size,
+        loaded_model,
+        stratified=False,
     )
-    model = load_model(task.model_path)
+    X_train = prepared["X_train"]
+    X_test = prepared["X_test"]
+    y_train = prepared["y_train"]
+    y_test = prepared["y_test"]
+    feature_names = prepared["feature_names"]
+    model = prepared["model"]
 
     # Subsample X_test for SHAP — bounded for performance
     if len(X_test) > max_samples:
@@ -289,11 +353,14 @@ async def compute_shap_summary(
     sv_per_sample = None
     base_value = None
     mean_abs_shap = None
+    selected_class_idx = None
 
     # ---- Ladder rung 1: TreeExplainer -------------------------------------
     if _is_tree_model(model_type, model):
         try:
-            sv_per_sample, base_value = _compute_tree(model, X_sample)
+            sv_per_sample, base_value, selected_class_idx = _compute_tree(
+                model, X_sample
+            )
             mean_abs_shap = np.abs(np.asarray(sv_per_sample, dtype=np.float64)).mean(axis=0)
             method = METHOD_TREE
         except Exception as exc:
@@ -302,7 +369,9 @@ async def compute_shap_summary(
     # ---- Ladder rung 2: KernelExplainer -----------------------------------
     if method is None:
         try:
-            sv_per_sample, base_value = _compute_kernel(model, X_train, X_sample, feature_names)
+            sv_per_sample, base_value, selected_class_idx = _compute_kernel(
+                model, X_train, X_sample, feature_names
+            )
             mean_abs_shap = np.abs(np.asarray(sv_per_sample, dtype=np.float64)).mean(axis=0)
             method = METHOD_KERNEL
         except Exception as exc:
@@ -327,7 +396,7 @@ async def compute_shap_summary(
         feature_values=np.asarray(X_sample, dtype=np.float64) if sv_per_sample is not None else None,
         base_value=base_value,
         sample_count=len(X_sample),
-        class_index=1 if task_kind == "classification" and sv_per_sample is not None else None,
+        class_index=selected_class_idx,
         task_kind=task_kind,
     )
     payload["task_id"] = getattr(task, "id", task_id)

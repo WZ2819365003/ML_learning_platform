@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import current_username_from_authorization, owner_scope_username
 from app.models.database import get_db
 from app.services import modeling_task_service
 
@@ -29,6 +30,7 @@ async def list_all_runs(
     task_type: str | None = Query(None, description="classification | regression"),
     limit: int = Query(500, ge=1, le=2000),
     db: AsyncSession = Depends(get_db),
+    username: str = Depends(current_username_from_authorization),
 ) -> dict[str, Any]:
     """Flat cross-task run listing.
 
@@ -48,4 +50,5 @@ async def list_all_runs(
         strategy_type=strategy_type,
         task_type=task_type,
         limit=limit,
+        owner_username=owner_scope_username(username),
     )

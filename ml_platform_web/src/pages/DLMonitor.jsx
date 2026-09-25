@@ -1,16 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
+import DetailHeader from '../components/layout/DetailHeader'
+import { useTabActive } from '../navigation/TabContext'
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Badge, Button, Card, Col, Pagination, Popconfirm, Progress,
   Row, Space, Table, Tag, Typography, message,
-} from 'antd';
-import {
-  ArrowLeftOutlined, CheckOutlined, CloseOutlined,
-  DeleteOutlined, EditOutlined, EyeOutlined,
-  PlusOutlined, ReloadOutlined, StopOutlined, TrophyOutlined,
-} from '@ant-design/icons';
+} from '../ui';
+import { PlusOutlined, ReloadOutlined, StopOutlined, TrophyOutlined } from '@ant-design/icons'
 import EChart from '../components/EChart';
-import { dlApi } from '../services/api';
+import { dlApi, withWsToken } from '../services/api';
+import { formatDateTime, parseServerDate } from '../utils/formatters'
+import { buildResultsUrl } from '../utils/resultRoutes'
 
 const { Text, Title } = Typography;
 
@@ -72,15 +73,15 @@ function EditableNameCell({ record, onSave }) {
           size="small"
           value={val}
           maxLength={100}
-          style={{ width: 160, border: '1px solid #d9d9d9', borderRadius: 4, padding: '2px 8px' }}
+          style={{ width: 160, border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px' }}
           onChange={e => setVal(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter') save(e);
             if (e.key === 'Escape') cancel(e);
           }}
         />
-        <Button size="small" type="text" icon={<CheckOutlined />} onClick={save} />
-        <Button size="small" type="text" icon={<CloseOutlined />} onClick={cancel} />
+        <Button size="small" onClick={save} type="link" className="table-action">保存</Button>
+        <Button size="small" onClick={cancel} type="link" className="table-action">取消</Button>
       </Space>
     );
   }
@@ -88,13 +89,7 @@ function EditableNameCell({ record, onSave }) {
   return (
     <Space size={4}>
       <Text>{record.name ?? <Text type="secondary">{record.id.slice(0, 8)}</Text>}</Text>
-      <Button
-        size="small"
-        type="text"
-        icon={<EditOutlined />}
-        onClick={startEdit}
-        style={{ opacity: 0.5 }}
-      />
+      <Button size="small" onClick={startEdit} type="link" className="table-action">重命名</Button>
     </Space>
   );
 }
@@ -210,9 +205,9 @@ function DLTaskListView({ navigate }) {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => { void loadPage(page); }, [page]);
+  useActiveEffect(() => { void loadPage(page); }, [page]);
 
-  useEffect(() => {
+  useActiveEffect(() => {
     const timer = setInterval(() => {
       const hasRunning = tasks.some(t => t.status === 'RUNNING' || t.status === 'PENDING');
       if (hasRunning) void loadPage(page);
@@ -264,8 +259,10 @@ function DLTaskListView({ navigate }) {
       key: 'name',
       render: (_, record) => <EditableNameCell record={record} onSave={handleRename} />,
     },
-    { title: '架构', dataIndex: 'model_type', key: 'model_type', width: 120 },
-    { title: '任务类型', dataIndex: 'task_type', key: 'task_type', width: 100 },
+    { title: '架构', dataIndex: 'model_type', key: 'model_type', width: 120,
+      render: v => <Tag color="purple" title={v}>{v}</Tag> },
+    { title: '任务类型', dataIndex: 'task_type', key: 'task_type', width: 100,
+      render: v => <Tag color={v === 'regression' ? 'geekblue' : 'cyan'} title={v}>{({ regression: '回归', classification: '分类' })[v] ?? v}</Tag> },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 90,
       render: v => {
@@ -289,34 +286,24 @@ function DLTaskListView({ navigate }) {
     },
     {
       title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 160,
-      render: v => new Date(v).toLocaleString('zh-CN'),
+      render: v => formatDateTime(v),
     },
     {
       title: '操作', key: 'actions', width: 160,
       render: (_, record) => {
         const s = (record.status ?? '').toUpperCase();
         return (
-          <Space size={4} onClick={e => e.stopPropagation()}>
-            <Button
-              size="small"
-              icon={<EyeOutlined />}
-              onClick={() => navigate(`/dl/monitor?taskId=${record.id}`)}
-            >
+          <Space onClick={e => e.stopPropagation()} size={16} className="table-actions">
+            <Button size="small" onClick={() => navigate(`/dl/monitor?taskId=${record.id}`)} type="link" className="table-action">
               查看
             </Button>
             {s === 'SUCCESS' && (
-              <Button
-                size="small"
-                type="primary"
-                icon={<TrophyOutlined />}
-                onClick={() => navigate(`/dl/results?taskId=${record.id}`)}
-              >
+              <Button size="small" onClick={() => navigate(buildResultsUrl({ family: 'dl', taskId: record.id }))} type="link" className="table-action">
                 结果
               </Button>
             )}
             {s === 'RUNNING' && (
-              <Button size="small" danger icon={<StopOutlined />}
-                onClick={() => void handleStop(record.id)}>停止</Button>
+              <Button size="small" danger onClick={() => void handleStop(record.id)} type="link" className="table-action">停止</Button>
             )}
             {s !== 'RUNNING' && (
               <Popconfirm
@@ -326,7 +313,7 @@ function DLTaskListView({ navigate }) {
                 okButtonProps={{ danger: true }}
                 onConfirm={() => void handleDelete(record.id)}
               >
-                <Button size="small" danger icon={<DeleteOutlined />} />
+                <Button size="small" danger type="link" className="table-action">删除</Button>
               </Popconfirm>
             )}
           </Space>
@@ -379,6 +366,13 @@ const EPOCH_PAGE_SIZE = 10;
 
 // ── Detail view ───────────────────────────────────────────────────────────────
 function DLTaskDetailView({ taskId, navigate }) {
+  const active = useTabActive();
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  useEffect(() => {
+    activeRef.current = active;
+    return () => { activeRef.current = false; };
+  }, [active]);
   const [taskInfo, setTaskInfo] = useState(null);
   const [lossHistory, setLossHistory] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);
@@ -389,11 +383,14 @@ function DLTaskDetailView({ taskId, navigate }) {
   const logEndRef = useRef(null);
   const wsRef = useRef(null);
   const logWsRef = useRef(null);
-  const wsBase = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8000`;
+  const loadStatusRef = useRef(null);
+  const loadLogsRef = useRef(null);
+  const wsBase = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
+  const monitoredStatus = (taskInfo?.status ?? '').toUpperCase();
 
-  useEffect(() => {
-    void loadStatus();
-    void loadLogs();
+  useActiveEffect(() => {
+    void loadStatusRef.current?.();
+    void loadLogsRef.current?.();
     return () => {
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
       if (logWsRef.current) { logWsRef.current.close(); logWsRef.current = null; }
@@ -401,10 +398,8 @@ function DLTaskDetailView({ taskId, navigate }) {
   }, [taskId]);
 
   // Heartbeat: poll logs every 4 s while training is running (catches missed WS messages)
-  useEffect(() => {
-    if (!taskInfo) return;
-    const s = (taskInfo.status ?? '').toUpperCase();
-    if (s !== 'RUNNING' && s !== 'PENDING') return;
+  useActiveEffect(() => {
+    if (monitoredStatus !== 'RUNNING' && monitoredStatus !== 'PENDING') return;
     const timer = setInterval(async () => {
       try {
         const res = await dlApi.getLogs(taskId, { page: 1, page_size: 1000 });
@@ -413,10 +408,10 @@ function DLTaskDetailView({ taskId, navigate }) {
       } catch { /* ignore */ }
     }, 4000);
     return () => clearInterval(timer);
-  }, [taskInfo?.status, taskId]);
+  }, [monitoredStatus, taskId]);
 
   // Auto-scroll log panel when new entries arrive
-  useEffect(() => {
+  useActiveEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logEntries]);
 
@@ -470,8 +465,8 @@ function DLTaskDetailView({ taskId, navigate }) {
   }
 
   function openWebSocket() {
-    if (wsRef.current) return;
-    const ws = new WebSocket(`${wsBase}/api/dl/ws/${taskId}`);
+    if (!activeRef.current || wsRef.current) return;
+    const ws = new WebSocket(withWsToken(`${wsBase}/api/dl/ws/${taskId}`));
     wsRef.current = ws;
     ws.onopen = () => setWsConnected(true);
     ws.onmessage = (event) => {
@@ -509,8 +504,8 @@ function DLTaskDetailView({ taskId, navigate }) {
   }
 
   function openLogWebSocket() {
-    if (logWsRef.current) return;
-    const ws = new WebSocket(`${wsBase}/ws/logs/${taskId}`);
+    if (!activeRef.current || logWsRef.current) return;
+    const ws = new WebSocket(withWsToken(`${wsBase}/ws/logs/${taskId}`));
     logWsRef.current = ws;
     ws.onmessage = (event) => {
       try {
@@ -536,6 +531,9 @@ function DLTaskDetailView({ taskId, navigate }) {
     };
   }
 
+  loadStatusRef.current = loadStatus;
+  loadLogsRef.current = loadLogs;
+
   async function handleStop() {
     setStopping(true);
     try {
@@ -549,7 +547,7 @@ function DLTaskDetailView({ taskId, navigate }) {
     }
   }
 
-  const status = (taskInfo?.status ?? 'PENDING').toUpperCase();
+  const status = monitoredStatus || 'PENDING';
   const isRunning = status === 'RUNNING';
   const taskType = taskInfo?.task_type ?? 'auto';
   // Epoch table: all epochs descending, client-side pagination
@@ -558,32 +556,13 @@ function DLTaskDetailView({ taskId, navigate }) {
 
   return (
     <div>
-      <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 24 }}>
-        <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/dl/monitor')}>
-            返回列表
-          </Button>
-          <Title level={2} style={{ margin: 0 }}>深度学习训练详情</Title>
-        </Space>
-        <Space>
-          {wsConnected && <Badge status="processing" text="WebSocket 已连接" />}
-          {!wsConnected && <Badge status="default" text="未连接" />}
-          {taskInfo?.status === 'SUCCESS' && (
-            <Button
-              icon={<TrophyOutlined />}
-              type="primary"
-              onClick={() => navigate(`/dl/results?taskId=${taskId}`)}
-            >
-              查看结果
-            </Button>
-          )}
-          {isRunning && (
-            <Button danger icon={<StopOutlined />} loading={stopping} onClick={handleStop}>
-              停止训练
-            </Button>
-          )}
-        </Space>
-      </Space>
+      <DetailHeader onBack={() => navigate('/dl/monitor')} backLabel="返回深度学习任务"
+        title="深度学习训练详情" actions={<>
+          <Badge status={wsConnected ? 'processing' : 'default'} text={wsConnected ? 'WebSocket 已连接' : '未连接'} />
+          {taskInfo?.status === 'SUCCESS' && <Button icon={<TrophyOutlined />} type="primary"
+            onClick={() => navigate(buildResultsUrl({ family: 'dl', taskId }))}>查看结果</Button>}
+          {isRunning && <Button danger icon={<StopOutlined />} loading={stopping} onClick={handleStop}>停止训练</Button>}
+        </>} />
 
       <Card style={{ marginBottom: 24 }}>
         {taskInfo ? (
@@ -684,15 +663,15 @@ function DLTaskDetailView({ taskId, navigate }) {
           style={{
             height: 300,
             overflowY: 'auto',
-            background: '#0f172a',
-            borderRadius: 8,
+            background: 'var(--code-bg)',
+            borderRadius: 4,
             padding: 12,
             fontFamily: 'monospace',
             fontSize: 12,
           }}
         >
           {logEntries.length === 0 ? (
-            <Text style={{ color: '#64748b' }}>
+            <Text style={{ color: 'var(--text-secondary)' }}>
               暂无日志。训练开始后日志将在这里显示。
             </Text>
           ) : (
@@ -701,13 +680,13 @@ function DLTaskDetailView({ taskId, navigate }) {
                 : entry.level === 'WARN' ? '#fbbf24'
                 : '#86efac';
               const ts = entry.created_at
-                ? new Date(entry.created_at).toLocaleTimeString('zh-CN')
+                ? (parseServerDate(entry.created_at)?.toLocaleTimeString('zh-CN') ?? '')
                 : '';
               return (
                 <div key={i} data-testid="dl-log-entry" style={{ marginBottom: 2 }}>
-                  <span style={{ color: '#64748b' }}>{ts} </span>
+                  <span style={{ color: 'var(--text-secondary)' }}>{ts} </span>
                   <span style={{ color }}>[{entry.level}] </span>
-                  <span style={{ color: '#e2e8f0' }}>{entry.message}</span>
+                  <span style={{ color: 'var(--code-text)' }}>{entry.message}</span>
                   {entry.extra && (
                     <span style={{ color: '#93c5fd' }}> | {formatLogExtra(entry.extra)}</span>
                   )}

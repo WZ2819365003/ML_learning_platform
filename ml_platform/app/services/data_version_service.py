@@ -58,17 +58,28 @@ def _serialize_version(v: DatasetVersion) -> dict[str, Any]:
     }
 
 
-async def _get_dataset_or_404(dataset_id: str, db: AsyncSession) -> Dataset:
-    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+async def _get_dataset_or_404(
+    dataset_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> Dataset:
+    stmt = select(Dataset).where(Dataset.id == dataset_id)
+    if owner_username:
+        stmt = stmt.where(Dataset.owner_username == owner_username)
+    result = await db.execute(stmt)
     ds = result.scalar_one_or_none()
     if ds is None:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id!r} not found")
     return ds
 
 
-async def list_versions(dataset_id: str, db: AsyncSession) -> dict[str, Any]:
+async def list_versions(
+    dataset_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
     """List all versions for a dataset, ordered by version number descending."""
-    await _get_dataset_or_404(dataset_id, db)
+    await _get_dataset_or_404(dataset_id, db, owner_username=owner_username)
 
     rows = await db.execute(
         select(DatasetVersion)
@@ -94,6 +105,7 @@ async def create_version(
     dataset_id: str,
     db: AsyncSession,
     description: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """
     Snapshot the current dataset as a new version.
@@ -104,7 +116,7 @@ async def create_version(
     """
     from app.config import get_settings
 
-    ds = await _get_dataset_or_404(dataset_id, db)
+    ds = await _get_dataset_or_404(dataset_id, db, owner_username=owner_username)
 
     # Determine next version number
     max_result = await db.execute(
@@ -200,7 +212,13 @@ async def create_version(
     return _serialize_version(dv)
 
 
-async def get_version(dataset_id: str, version_id: str, db: AsyncSession) -> dict[str, Any]:
+async def get_version(
+    dataset_id: str,
+    version_id: str,
+    db: AsyncSession,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    await _get_dataset_or_404(dataset_id, db, owner_username=owner_username)
     result = await db.execute(
         select(DatasetVersion).where(
             DatasetVersion.id == version_id,

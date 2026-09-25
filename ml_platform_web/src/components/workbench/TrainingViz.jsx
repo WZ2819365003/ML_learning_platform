@@ -17,14 +17,14 @@
  *
  *  - Each chart is in its own Card with a uniform 16-px gutter and a
  *    360-px canvas so the drawer stays readable.
- *  - Missing data renders an <Empty /> placeholder (endpoints return 4xx
- *    for non-applicable model types — we swallow errors silently).
+ *  - Missing data renders an <Empty /> placeholder while endpoint failures
+ *    remain visible in a consolidated error summary.
  *  - A single 刷新 button re-runs every query in parallel.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card, Row, Col, Empty, Spin, Button, Space, Tag, Tooltip, Alert, Typography,
-} from 'antd'
+} from '../../ui'
 import {
   ReloadOutlined,
   HeatMapOutlined,
@@ -35,7 +35,9 @@ import {
   InfoCircleOutlined,
 } from '@ant-design/icons'
 import EChart from '../EChart'
-import { vizApi } from '../../services/api'
+import DLDiagnostics from '../viz/DLDiagnostics'
+import { classifyVizUnavailable } from '../viz/vizAvailability'
+import { deriveRegressionViz, getVizEntries } from '../viz/vizRegistry'
 
 const { Text } = Typography
 
@@ -46,19 +48,35 @@ const { Text } = Typography
 function inferTaskType(modelType) {
   if (!modelType) return 'classification'
   const m = String(modelType).toLowerCase()
-  if (m.includes('regress') || m.endsWith('regressor')) return 'regression'
+  if (m.includes('regress') || m.endsWith('regressor') || [
+    'ridge', 'lasso', 'elasticnet', 'svr', 'mlp_regressor',
+  ].includes(m)) return 'regression'
   return 'classification'
 }
 
-function safeFetch(promise) {
-  return promise.then((v) => v).catch(() => null)
+// eslint-disable-next-line react-refresh/only-export-components
+export function settleVizRequest(label, promise, key = null) {
+  return promise
+    .then((data) => key
+      ? ({ data, error: null, unavailable: null })
+      : ({ data, error: null }))
+    .catch((error) => {
+      const unavailable = key ? classifyVizUnavailable(key, error) : null
+      const result = {
+        data: null,
+        error: unavailable
+          ? null
+          : `${label}：${error?.response?.data?.detail || error?.message || '加载失败'}`,
+      }
+      return key ? { ...result, unavailable } : result
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ECharts option builders
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildConfusionMatrixOption(cm) {
+export function buildConfusionMatrixOption(cm) {
   if (!cm?.matrix || !cm?.labels) return null
   const max = Math.max(...cm.matrix.flat())
   return {
@@ -76,23 +94,23 @@ function buildConfusionMatrixOption(cm) {
     visualMap: {
       min: 0, max: max || 1, calculable: true,
       orient: 'horizontal', left: 'center', bottom: 4,
-      inRange: { color: ['#e0f2fe', '#2563eb', '#1e3a8a'] },
+      inRange: { color: ['#e0f2fe', '#1a8dff', '#1e3a8a'] },
     },
     series: [{
       type: 'heatmap',
       data: cm.matrix.flatMap((row, ri) => row.map((v, ci) => [ci, ri, v])),
-      label: { show: true, color: '#0f172a' },
+      label: { show: true, color: 'var(--text-primary)' },
       emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } },
     }],
   }
 }
 
-function buildRocCurveOption(roc) {
+export function buildRocCurveOption(roc) {
   if (!roc) return null
   const baseline = {
     name: '随机基线', type: 'line',
     data: [[0, 0], [1, 1]],
-    lineStyle: { type: 'dashed', color: '#94a3b8' }, symbol: 'none',
+    lineStyle: { type: 'dashed', color: 'var(--text-muted)' }, symbol: 'none',
     tooltip: { show: false },
   }
   const curves = roc.multiclass
@@ -105,7 +123,7 @@ function buildRocCurveOption(roc) {
         name: `ROC (AUC ${Number(roc.auc).toFixed(3)})`,
         type: 'line', smooth: true, showSymbol: false,
         areaStyle: { color: 'rgba(37,99,235,0.12)' },
-        lineStyle: { color: '#2563eb', width: 2 },
+        lineStyle: { color: '#1a8dff', width: 2 },
         data: (roc.fpr || []).map((v, i) => [v, roc.tpr[i]]),
       }]
   return {
@@ -167,7 +185,7 @@ function buildLearningCurveOption(lc) {
       type: 'line', smooth: true,
       data: lc.steps.map((s) => s.metrics?.[k] ?? null),
       lineStyle: { width: 2 },
-      itemStyle: { color: ['#2563eb', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'][i % 5] },
+      itemStyle: { color: ['#1a8dff', '#00a870', '#ed7b2f', '#e34d59', '#8e7cff'][i % 5] },
     })),
   }
 }
@@ -184,7 +202,7 @@ function buildResidualOption(res) {
     xAxis: { type: 'value', name: '预测值', nameGap: 24, nameLocation: 'middle' },
     yAxis: {
       type: 'value', name: '残差',
-      axisLine: { lineStyle: { color: '#94a3b8' } },
+      axisLine: { lineStyle: { color: 'var(--text-muted)' } },
     },
     series: [
       {
@@ -196,7 +214,7 @@ function buildResidualOption(res) {
         // y=0 reference line
         type: 'line', markLine: {
           silent: true, symbol: 'none',
-          lineStyle: { color: '#ef4444', type: 'dashed' },
+          lineStyle: { color: '#e34d59', type: 'dashed' },
           data: [{ yAxis: 0 }],
         },
       },
@@ -205,7 +223,7 @@ function buildResidualOption(res) {
       type: 'text', right: 24, top: 12,
       style: {
         text: `均值=${res.mean_residual} · 标准差=${res.std_residual}`,
-        fontSize: 11, fill: '#64748b',
+        fontSize: 11, fill: 'var(--text-secondary)',
       },
     }],
   }
@@ -234,7 +252,7 @@ function buildPredVsActualOption(pva) {
       {
         type: 'line', showSymbol: false,
         data: [[lo, lo], [hi, hi]],
-        lineStyle: { color: '#ef4444', type: 'dashed' },
+        lineStyle: { color: '#e34d59', type: 'dashed' },
         tooltip: { show: false },
       },
     ],
@@ -257,12 +275,12 @@ function VizCard({ icon, title, hint, option, height = 320, empty = '暂无数�
           <Text strong style={{ fontSize: 13 }}>{title}</Text>
           {hint && (
             <Tooltip title={hint}>
-              <InfoCircleOutlined style={{ color: '#94a3b8', fontSize: 12 }} />
+              <InfoCircleOutlined style={{ color: 'var(--text-muted)', fontSize: 12 }} />
             </Tooltip>
           )}
         </Space>
       }
-      style={{ background: '#ffffff', boxShadow: '0 1px 3px rgba(15,23,42,0.06)' }}
+      style={{ background: 'var(--surface-0)', boxShadow: '0 1px 3px rgba(15,23,42,0.06)' }}
     >
       {option ? (
         <EChart option={option} style={{ height }} />
@@ -279,43 +297,56 @@ function VizCard({ icon, title, hint, option, height = 320, empty = '暂无数�
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
+export default function TrainingViz({
+  trainingTaskId,
+  modelType,
+  taskStatus,
+  family,
+  taskType,
+  history,
+  metrics,
+}) {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState({
     cm: null, roc: null, fi: null, lc: null, res: null, pva: null,
   })
   const [error, setError] = useState(null)
 
-  const taskType = inferTaskType(modelType)
+  const resolvedTaskType = taskType === 'regression' || taskType === 'classification'
+    ? taskType
+    : inferTaskType(modelType)
+  const isDl = family === 'dl'
 
   const reload = useCallback(async () => {
-    if (!trainingTaskId) return
+    if (!trainingTaskId || isDl) return
     setLoading(true)
     setError(null)
     try {
-      if (taskType === 'classification') {
-        const [cm, roc, fi, lc] = await Promise.all([
-          safeFetch(vizApi.getConfusionMatrix(trainingTaskId)),
-          safeFetch(vizApi.getRocCurve(trainingTaskId)),
-          safeFetch(vizApi.getFeatureImportance(trainingTaskId)),
-          safeFetch(vizApi.getLearningCurve(trainingTaskId)),
-        ])
-        setData({ cm, roc, fi, lc, res: null, pva: null })
-      } else {
-        const [res, pva, fi, lc] = await Promise.all([
-          safeFetch(vizApi.getResidualPlot(trainingTaskId)),
-          safeFetch(vizApi.getPredictedVsActual(trainingTaskId)),
-          safeFetch(vizApi.getFeatureImportance(trainingTaskId)),
-          safeFetch(vizApi.getLearningCurve(trainingTaskId)),
-        ])
-        setData({ cm: null, roc: null, fi, lc, res, pva })
-      }
+      const entries = getVizEntries({
+        taskType: resolvedTaskType,
+        family: 'ml',
+        surface: 'workbench',
+      })
+      const results = await Promise.all(entries.map((entry) =>
+        settleVizRequest(entry.title, entry.fetch(trainingTaskId), entry.key)))
+      const payloads = Object.fromEntries(entries.map((entry, index) => [entry.key, results[index].data]))
+      const derived = deriveRegressionViz(payloads.predictedVsActual)
+
+      setData({
+        cm: payloads.confusionMatrix ?? null,
+        roc: payloads.rocCurve ?? null,
+        fi: payloads.featureImportance ?? null,
+        lc: payloads.learningCurve ?? null,
+        res: derived.residualPlot,
+        pva: payloads.predictedVsActual ?? null,
+      })
+      setError(results.map((result) => result.error).filter(Boolean).join('；') || null)
     } catch (e) {
       setError(e?.message || '加载训练可视化失败')
     } finally {
       setLoading(false)
     }
-  }, [trainingTaskId, taskType])
+  }, [isDl, resolvedTaskType, trainingTaskId])
 
   useEffect(() => { void reload() }, [reload])
 
@@ -334,13 +365,41 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
 
   const notReady = taskStatus && !['SUCCESS', 'FAILED'].includes(taskStatus)
 
+  if (isDl) {
+    return (
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Space size={8}>
+            <Tag color={resolvedTaskType === 'classification' ? 'blue' : 'purple'}>
+              {resolvedTaskType === 'classification' ? '分类' : '回归'}
+            </Tag>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              深度学习模型 · {modelType || '未知'}
+            </Text>
+          </Space>
+        </Space>
+        {notReady && (
+          <Alert
+            type="info" showIcon
+            message="训练尚在进行中"
+            description="训练历史会随新的 Epoch 指标更新。"
+          />
+        )}
+        <DLDiagnostics
+          metrics={metrics || { history }}
+          taskType={resolvedTaskType}
+        />
+      </Space>
+    )
+  }
+
   return (
     <Spin spinning={loading}>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <Space size={8}>
-            <Tag color={taskType === 'classification' ? 'blue' : 'purple'}>
-              {taskType === 'classification' ? '分类' : '回归'}
+            <Tag color={resolvedTaskType === 'classification' ? 'blue' : 'purple'}>
+              {resolvedTaskType === 'classification' ? '分类' : '回归'}
             </Tag>
             <Text type="secondary" style={{ fontSize: 12 }}>
               模型 · {modelType || '未知'} · TrainingTask #{String(trainingTaskId).slice(0, 8)}
@@ -362,11 +421,11 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
 
         {/* Row 1 — 最核心的性能诊断 */}
         <Row gutter={[12, 12]}>
-          {taskType === 'classification' ? (
+          {resolvedTaskType === 'classification' ? (
             <>
               <Col span={24} xl={12}>
                 <VizCard
-                  icon={<HeatMapOutlined style={{ color: '#2563eb' }} />}
+                  icon={<HeatMapOutlined style={{ color: '#1a8dff' }} />}
                   title="混淆矩阵"
                   hint="真实类别 × 预测类别的计数。对角线越深越好；非对角线透露主要误分类方向。"
                   option={options.cm}
@@ -375,7 +434,7 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
               </Col>
               <Col span={24} xl={12}>
                 <VizCard
-                  icon={<LineChartOutlined style={{ color: '#10b981' }} />}
+                  icon={<LineChartOutlined style={{ color: '#00a870' }} />}
                   title="学习曲线 (交叉验证)"
                   hint="每折的评估指标走势。各折差异大 = 方差高，指标随折上升 = 数据顺序敏感。"
                   option={options.lc}
@@ -387,7 +446,7 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
             <>
               <Col span={24} xl={12}>
                 <VizCard
-                  icon={<DotChartOutlined style={{ color: '#2563eb' }} />}
+                  icon={<DotChartOutlined style={{ color: '#1a8dff' }} />}
                   title="残差图"
                   hint="残差 = 真实值 − 预测值。理想情况下围绕 0 线均匀散布，出现明显模式（漏斗 / 曲线）说明模型欠拟合。"
                   option={options.res}
@@ -396,7 +455,7 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
               </Col>
               <Col span={24} xl={12}>
                 <VizCard
-                  icon={<LineChartOutlined style={{ color: '#10b981' }} />}
+                  icon={<LineChartOutlined style={{ color: '#00a870' }} />}
                   title="学习曲线 (交叉验证)"
                   hint="每折的 R² / RMSE / MAE 走势。"
                   option={options.lc}
@@ -409,10 +468,10 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
 
         {/* Row 2 — 细节图 */}
         <Row gutter={[12, 12]}>
-          {taskType === 'classification' ? (
+          {resolvedTaskType === 'classification' ? (
             <Col span={24} xl={12}>
               <VizCard
-                icon={<RadarChartOutlined style={{ color: '#f59e0b' }} />}
+                icon={<RadarChartOutlined style={{ color: '#ed7b2f' }} />}
                 title="ROC 曲线"
                 hint="横轴 FPR 纵轴 TPR。曲线越贴近左上角越好，AUC ≥ 0.8 为可用模型。"
                 option={options.roc}
@@ -422,7 +481,7 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
           ) : (
             <Col span={24} xl={12}>
               <VizCard
-                icon={<DotChartOutlined style={{ color: '#f59e0b' }} />}
+                icon={<DotChartOutlined style={{ color: '#ed7b2f' }} />}
                 title="预测 vs 真实"
                 hint="散点越贴近 y=x 虚线越好。偏离可以显示模型的系统性高估或低估。"
                 option={options.pva}
@@ -431,15 +490,17 @@ export default function TrainingViz({ trainingTaskId, modelType, taskStatus }) {
             </Col>
           )}
 
-          <Col span={24} xl={12}>
-            <VizCard
-              icon={<BarChartOutlined style={{ color: '#8b5cf6' }} />}
-              title="特征重要度 Top-10"
-              hint="模型自带的 feature_importances_ / coef_。越靠上贡献越大，为特征选择提供参考。"
-              option={options.fi}
-              empty="该模型不暴露特征重要度（如 kNN、SVM 默认内核）"
-            />
-          </Col>
+
+          {data.fi && (
+            <Col span={24} xl={12}>
+              <VizCard
+                icon={<BarChartOutlined style={{ color: '#8e7cff' }} />}
+                title="特征重要度 Top-10"
+                hint="模型自带的 feature_importances_ / coef_。越靠上贡献越大，为特征选择提供参考。"
+                option={options.fi}
+              />
+            </Col>
+          )}
         </Row>
       </Space>
     </Spin>

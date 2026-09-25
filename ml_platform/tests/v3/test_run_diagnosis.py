@@ -96,16 +96,16 @@ def test_failure_ignored_when_no_error_logs():
 # ---------------------------------------------------------------------------
 
 def test_peer_rank_computed_from_siblings():
-    run = _make_run({"accuracy": 0.95}, run_id="r1")
+    run = _make_run({"accuracy": 0.99, "cv_avg_accuracy": 0.85}, run_id="r1")
     siblings = [
-        {"id": "r0", "status": "SUCCESS", "metrics": {"accuracy": 0.80}, "params": {}},
-        {"id": "r1", "status": "SUCCESS", "metrics": {"accuracy": 0.95}, "params": {}},
-        {"id": "r2", "status": "SUCCESS", "metrics": {"accuracy": 0.90}, "params": {}},
+        {"id": "r0", "status": "SUCCESS", "metrics": {"accuracy": 0.80, "cv_avg_accuracy": 0.90}, "params": {}},
+        {"id": "r1", "status": "SUCCESS", "metrics": {"accuracy": 0.99, "cv_avg_accuracy": 0.85}, "params": {}},
+        {"id": "r2", "status": "SUCCESS", "metrics": {"accuracy": 0.90, "cv_avg_accuracy": 0.80}, "params": {}},
     ]
     out = diagnose_run(run=run, experiment=_exp(), siblings=siblings, logs=[])
     assert out["peer_comparison"]["total"] == 3
-    assert out["peer_comparison"]["rank"] == 1
-    assert out["peer_comparison"]["peer_mean"] == pytest.approx(0.8833, abs=1e-3)
+    assert out["peer_comparison"]["rank"] == 2
+    assert out["peer_comparison"]["peer_mean"] == pytest.approx(0.85, abs=1e-3)
 
 
 def test_peer_comparison_empty_when_no_siblings():

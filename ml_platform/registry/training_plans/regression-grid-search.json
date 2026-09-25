@@ -1,0 +1,67 @@
+{
+  "name": "回归 · 网格搜索（三种提升/集成树）",
+  "description": "XGBoost / LightGBM / 随机森林在固定候选值上穷举，共 29 组参数。结果可复现，适合参数范围已大致确定、想把每个组合都看一遍的场景。候选值取自 registry/tuning_spaces.yaml 的 grid_values。",
+  "task_type": "regression",
+  "strategy_type": "grid_search",
+  "model_family": "ml",
+  "selected_models": [
+    "xgboost_regressor",
+    "lightgbm_regressor",
+    "random_forest_regressor"
+  ],
+  "search_space": {
+    "xgboost_regressor": {
+      "n_estimators": [
+        200,
+        400
+      ],
+      "learning_rate": [
+        0.03,
+        0.1
+      ],
+      "max_depth": [
+        4,
+        6,
+        8
+      ]
+    },
+    "lightgbm_regressor": {
+      "n_estimators": [
+        200,
+        400
+      ],
+      "learning_rate": [
+        0.03,
+        0.1
+      ],
+      "num_leaves": [
+        31,
+        63
+      ]
+    },
+    "random_forest_regressor": {
+      "n_estimators": [
+        100,
+        200,
+        400
+      ],
+      "max_depth": [
+        null,
+        6,
+        12
+      ]
+    }
+  },
+  "budget_config": {
+    "max_trials": 29,
+    "cv_folds": 5,
+    "test_size": 0.2
+  },
+  "eval_metrics": [
+    "rmse",
+    "mae",
+    "r2"
+  ],
+  "default_objective_metric": "rmse",
+  "default_objective_direction": "min"
+}

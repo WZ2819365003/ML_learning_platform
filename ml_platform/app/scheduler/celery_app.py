@@ -6,7 +6,7 @@ Start worker:
     celery -A app.scheduler.celery_app worker --loglevel=info --concurrency=4
 
 Or with multiple queues:
-    celery -A app.scheduler.celery_app worker -Q train,explain,default --loglevel=info
+    celery -A app.scheduler.celery_app worker -Q train,explain,forecast,default --loglevel=info
 """
 
 from __future__ import annotations
@@ -14,6 +14,14 @@ from __future__ import annotations
 from celery import Celery
 
 from app.config import get_settings
+from app.scheduler.queues import (
+    DECLARED_QUEUES,
+    DEFAULT,
+    EXPLAIN,
+    FORECAST,
+    TRAIN,
+    assert_queue_contract,
+)
 
 _settings = get_settings()
 
@@ -38,17 +46,20 @@ celery_app.conf.update(
     # Result expiry (keep results 7 days in Redis)
     result_expires=604800,
     # Queue routing
-    task_default_queue="default",
+    task_default_queue=DEFAULT,
     task_queues={
-        "train":   {"exchange": "train",   "routing_key": "train"},
-        "explain": {"exchange": "explain", "routing_key": "explain"},
-        "default": {"exchange": "default", "routing_key": "default"},
+        TRAIN: {"exchange": TRAIN, "routing_key": TRAIN},
+        EXPLAIN: {"exchange": EXPLAIN, "routing_key": EXPLAIN},
+        FORECAST: {"exchange": FORECAST, "routing_key": FORECAST},
+        DEFAULT: {"exchange": DEFAULT, "routing_key": DEFAULT},
     },
     task_routes={
-        "app.scheduler.celery_tasks.run_train_task":   {"queue": "train"},
-        "app.scheduler.celery_tasks.run_explain_task": {"queue": "explain"},
+        "app.scheduler.celery_tasks.run_train_task": {"queue": TRAIN},
+        "app.scheduler.celery_tasks.run_explain_task": {"queue": EXPLAIN},
     },
     # Timezone
     timezone="UTC",
     enable_utc=True,
 )
+
+assert_queue_contract(DECLARED_QUEUES)

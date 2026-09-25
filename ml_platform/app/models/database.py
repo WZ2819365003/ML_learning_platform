@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import AsyncGenerator
@@ -20,6 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy import JSON
 from sqlalchemy import create_engine
+from sqlalchemy.dialects.mysql import DATETIME as MYSQL_DATETIME
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -36,16 +36,33 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-DATABASE_URL: str = os.getenv(
-    "DATABASE_URL",
-    "mysql+aiomysql://root:123456@localhost:3307/ml_platform",
-)
+# Single config source (A0): the URL comes from app.config.Settings, which
+# loads .env once and applies the development default. No second getenv with
+# its own (previously MySQL root:123456) fallback lives here anymore.
+from app.config import get_settings
 
-async_engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,
-    future=True,
-)
+DATABASE_URL: str = get_settings().database_url
+
+
+def _async_engine_kwargs(database_url: str) -> dict:
+    """Engine kwargs with pool keepalive (A1) for real DB servers.
+
+    MySQL closes idle connections after ``wait_timeout``; without
+    ``pool_pre_ping`` the first request after an idle period gets a stale
+    connection and 500s. SQLite ignores pooling, so skip the params there.
+    """
+    kwargs: dict = {"echo": False, "future": True}
+    if not database_url.startswith("sqlite"):
+        kwargs.update(
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            pool_size=10,
+            max_overflow=20,
+        )
+    return kwargs
+
+
+async_engine = create_async_engine(DATABASE_URL, **_async_engine_kwargs(DATABASE_URL))
 
 async_session_factory = async_sessionmaker(
     bind=async_engine,
@@ -96,13 +113,18 @@ class Base(DeclarativeBase):
 
 class Dataset(Base):
     __tablename__ = "datasets"
+    __table_args__ = (
+        Index("ix_datasets_owner_username", "owner_username"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=_uuid
     )
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
     row_count: Mapped[int | None] = mapped_column(default=None)
     column_count: Mapped[int | None] = mapped_column(default=None)
     columns_info: Mapped[dict | None] = mapped_column(JSON, default=None)
@@ -128,10 +150,14 @@ class Dataset(Base):
 
 class TrainingTask(Base):
     __tablename__ = "training_tasks"
+    __table_args__ = (
+        Index("ix_training_tasks_owner_username", "owner_username"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=_uuid
     )
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
     dataset_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
@@ -189,8 +215,13 @@ class TrainingLog(Base):
     level: Mapped[str] = mapped_column(String(16), nullable=False, default="INFO")
     message: Mapped[str] = mapped_column(Text, nullable=False)
     extra: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # 顺序键。挂钟时间只能到"大概什么时候"，说不清"谁先谁后"：一个几秒跑完的
+    # 任务，几十条日志全挤在同一个时间戳上。seq 由写入方单调递增，排序以它为准。
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # MySQL 的 DATETIME 默认 fsp=0，Python 端的微秒会被静默截断。显式要 (6)。
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow
+        DateTime(timezone=True).with_variant(MYSQL_DATETIME(fsp=6), "mysql"),
+        default=_utcnow,
     )
 
     # relationships
@@ -233,8 +264,13 @@ class ExperimentRunLog(Base):
     level: Mapped[str] = mapped_column(String(16), nullable=False, default="INFO")
     message: Mapped[str] = mapped_column(Text, nullable=False)
     extra: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # 顺序键。挂钟时间只能到"大概什么时候"，说不清"谁先谁后"：一个几秒跑完的
+    # 任务，几十条日志全挤在同一个时间戳上。seq 由写入方单调递增，排序以它为准。
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # MySQL 的 DATETIME 默认 fsp=0，Python 端的微秒会被静默截断。显式要 (6)。
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow
+        DateTime(timezone=True).with_variant(MYSQL_DATETIME(fsp=6), "mysql"),
+        default=_utcnow,
     )
 
     def __repr__(self) -> str:
@@ -283,9 +319,17 @@ class InferenceJob(Base):
     )
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     input_rows: Mapped[int] = mapped_column(Integer, default=0)
+    # Small synchronous requests keep their results inline; batch jobs do not.
+    # A CSV with 100k rows would blow up this JSON column and cannot be streamed
+    # back to the client, so file-backed jobs leave these NULL and use *_path.
     predictions: Mapped[list | None] = mapped_column(JSON, default=None)
     probabilities: Mapped[list | None] = mapped_column(JSON, default=None)
     error_message: Mapped[str | None] = mapped_column(Text, default=None)
+
+    # Batch (file-backed) jobs — see batch_prediction_service.
+    input_path: Mapped[str | None] = mapped_column(String(1024), default=None)
+    result_path: Mapped[str | None] = mapped_column(String(1024), default=None)
+    processed_rows: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
@@ -301,8 +345,12 @@ class InferenceJob(Base):
 
 class DLTrainingTask(Base):
     __tablename__ = "dl_training_tasks"
+    __table_args__ = (
+        Index("ix_dl_training_tasks_owner_username", "owner_username"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
     dataset_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
@@ -388,7 +436,14 @@ class DLTrainingLog(Base):
     level: Mapped[str] = mapped_column(String(16), nullable=False, default="INFO")
     message: Mapped[str] = mapped_column(Text, nullable=False)
     extra: Mapped[dict | None] = mapped_column(JSON, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # 顺序键。挂钟时间只能到"大概什么时候"，说不清"谁先谁后"：一个几秒跑完的
+    # 任务，几十条日志全挤在同一个时间戳上。seq 由写入方单调递增，排序以它为准。
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # MySQL 的 DATETIME 默认 fsp=0，Python 端的微秒会被静默截断。显式要 (6)。
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True).with_variant(MYSQL_DATETIME(fsp=6), "mysql"),
+        default=_utcnow,
+    )
 
     task: Mapped[DLTrainingTask] = relationship(back_populates="dl_logs")
 
@@ -399,6 +454,84 @@ class DLTrainingLog(Base):
 # ---------------------------------------------------------------------------
 # DLModelDeployment
 # ---------------------------------------------------------------------------
+
+class EnsembleDeployment(Base):
+    """A weighted multi-model deployment.
+
+    Separate from ModelDeployment because that table's task_id is a NOT NULL FK
+    into training_tasks, and DL models live in their own table behind their own
+    deployment table — no single row there can reference both an xgboost and an
+    lstm, which is exactly what an ensemble needs.
+    """
+
+    __tablename__ = "ensemble_deployments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
+    modeling_task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("modeling_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    # Only "weighted_average" today. The column is what lets a per-sample
+    # strategy arrive later without a migration.
+    strategy: Mapped[str] = mapped_column(String(32), default="weighted_average", nullable=False)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    request_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    members: Mapped[list[EnsembleMember]] = relationship(
+        back_populates="ensemble", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    def __repr__(self) -> str:
+        return f"<EnsembleDeployment id={self.id!r} name={self.name!r}>"
+
+
+class EnsembleMember(Base):
+    """One weighted member of an ensemble deployment.
+
+    Two nullable FKs rather than a (family, id) pair so that deleting a trained
+    model cascades its membership away, instead of leaving a row that only
+    fails once someone calls the endpoint.
+    """
+
+    __tablename__ = "ensemble_members"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    ensemble_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("ensemble_deployments.id", ondelete="CASCADE"), nullable=False
+    )
+    # The V3 run this member came from — kept for traceability back to the
+    # leaderboard row the user actually picked.
+    run_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    ml_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("training_tasks.id", ondelete="CASCADE"), default=None
+    )
+    dl_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("dl_training_tasks.id", ondelete="CASCADE"), default=None
+    )
+    model_type: Mapped[str | None] = mapped_column(String(64), default=None)
+    weight: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    ensemble: Mapped[EnsembleDeployment] = relationship(back_populates="members")
+
+    @property
+    def domain_task_id(self) -> str | None:
+        return self.ml_task_id or self.dl_task_id
+
+    @property
+    def family(self) -> str:
+        return "dl" if self.dl_task_id else "ml"
+
+    def __repr__(self) -> str:
+        return f"<EnsembleMember {self.family}:{self.domain_task_id} w={self.weight}>"
+
 
 class DLModelDeployment(Base):
     __tablename__ = "dl_model_deployments"
@@ -445,8 +578,12 @@ class ModelTagLibrary(Base):
 
 class TimeSeriesDeployment(Base):
     __tablename__ = "ts_deployments"
+    __table_args__ = (
+        Index("ix_ts_deployments_owner_username", "owner_username"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, default=None)
     backend_label: Mapped[str] = mapped_column(
@@ -469,11 +606,13 @@ class TimeSeriesDeployment(Base):
 class TimeSeriesForecastTask(Base):
     __tablename__ = "ts_forecast_tasks"
     __table_args__ = (
+        Index("ix_ts_forecast_tasks_owner_username", "owner_username"),
         Index("ix_ts_forecast_tasks_created_at", "created_at"),
         Index("ix_ts_forecast_tasks_status", "status"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
 
     # Input configuration
     dataset_id: Mapped[str] = mapped_column(String(36), nullable=False)
@@ -546,12 +685,14 @@ class ModelingTask(Base):
     """
     __tablename__ = "modeling_tasks"
     __table_args__ = (
+        Index("ix_modeling_tasks_owner_username", "owner_username"),
         Index("ix_modeling_tasks_status", "status"),
         Index("ix_modeling_tasks_created_at", "created_at"),
         Index("ix_modeling_tasks_dataset_id", "dataset_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, default=None)
 
@@ -609,11 +750,44 @@ class ModelingTask(Base):
         cascade="all, delete-orphan",
         foreign_keys="PlatformExperiment.modeling_task_id",
     )
+    ai_report_archives: Mapped[list["AIReportArchive"]] = relationship(
+        back_populates="modeling_task",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return (
             f"<ModelingTask id={self.id!r} name={self.name!r} status={self.status!r}>"
         )
+
+
+# ---------------------------------------------------------------------------
+# V3 Platform: AI Report Archive
+# ---------------------------------------------------------------------------
+
+class AIReportArchive(Base):
+    """Versioned AI-generated report payload for a ModelingTask."""
+    __tablename__ = "ai_report_archives"
+    __table_args__ = (
+        Index("ix_ai_report_archives_task_id", "task_id"),
+        Index("ix_ai_report_archives_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("modeling_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="AI 建模报告")
+    model: Mapped[str | None] = mapped_column(String(128), default=None)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="doubao")
+    markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    modeling_task: Mapped["ModelingTask"] = relationship(back_populates="ai_report_archives")
+
+    def __repr__(self) -> str:
+        return f"<AIReportArchive id={self.id!r} task_id={self.task_id!r}>"
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +812,13 @@ class PlatformTask(Base):
 
     celery_task_id: Mapped[str | None] = mapped_column(String(255), default=None)
     worker_id: Mapped[str | None] = mapped_column(String(255), default=None)
+
+    # Identifies the *current execution attempt*, refreshed on every claim.
+    # Neither celery_task_id nor started_at can serve this purpose: Celery
+    # reuses the same task id across retries, and started_at is stamped once.
+    # Stalled-task recovery compares this token so it never resets a task that
+    # was legitimately re-claimed between the scan and the write.
+    attempt_token: Mapped[str | None] = mapped_column(String(36), default=None)
 
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
@@ -776,6 +957,10 @@ class ExperimentRun(Base):
     rank: Mapped[int | None] = mapped_column(Integer, default=None)
     artifacts_uri: Mapped[str | None] = mapped_column(String(1024), default=None)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
+    # Terminal failure reason for this trial. Written only once retries are
+    # exhausted (M2c) so a transient Celery retry doesn't leave a scary
+    # message behind on a run that later succeeds.
+    error_message: Mapped[str | None] = mapped_column(Text, default=None)
 
     # V3 tuning metadata ────────────────────────────────────────────────────
     # trial_no: sequence within its experiment (1-based).  Useful for grid/optuna.
@@ -826,11 +1011,13 @@ class TrainingPlan(Base):
     """
     __tablename__ = "training_plans"
     __table_args__ = (
+        Index("ix_training_plans_owner_username", "owner_username"),
         Index("ix_training_plans_task_type", "task_type"),
         Index("ix_training_plans_created_at", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_username: Mapped[str | None] = mapped_column(String(100), default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, default=None)
 

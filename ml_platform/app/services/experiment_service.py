@@ -16,13 +16,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.evaluation_metrics import resolve_objective_metrics
 from app.models.database import (
     Dataset,
     DatasetVersion,
     ExperimentRun,
+    ModelingTask,
     PlatformExperiment,
     PlatformTask,
 )
@@ -69,6 +71,8 @@ def _serialize_run(run: ExperimentRun) -> dict[str, Any]:
         "params": run.params or {},
         "metrics": run.metrics or {},
         "status": run.status,
+        # M2c: terminal failure reason, survives PlatformTask cleanup.
+        "error_message": run.error_message,
         "rank": run.rank,
         "artifacts_uri": run.artifacts_uri,
         "notes": run.notes,
@@ -82,20 +86,48 @@ def _serialize_run(run: ExperimentRun) -> dict[str, Any]:
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _get_experiment_or_404(db: AsyncSession, experiment_id: str) -> PlatformExperiment:
-    result = await db.execute(
-        select(PlatformExperiment).where(PlatformExperiment.id == experiment_id)
+def _owner_experiment_filter(owner_username: str):
+    return or_(
+        ModelingTask.owner_username == owner_username,
+        Dataset.owner_username == owner_username,
     )
+
+
+async def _get_experiment_or_404(
+    db: AsyncSession,
+    experiment_id: str,
+    owner_username: str | None = None,
+) -> PlatformExperiment:
+    stmt = select(PlatformExperiment).where(PlatformExperiment.id == experiment_id)
+    if owner_username:
+        stmt = (
+            stmt
+            .outerjoin(ModelingTask, ModelingTask.id == PlatformExperiment.modeling_task_id)
+            .outerjoin(Dataset, Dataset.id == PlatformExperiment.dataset_id)
+            .where(_owner_experiment_filter(owner_username))
+        )
+    result = await db.execute(stmt)
     exp = result.scalar_one_or_none()
     if exp is None:
         raise HTTPException(status_code=404, detail=f"Experiment {experiment_id!r} not found")
     return exp
 
 
-async def _get_run_or_404(db: AsyncSession, run_id: str) -> ExperimentRun:
-    result = await db.execute(
-        select(ExperimentRun).where(ExperimentRun.id == run_id)
-    )
+async def _get_run_or_404(
+    db: AsyncSession,
+    run_id: str,
+    owner_username: str | None = None,
+) -> ExperimentRun:
+    stmt = select(ExperimentRun).where(ExperimentRun.id == run_id)
+    if owner_username:
+        stmt = (
+            stmt
+            .join(PlatformExperiment, PlatformExperiment.id == ExperimentRun.experiment_id)
+            .outerjoin(ModelingTask, ModelingTask.id == PlatformExperiment.modeling_task_id)
+            .outerjoin(Dataset, Dataset.id == PlatformExperiment.dataset_id)
+            .where(_owner_experiment_filter(owner_username))
+        )
+    result = await db.execute(stmt)
     run = result.scalar_one_or_none()
     if run is None:
         raise HTTPException(status_code=404, detail=f"ExperimentRun {run_id!r} not found")
@@ -103,14 +135,8 @@ async def _get_run_or_404(db: AsyncSession, run_id: str) -> ExperimentRun:
 
 
 def _pick_metric(metrics: dict, metric_key: str) -> float | None:
-    """Extract a numeric metric value from a metrics dict."""
-    v = metrics.get(metric_key)
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
+    """Extract the model-selection value for an objective metric."""
+    return resolve_objective_metrics(metrics, metric_key).selection_value
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +148,7 @@ async def list_experiments(
     page: int = 1,
     page_size: int = 20,
     status: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     stmt = select(PlatformExperiment)
     count_stmt = select(func.count(PlatformExperiment.id))
@@ -129,6 +156,19 @@ async def list_experiments(
     if status:
         stmt = stmt.where(PlatformExperiment.status == status.upper())
         count_stmt = count_stmt.where(PlatformExperiment.status == status.upper())
+    if owner_username:
+        stmt = (
+            stmt
+            .outerjoin(ModelingTask, ModelingTask.id == PlatformExperiment.modeling_task_id)
+            .outerjoin(Dataset, Dataset.id == PlatformExperiment.dataset_id)
+            .where(_owner_experiment_filter(owner_username))
+        )
+        count_stmt = (
+            count_stmt
+            .outerjoin(ModelingTask, ModelingTask.id == PlatformExperiment.modeling_task_id)
+            .outerjoin(Dataset, Dataset.id == PlatformExperiment.dataset_id)
+            .where(_owner_experiment_filter(owner_username))
+        )
 
     total = (await db.execute(count_stmt)).scalar_one()
     rows = await db.execute(
@@ -154,11 +194,15 @@ async def create_experiment(
     objective_direction: str = "max",
     kind: str = "single",
     config: dict | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     # Resolve dataset name if dataset_id provided
     dataset_name = None
     if dataset_id:
-        ds_result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+        ds_stmt = select(Dataset).where(Dataset.id == dataset_id)
+        if owner_username:
+            ds_stmt = ds_stmt.where(Dataset.owner_username == owner_username)
+        ds_result = await db.execute(ds_stmt)
         ds = ds_result.scalar_one_or_none()
         if ds is None:
             raise HTTPException(status_code=404, detail=f"Dataset {dataset_id!r} not found")
@@ -181,13 +225,21 @@ async def create_experiment(
     return _serialize_experiment(exp)
 
 
-async def get_experiment(db: AsyncSession, experiment_id: str) -> dict[str, Any]:
-    exp = await _get_experiment_or_404(db, experiment_id)
+async def get_experiment(
+    db: AsyncSession,
+    experiment_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    exp = await _get_experiment_or_404(db, experiment_id, owner_username=owner_username)
     return _serialize_experiment(exp)
 
 
-async def delete_experiment(db: AsyncSession, experiment_id: str) -> None:
-    exp = await _get_experiment_or_404(db, experiment_id)
+async def delete_experiment(
+    db: AsyncSession,
+    experiment_id: str,
+    owner_username: str | None = None,
+) -> None:
+    exp = await _get_experiment_or_404(db, experiment_id, owner_username=owner_username)
     if exp.status == "RUNNING":
         raise HTTPException(status_code=400, detail="Cannot delete a running experiment")
     await db.delete(exp)
@@ -203,8 +255,9 @@ async def list_runs(
     experiment_id: str,
     page: int = 1,
     page_size: int = 50,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    await _get_experiment_or_404(db, experiment_id)
+    await _get_experiment_or_404(db, experiment_id, owner_username=owner_username)
 
     count_stmt = select(func.count(ExperimentRun.id)).where(
         ExperimentRun.experiment_id == experiment_id
@@ -233,8 +286,9 @@ async def create_run(
     params: dict | None = None,
     parent_run_id: str | None = None,
     notes: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
-    await _get_experiment_or_404(db, experiment_id)
+    await _get_experiment_or_404(db, experiment_id, owner_username=owner_username)
 
     run = ExperimentRun(
         experiment_id=experiment_id,
@@ -249,8 +303,12 @@ async def create_run(
     return _serialize_run(run)
 
 
-async def get_run(db: AsyncSession, run_id: str) -> dict[str, Any]:
-    run = await _get_run_or_404(db, run_id)
+async def get_run(
+    db: AsyncSession,
+    run_id: str,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    run = await _get_run_or_404(db, run_id, owner_username=owner_username)
     return _serialize_run(run)
 
 
@@ -282,9 +340,10 @@ async def update_run_metrics(
 async def get_leaderboard(
     db: AsyncSession,
     experiment_id: str,
+    owner_username: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return runs sorted by objective metric (best first)."""
-    exp = await _get_experiment_or_404(db, experiment_id)
+    exp = await _get_experiment_or_404(db, experiment_id, owner_username=owner_username)
 
     rows = await db.execute(
         select(ExperimentRun)
@@ -343,76 +402,9 @@ async def _refresh_leaderboard(db: AsyncSession, experiment_id: str) -> None:
 # AutoML: submit multiple runs in parallel via Celery
 # ---------------------------------------------------------------------------
 
-async def submit_automl_experiment(
-    db: AsyncSession,
-    experiment_id: str,
-    candidates: list[dict],
-) -> list[dict[str, Any]]:
-    """
-    Submit N AutoML candidate runs.
 
-    `candidates` is a list of dicts like:
-      {"model_type": "RandomForestClassifier", "hyperparameters": {...}, "dataset_id": "...", ...}
-
-    Each candidate creates:
-      1. An ExperimentRun
-      2. A domain TrainingTask (training_tasks table)
-      3. A PlatformTask (platform_tasks table) dispatched to Celery
-    """
-    from app.scheduler.task_runner import submit_task
-    from app.services.training_service import create_training_task_record
-
-    exp = await _get_experiment_or_404(db, experiment_id)
-    if exp.status not in ("CREATED", "FAILED"):
-        raise HTTPException(status_code=400, detail="Experiment is already running or completed")
-
-    exp.status = "RUNNING"
-    await db.flush()
-
-    submitted_runs = []
-    asyncio_tasks = []
-
-    for candidate in candidates:
-        # 1. Create domain training task record
-        domain_task = await create_training_task_record(db, candidate)
-
-        # 2. Create ExperimentRun
-        run = ExperimentRun(
-            experiment_id=experiment_id,
-            params=candidate,
-            status="PENDING",
-        )
-        db.add(run)
-        await db.flush()
-        await db.refresh(run)
-
-        # 3. Register PlatformTask (asyncio mode — no Celery dispatch)
-        from app.scheduler.task_runner import register_domain_task
-        ptask = await register_domain_task(
-            db=db,
-            kind="train",
-            payload_ref=f"train:{domain_task.id}",
-        )
-
-        # Link run → task
-        run.task_id = ptask.id
-        await db.flush()
-
-        submitted_runs.append(_serialize_run(run))
-        asyncio_tasks.append((domain_task.id, ptask.id, run.id))
-
-    await db.commit()
-
-    # 4. Fire asyncio training coroutines concurrently (Celery substitute for dev mode)
-    from app.services.automl_service import _run_automl_candidate
-    for domain_task_id, platform_task_id, run_id in asyncio_tasks:
-        asyncio.create_task(
-            _run_automl_candidate(
-                domain_task_id=domain_task_id,
-                platform_task_id=platform_task_id,
-                run_id=run_id,
-                experiment_id=experiment_id,
-            )
-        )
-
-    return submitted_runs
+# ``submit_automl_experiment`` lived here until M3-3. It hand-rolled AutoML
+# dispatch against the legacy experiment API; AutoML is now
+# ``strategy_type="automl"`` in tuning_service, which reuses the batch
+# pipeline's persist → schedule → M2c write-back path. The route that reached
+# this function was removed with it.

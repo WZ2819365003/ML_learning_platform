@@ -1,17 +1,25 @@
 services:
-  # MySQL —— 主元数据库；首次启动会自动加载 mysql_init/*.sql
+  # MySQL —— 主元数据库。schema 由 migrate 服务的 alembic 负责，不在此建表。
   mysql:
     image: mysql:8.0
     container_name: ml_platform_mysql
     restart: unless-stopped
+    env_file:
+      - path: .deploy_secrets
+        required: false
     environment:
-      MYSQL_ROOT_PASSWORD: "123456"
-      MYSQL_DATABASE: ml_platform
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-123456}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-ml_platform}"
     ports:
-      - "3307:3306"
+      - "127.0.0.1:3307:3306"
     volumes:
       - ml_mysql_data:/var/lib/mysql
-      - ./mysql_init:/docker-entrypoint-initdb.d:ro
+      # NO schema seed here on purpose. Alembic owns the schema (see the
+      # `migrate` service below). A snapshot mounted into initdb.d is a second
+      # source of truth that drifts silently: the file this replaced was six
+      # columns and one table behind, so a fresh deploy built a database the
+      # code could not query, and the first symptom was `Unknown column …` on
+      # an unrelated endpoint.
     command: >
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci
@@ -19,7 +27,7 @@ services:
       --sort-buffer-size=8388608
       --read-rnd-buffer-size=4194304
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-uroot", "-p123456", "--silent"]
+      test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -30,7 +38,7 @@ services:
     container_name: ml_platform_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - ml_redis_data:/data
     command: redis-server --appendonly yes
@@ -45,12 +53,15 @@ services:
     image: minio/minio:latest
     container_name: ml_platform_minio
     restart: unless-stopped
+    env_file:
+      - path: .deploy_secrets
+        required: false
     environment:
-      MINIO_ROOT_USER: "mlplatform"
-      MINIO_ROOT_PASSWORD: "mlplatform123"
+      MINIO_ROOT_USER: "${S3_ACCESS_KEY:-mlplatform}"
+      MINIO_ROOT_PASSWORD: "${S3_SECRET_KEY:-mlplatform123}"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - ml_minio_data:/data
     command: server /data --console-address ":9001"
@@ -69,15 +80,48 @@ services:
         condition: service_healthy
     volumes:
       - ./minio_seed:/seed:ro
+    env_file:
+      - path: .deploy_secrets
+        required: false
+    environment:
+      MINIO_ROOT_USER: "${S3_ACCESS_KEY:-mlplatform}"
+      MINIO_ROOT_PASSWORD: "${S3_SECRET_KEY:-mlplatform123}"
+      S3_BUCKET: "${S3_BUCKET:-ml-platform}"
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 mlplatform mlplatform123 &&
-      mc mb -p local/ml-platform || true &&
-      mc mirror --overwrite /seed/ml-platform/ local/ml-platform/ &&
+      mc alias set local http://minio:9000 \"$${MINIO_ROOT_USER}\" \"$${MINIO_ROOT_PASSWORD}\" &&
+      mc mb -p \"local/$${S3_BUCKET}\" || true &&
+      mc mirror --overwrite /seed/ml-platform/ \"local/$${S3_BUCKET}/\" &&
       echo 'MinIO seed complete' &&
       exit 0
       "
     restart: "no"
+
+  # One-shot schema gate. Runs to completion before backend/worker start, so
+  # they never boot against a database that is a migration behind. Idempotent:
+  # `upgrade head` on an already-current database is a no-op.
+  migrate:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: ml_platform_migrate
+    restart: "no"
+    command: sh -c "python scripts/ensure_alembic_baseline.py && alembic upgrade head"
+    working_dir: /app
+    env_file:
+      - path: .deploy_secrets
+        required: false
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-mysql+aiomysql://root:123456@mysql:3306/ml_platform}"
+      ENVIRONMENT: "${ENVIRONMENT:-production}"
+      AUTH_ENABLED: "${AUTH_ENABLED:-true}"
+      AUTH_USERNAME: "${AUTH_USERNAME:-admin}"
+      AUTH_PASSWORD: "${AUTH_PASSWORD:-}"
+      AUTH_USERS_JSON: "${AUTH_USERS_JSON:-}"
+      AUTH_SECRET_KEY: "${AUTH_SECRET_KEY:-}"
+    depends_on:
+      mysql:
+        condition: service_healthy
 
   # 后端 FastAPI（使用 MySQL，本地存储 storage/uploads,models,logs + mlruns 已 COPY 进镜像）
   backend:
@@ -87,18 +131,59 @@ services:
     container_name: ml_platform_backend
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ml_backend_storage:/app/storage
+      # Chronos 权重约 176MB。放卷不打进镜像：这台机器连不上 huggingface.co，
+      # 权重是离线灌进去的，镜像每次重建都重传没有意义。
+      - ml_hf_cache:/opt/hf-cache
+    env_file:
+      - path: .deploy_secrets
+        required: false
     environment:
-      DATABASE_URL: "mysql+aiomysql://root:123456@mysql:3306/ml_platform"
-      REDIS_URL: "redis://redis:6379/0"
-      MLFLOW_TRACKING_URI: "sqlite:////app/storage/mlflow.db"
-      S3_ENDPOINT_URL: "http://minio:9000"
-      S3_ACCESS_KEY: "mlplatform"
-      S3_SECRET_KEY: "mlplatform123"
-      S3_BUCKET: "ml-platform"
-      S3_ENABLED: "true"
-      ENVIRONMENT: "production"
+      # transformers 在这里找权重。离线是因为 huggingface.co 从本机不可达，
+      # 放任联网只会让首次加载卡到超时，而不是干脆报错。
+      HF_HOME: "/opt/hf-cache"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      DATABASE_URL: "${DATABASE_URL:-mysql+aiomysql://root:123456@mysql:3306/ml_platform}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+      CELERY_BROKER_URL: "${CELERY_BROKER_URL:-redis://redis:6379/0}"
+      CELERY_RESULT_BACKEND: "${CELERY_RESULT_BACKEND:-redis://redis:6379/1}"
+      CELERY_KINDS: "${CELERY_KINDS:-}"
+      # redis, not memory. Training runs in a ThreadPoolExecutor worker, and the
+      # in-memory bus publishes with asyncio.Queue.put_nowait() straight from that
+      # thread — which is not thread-safe and does not wake a sleeping event loop,
+      # so live log lines sat undelivered until some unrelated request woke it.
+      # Measured worst-case delivery on an idle loop: 2903ms memory vs 8ms redis.
+      # The code default stays `memory` so a bare `uvicorn` run needs no Redis;
+      # inside compose Redis is always present, so redis is the right default here.
+      EVENT_BUS_MODE: "${EVENT_BUS_MODE:-redis}"
+      MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI:-sqlite:////app/storage/mlflow.db}"
+      S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-http://minio:9000}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY:-mlplatform}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY:-mlplatform123}"
+      S3_BUCKET: "${S3_BUCKET:-ml-platform}"
+      S3_ENABLED: "${S3_ENABLED:-true}"
+      AUTH_ENABLED: "${AUTH_ENABLED:-true}"
+      AUTH_USERNAME: "${AUTH_USERNAME:-admin}"
+      AUTH_PASSWORD: "${AUTH_PASSWORD:-}"
+      AUTH_USERS_JSON: "${AUTH_USERS_JSON:-}"
+      AUTH_SECRET_KEY: "${AUTH_SECRET_KEY:-}"
+      ARK_API_KEY: "${ARK_API_KEY:-}"
+      DOUBAO_API_KEY: "${DOUBAO_API_KEY:-}"
+      DOUBAO_BASE_URL: "${DOUBAO_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
+      DOUBAO_MODEL: "${DOUBAO_MODEL:-doubao-seed-1-8-251228}"
+      DOUBAO_TIMEOUT_S: "${DOUBAO_TIMEOUT_S:-120}"
+      DOUBAO_MAX_TOKENS: "${DOUBAO_MAX_TOKENS:-1800}"
+      # This is the PRODUCTION stack: default to production so a deploy that
+      # forgets ENVIRONMENT fails fast on config validation instead of silently
+      # booting with auth disabled. Local dev uses the root docker-compose.yml
+      # (infrastructure only) or .claude/launch.json.
+      ENVIRONMENT: "${ENVIRONMENT:-production}"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       mysql:
         condition: service_healthy
       redis:
@@ -112,6 +197,76 @@ services:
       retries: 3
       start_period: 30s
 
+  # Celery worker — shares backend storage so restored datasets and generated
+  # model/log artifacts are visible to both processes.
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: ml_platform_worker
+    restart: unless-stopped
+    command: celery -A app.scheduler.celery_app worker -Q train,explain,forecast,default --concurrency=2 --loglevel=info
+    volumes:
+      - ml_backend_storage:/app/storage
+      # Chronos 权重约 176MB。放卷不打进镜像：这台机器连不上 huggingface.co，
+      # 权重是离线灌进去的，镜像每次重建都重传没有意义。
+      - ml_hf_cache:/opt/hf-cache
+    env_file:
+      - path: .deploy_secrets
+        required: false
+    environment:
+      # transformers 在这里找权重。离线是因为 huggingface.co 从本机不可达，
+      # 放任联网只会让首次加载卡到超时，而不是干脆报错。
+      HF_HOME: "/opt/hf-cache"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      DATABASE_URL: "${DATABASE_URL:-mysql+aiomysql://root:123456@mysql:3306/ml_platform}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+      CELERY_BROKER_URL: "${CELERY_BROKER_URL:-redis://redis:6379/0}"
+      CELERY_RESULT_BACKEND: "${CELERY_RESULT_BACKEND:-redis://redis:6379/1}"
+      CELERY_KINDS: "${CELERY_KINDS:-}"
+      # redis, not memory. Training runs in a ThreadPoolExecutor worker, and the
+      # in-memory bus publishes with asyncio.Queue.put_nowait() straight from that
+      # thread — which is not thread-safe and does not wake a sleeping event loop,
+      # so live log lines sat undelivered until some unrelated request woke it.
+      # Measured worst-case delivery on an idle loop: 2903ms memory vs 8ms redis.
+      # The code default stays `memory` so a bare `uvicorn` run needs no Redis;
+      # inside compose Redis is always present, so redis is the right default here.
+      EVENT_BUS_MODE: "${EVENT_BUS_MODE:-redis}"
+      MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI:-sqlite:////app/storage/mlflow.db}"
+      S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-http://minio:9000}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY:-mlplatform}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY:-mlplatform123}"
+      S3_BUCKET: "${S3_BUCKET:-ml-platform}"
+      S3_ENABLED: "${S3_ENABLED:-true}"
+      AUTH_ENABLED: "${AUTH_ENABLED:-true}"
+      AUTH_USERNAME: "${AUTH_USERNAME:-admin}"
+      AUTH_PASSWORD: "${AUTH_PASSWORD:-}"
+      AUTH_USERS_JSON: "${AUTH_USERS_JSON:-}"
+      AUTH_SECRET_KEY: "${AUTH_SECRET_KEY:-}"
+      ARK_API_KEY: "${ARK_API_KEY:-}"
+      DOUBAO_API_KEY: "${DOUBAO_API_KEY:-}"
+      DOUBAO_BASE_URL: "${DOUBAO_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
+      DOUBAO_MODEL: "${DOUBAO_MODEL:-doubao-seed-1-8-251228}"
+      DOUBAO_TIMEOUT_S: "${DOUBAO_TIMEOUT_S:-120}"
+      DOUBAO_MAX_TOKENS: "${DOUBAO_MAX_TOKENS:-1800}"
+      ENVIRONMENT: "${ENVIRONMENT:-production}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.scheduler.celery_app inspect ping --timeout=5 | grep -q 'pong'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # 前端 React (production build)
   frontend:
     build:
@@ -120,7 +275,7 @@ services:
     container_name: ml_platform_frontend
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - backend
     healthcheck:
@@ -136,7 +291,7 @@ services:
     container_name: ml_platform_nginx
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "${PUBLIC_HTTP_PORT:-18081}:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
@@ -147,6 +302,10 @@ volumes:
   ml_mysql_data:
   ml_redis_data:
   ml_minio_data:
+  ml_backend_storage:
+    name: ml_platform_backend_storage
+  ml_hf_cache:
+    name: ml_platform_hf_cache
 
 networks:
   default:

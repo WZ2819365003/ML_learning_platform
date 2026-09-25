@@ -9,7 +9,7 @@
  *
  * Only applicable to binary classifiers with predict_proba.
  */
-import { Card, Empty, Space, Statistic, Table, Tag, Typography } from 'antd'
+import { Card, Empty, Space, Statistic, Table, Tag, Typography } from '../../ui'
 
 const { Text } = Typography
 
@@ -36,7 +36,7 @@ export default function ThresholdTuningTable({ payload }) {
       dataIndex: 'threshold',
       key: 'threshold',
       render: (v, row) => row.isBest
-        ? <Tag color="gold" style={{ fontWeight: 500 }}>{fmt(v)}</Tag>
+        ? <Tag color="gold">{fmt(v)}</Tag>
         : fmt(v),
       width: 100,
     },
@@ -48,7 +48,7 @@ export default function ThresholdTuningTable({ payload }) {
       key: 'f1',
       align: 'right',
       render: (v, row) => row.isBest
-        ? <Text strong style={{ color: '#d97706' }}>{fmt(v)}</Text>
+        ? <Text strong style={{ color: '#ed7b2f' }}>{fmt(v)}</Text>
         : fmt(v),
     },
     { title: 'Accuracy', dataIndex: 'accuracy', key: 'accuracy', align: 'right', render: fmt },
@@ -58,10 +58,10 @@ export default function ThresholdTuningTable({ payload }) {
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       <Card variant="outlined" size="small">
         <Space wrap size={[24, 12]}>
-          <Statistic title="Best Threshold (F1)" value={bestThreshold ?? 0} precision={4} valueStyle={{ fontSize: 18, color: '#d97706' }} />
+          <Statistic title="Best Threshold (F1)" value={bestThreshold ?? 0} precision={4} valueStyle={{ fontSize: 18, color: '#ed7b2f' }} />
           {payload.positive_label != null && (
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>正类</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>正类</div>
               <Tag color="blue">{String(payload.positive_label)}</Tag>
             </div>
           )}

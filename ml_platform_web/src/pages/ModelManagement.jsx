@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useActiveEffect } from '../hooks/useActiveEffect'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -8,6 +9,7 @@ import {
   Descriptions,
   Empty,
   Form,
+  Grid,
   Input,
   Modal,
   Pagination,
@@ -21,25 +23,14 @@ import {
   Tag,
   Typography,
   message,
-} from 'antd';
-import {
-  ApiOutlined,
-  BarChartOutlined,
-  CloudUploadOutlined,
-  CopyOutlined,
-  DeleteOutlined,
-  DownloadOutlined,
-  EyeOutlined,
-  PlayCircleOutlined,
-  RocketOutlined,
-  TagOutlined,
-  TrophyOutlined,
-} from '@ant-design/icons';
-import * as echarts from 'echarts';
-import api, { dataApi, deployApi, dlApi, modelApi, timesfmApi, trainingApi } from '../services/api';
-import { formatBytes, formatDateTime, formatMetric, metricLabels } from '../utils/formatters';
+} from '../ui';
+import { ApiOutlined, BarChartOutlined, CloudUploadOutlined, CopyOutlined, DownloadOutlined, PlayCircleOutlined, TagOutlined, TrophyOutlined } from '@ant-design/icons'
+import echarts from '../utils/echarts';
+import api, { dataApi, deployApi, dlApi, downloadFile, modelApi, timesfmApi, trainingApi } from '../services/api';
+import { formatBytes, formatDateTime, formatMetricByKey, metricLabels } from '../utils/formatters';
+import { buildResultsUrl } from '../utils/resultRoutes';
 
-const { Paragraph, Text, Title } = Typography;
+const { Text, Title } = Typography;
 const { TextArea } = Input;
 
 const PAGE_SIZE = 10;
@@ -69,7 +60,7 @@ function renderMetricCards(metrics, keys) {
         <Card size="small">
           <Text type="secondary">{metricLabels[k] ?? k}</Text>
           <Title level={4} style={{ marginTop: 4, marginBottom: 0 }}>
-            {formatMetric(metrics?.[k], { percent: k.includes('acc') || k === 'accuracy' })}
+            {formatMetricByKey(k, metrics?.[k])}
           </Title>
         </Card>
       </Col>
@@ -172,6 +163,8 @@ function TagsNotesModal({ open, asset, tagLibrary, saving, onSave, onCancel }) {
 // ── ML Tab ────────────────────────────────────────────────────────────────────
 function MLModelTab({ openDeployModal, openTagsModal }) {
   const navigate = useNavigate();
+  const screens = Grid.useBreakpoint();
+  const isNarrow = screens.md === false;
   const [models, setModels] = useState([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -189,7 +182,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
   const [predictionResult, setPredictionResult] = useState('');
   const [predictionRunning, setPredictionRunning] = useState(false);
 
-  useEffect(() => { void loadModels(page); }, [page]);
+  useActiveEffect(() => { void loadModels(page); }, [page]);
 
   useEffect(() => {
     if (!compareOpen || !compareChartRef.current || compareData.length === 0) return undefined;
@@ -296,27 +289,33 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
       title: '任务名称',
       key: 'name',
       render: (_, r) => r.name ?? <Text type="secondary">{r.task_id.slice(0, 8)}</Text>,
+      width: 230,
+      fixed: isNarrow ? undefined : 'left',
+      ellipsis: true,
     },
-    { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id },
-    { title: '模型', dataIndex: 'model_type', render: (v) => <Tag color="blue">{v}</Tag> },
+    { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id, width: 190, ellipsis: true },
+    { title: '模型', dataIndex: 'model_type', render: (v) => <Tag color="blue" title={v}>{v}</Tag>, width: 180, ellipsis: true },
     {
       title: '标签',
       dataIndex: 'tags',
+      width: 140,
+      responsive: ['xxl'],
       render: (tags) =>
         tags?.length
-          ? tags.map((t) => <Tag key={t} color="geekblue" style={{ marginBottom: 2 }}>{t}</Tag>)
+          ? tags.map((t) => <Tag key={t} title={t} color="geekblue" style={{ marginBottom: 2 }}>{t}</Tag>)
           : <Text type="secondary">—</Text>,
     },
     {
       title: '主要指标',
       key: 'metric',
+      width: 180,
       render: (_, r) => {
         const { primary_metric_name: name, primary_metric_value: val } = r.metrics_summary ?? {};
         if (!name) return '—';
         return (
           <span>
             {metricLabels[name] ?? name}:{' '}
-            <strong>{formatMetric(val, { percent: name.includes('acc') || name === 'accuracy' })}</strong>
+            <strong>{formatMetricByKey(name, val)}</strong>
           </span>
         );
       },
@@ -326,12 +325,13 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
       title: '操作',
       key: 'actions',
       width: 200,
+      fixed: isNarrow ? undefined : 'right',
       render: (_, r) => (
-        <Space size={4} onClick={(e) => e.stopPropagation()}>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => void openDetail(r)}>详情</Button>
-          <Button size="small" icon={<TagOutlined />} onClick={() => openTagsModal(r, 'ml')}>标签</Button>
-          <Button size="small" icon={<CloudUploadOutlined />} onClick={() => openDeployModal({ ...r, runtime_type: 'ml' })} />
-          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => void handleDelete(r.task_id)} />
+        <Space onClick={(e) => e.stopPropagation()} size={16} className="table-actions">
+          <Button size="small" onClick={() => void openDetail(r)} type="link" className="table-action">详情</Button>
+          <Button size="small" onClick={() => openTagsModal(r, 'ml')} type="link" className="table-action">标签</Button>
+          <Button size="small" onClick={() => openDeployModal({ ...r, runtime_type: 'ml' })} type="link" className="table-action">部署</Button>
+          <Button size="small" danger onClick={() => void handleDelete(r.task_id)} type="link" className="table-action">删除</Button>
         </Space>
       ),
     },
@@ -354,7 +354,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
         <Button onClick={() => void loadModels(page)}>刷新</Button>
       </Space>
 
-      <Card>
+      <Card className="model-table-card">
         <Table
           rowKey="asset_id"
           dataSource={models}
@@ -362,6 +362,8 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
           loading={loading}
           pagination={false}
           size="middle"
+          tableLayout="fixed"
+          scroll={{ x: 1180 }}
           locale={{ emptyText: <Empty description="还没有训练完成的机器学习模型" /> }}
           rowSelection={{
             selectedRowKeys: selectedKeys,
@@ -418,12 +420,6 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
             <Card size="small" title="快捷操作">
               <Space wrap>
                 <Button
-                  icon={<RocketOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/training/monitor?taskId=${detail.task_id}`); }}
-                >
-                  查看训练监控
-                </Button>
-                <Button
                   type="primary"
                   icon={<TrophyOutlined />}
                   onClick={() => { setDetailOpen(false); navigate(`/training/results?taskId=${detail.task_id}`); }}
@@ -432,12 +428,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
                 </Button>
                 <Button
                   icon={<DownloadOutlined />}
-                  onClick={() => {
-                    const a = document.createElement('a');
-                    a.href = modelApi.downloadModelUrl(detail.task_id);
-                    a.download = '';
-                    a.click();
-                  }}
+                  onClick={() => downloadFile(modelApi.downloadModelUrl(detail.task_id), 'model.joblib').catch(err => message.error(err.message || '下载失败'))}
                 >
                   下载模型文件
                 </Button>
@@ -477,8 +468,8 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
                 <Text strong>预测结果</Text>
                 <pre
                   style={{
-                    margin: 0, padding: 12, borderRadius: 8,
-                    background: '#0f172a', color: '#e2e8f0',
+                    margin: 0, padding: 12, borderRadius: 4,
+                    background: 'var(--code-bg)', color: 'var(--code-text)',
                     minHeight: 80, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12,
                   }}
                 >
@@ -489,6 +480,7 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
           </Space>
         )}
       </Modal>
+
 
       {/* Compare modal */}
       <Modal
@@ -510,6 +502,8 @@ function MLModelTab({ openDeployModal, openTagsModal }) {
 // ── DL Tab ────────────────────────────────────────────────────────────────────
 function DLModelTab({ openDeployModal, openTagsModal }) {
   const navigate = useNavigate();
+  const screens = Grid.useBreakpoint();
+  const isNarrow = screens.md === false;
   const [models, setModels] = useState([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -523,7 +517,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
   const [predictionResult, setPredictionResult] = useState('');
   const [predictionRunning, setPredictionRunning] = useState(false);
 
-  useEffect(() => { void loadModels(page); }, [page]);
+  useActiveEffect(() => { void loadModels(page); }, [page]);
 
   async function loadModels(p) {
     setLoading(true);
@@ -601,28 +595,35 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
       title: '任务名称',
       key: 'name',
       render: (_, r) => r.name ?? <Text type="secondary">{r.task_id.slice(0, 8)}</Text>,
+      width: 220,
+      fixed: isNarrow ? undefined : 'left',
+      ellipsis: true,
     },
-    { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id },
-    { title: '架构', dataIndex: 'model_type', render: (v) => <Tag color="purple">{v}</Tag> },
-    { title: '任务类型', dataIndex: 'task_type', width: 100 },
+    { title: '数据集', dataIndex: 'dataset_name', render: (v, r) => v ?? r.dataset_id, width: 190, ellipsis: true },
+    { title: '架构', dataIndex: 'model_type', render: (v) => <Tag color="purple" title={v}>{v}</Tag>, width: 120, ellipsis: true },
+    { title: '任务类型', dataIndex: 'task_type', width: 100,
+      render: v => <Tag color={v === 'regression' ? 'geekblue' : 'cyan'} title={v}>{({ regression: '回归', classification: '分类' })[v] ?? v}</Tag> },
     {
       title: '标签',
       dataIndex: 'tags',
+      width: 140,
+      responsive: ['xxl'],
       render: (tags) =>
         tags?.length
-          ? tags.map((t) => <Tag key={t} color="geekblue" style={{ marginBottom: 2 }}>{t}</Tag>)
+          ? tags.map((t) => <Tag key={t} title={t} color="geekblue" style={{ marginBottom: 2 }}>{t}</Tag>)
           : <Text type="secondary">—</Text>,
     },
     {
       title: '主要指标',
       key: 'metric',
+      width: 180,
       render: (_, r) => {
         const { primary_metric_name: name, primary_metric_value: val } = r.metrics_summary ?? {};
         if (!name) return '—';
         return (
           <span>
             {metricLabels[name] ?? name}:{' '}
-            <strong>{formatMetric(val, { percent: name === 'val_acc' })}</strong>
+            <strong>{formatMetricByKey(name, val)}</strong>
           </span>
         );
       },
@@ -632,12 +633,13 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
       title: '操作',
       key: 'actions',
       width: 200,
+      fixed: isNarrow ? undefined : 'right',
       render: (_, r) => (
-        <Space size={4} onClick={(e) => e.stopPropagation()}>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => void openDetail(r)}>详情</Button>
-          <Button size="small" icon={<TagOutlined />} onClick={() => openTagsModal(r, 'dl')}>标签</Button>
-          <Button size="small" icon={<CloudUploadOutlined />} onClick={() => openDeployModal(r)} />
-          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => void handleDelete(r.task_id)} />
+        <Space onClick={(e) => e.stopPropagation()} size={16} className="table-actions">
+          <Button size="small" onClick={() => void openDetail(r)} type="link" className="table-action">详情</Button>
+          <Button size="small" onClick={() => openTagsModal(r, 'dl')} type="link" className="table-action">标签</Button>
+          <Button size="small" onClick={() => openDeployModal(r)} type="link" className="table-action">部署</Button>
+          <Button size="small" danger onClick={() => void handleDelete(r.task_id)} type="link" className="table-action">删除</Button>
         </Space>
       ),
     },
@@ -650,7 +652,7 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
         <Button onClick={() => void loadModels(page)}>刷新</Button>
       </Space>
 
-      <Card>
+      <Card className="model-table-card">
         <Table
           rowKey="asset_id"
           dataSource={models}
@@ -658,6 +660,8 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
           loading={loading}
           pagination={false}
           size="middle"
+          tableLayout="fixed"
+          scroll={{ x: 1165 }}
           locale={{ emptyText: <Empty description="还没有训练完成的深度学习模型" /> }}
           onRow={(r) => ({
             style: { cursor: 'pointer' },
@@ -706,18 +710,25 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
 
             <Card size="small" title="快捷操作">
               <Space wrap>
-                <Button
-                  icon={<RocketOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/dl/monitor?taskId=${detail.id}`); }}
-                >
-                  查看训练监控
-                </Button>
+                {/* 查看训练监控 is gone: the result view opens on 训练日志 as
+                    its first tab, so this was a second route to the same panel. */}
                 <Button
                   type="primary"
                   icon={<TrophyOutlined />}
-                  onClick={() => { setDetailOpen(false); navigate(`/dl/results?taskId=${detail.id}`); }}
+                  onClick={() => {
+                    setDetailOpen(false);
+                    navigate(buildResultsUrl({ family: 'dl', taskId: detail.id }));
+                  }}
                 >
                   查看结果可视化
+                </Button>
+                {/* Matches the ML drawer. The result view also has a download
+                    tab with the artifact caveats; this is the quick grab. */}
+                <Button
+                  icon={<DownloadOutlined />}
+                  onClick={() => downloadFile(modelApi.downloadModelUrl(detail.id), 'model.pt').catch(err => message.error(err.message || '下载失败'))}
+                >
+                  下载模型文件
                 </Button>
               </Space>
             </Card>
@@ -755,8 +766,8 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
                 <Text strong>预测结果</Text>
                 <pre
                   style={{
-                    margin: 0, padding: 12, borderRadius: 8,
-                    background: '#0f172a', color: '#e2e8f0',
+                    margin: 0, padding: 12, borderRadius: 4,
+                    background: 'var(--code-bg)', color: 'var(--code-text)',
                     minHeight: 80, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12,
                   }}
                 >
@@ -773,7 +784,6 @@ function DLModelTab({ openDeployModal, openTagsModal }) {
 
 // ── Universal (TimesFM) Tab ───────────────────────────────────────────────────
 const FREQ_LABELS = { high: '高频', medium: '中频', low: '低频' };
-const TS_STATUS_COLOR = { PENDING: 'default', RUNNING: 'processing', SUCCESS: 'success', FAILED: 'error' };
 const TS_STATUS_LABEL = { PENDING: '等待中', RUNNING: '运行中', SUCCESS: '完成', FAILED: '失败' };
 
 function UniversalModelTab() {
@@ -784,7 +794,7 @@ function UniversalModelTab() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState(null);
 
-  useEffect(() => { void fetchTasks(1, null); }, []);
+  useActiveEffect(() => { void fetchTasks(page, statusFilter); }, [page, statusFilter]);
 
   async function fetchTasks(p, sf) {
     setLoading(true);
@@ -832,13 +842,13 @@ function UniversalModelTab() {
     {
       title: '频率',
       dataIndex: 'frequency',
-      render: (v) => FREQ_LABELS[v] ?? v,
+      render: (v) => <Tag title={FREQ_LABELS[v] ?? v}>{FREQ_LABELS[v] ?? v}</Tag>,
       width: 80,
     },
     {
       title: '模型',
       dataIndex: 'model_name',
-      render: (v) => <Tag color="purple">{v?.split('/').pop() ?? v}</Tag>,
+      render: (v) => <Tag color="purple" title={v}>{v?.split('/').pop() ?? v}</Tag>,
     },
     {
       title: '状态',
@@ -865,21 +875,16 @@ function UniversalModelTab() {
       key: 'actions',
       width: 130,
       render: (_, r) => (
-        <Space size={4} onClick={(e) => e.stopPropagation()}>
-          <Button
-            size="small"
-            icon={<EyeOutlined />}
-            disabled={r.status !== 'SUCCESS'}
-            onClick={() => navigate(`/ts/tasks/${r.id}`)}
-          >
+        <Space onClick={(e) => e.stopPropagation()} size={16} className="table-actions">
+          <Button size="small" disabled={r.status !== 'SUCCESS'} onClick={() => navigate(`/ts/tasks/${r.id}`)} type="link" className="table-action">
             查看结果
           </Button>
-          <Popconfirm
+          <Popconfirm okButtonProps={{ danger: true }}
             title="确认删除此预测记录？"
             onConfirm={() => void handleDelete(r.id)}
             disabled={r.status === 'RUNNING'}
           >
-            <Button size="small" danger icon={<DeleteOutlined />} disabled={r.status === 'RUNNING'} />
+            <Button size="small" danger disabled={r.status === 'RUNNING'} type="link" className="table-action">删除</Button>
           </Popconfirm>
         </Space>
       ),
@@ -894,7 +899,6 @@ function UniversalModelTab() {
           <Text type="secondary">Amazon Chronos 零样本时序预测：</Text>
           <Button size="small" type="primary" onClick={() => navigate('/ts/config')}>新建预测任务</Button>
           <Button size="small" onClick={() => navigate('/ts/monitor')}>任务监控</Button>
-          <Button size="small" onClick={() => navigate('/ts/results')}>结果可视化</Button>
         </Space>
       </Card>
 
@@ -909,7 +913,7 @@ function UniversalModelTab() {
               placeholder="状态"
               allowClear
               value={statusFilter}
-              onChange={(v) => { setStatusFilter(v ?? null); void fetchTasks(1, v ?? null); }}
+              onChange={(v) => { setStatusFilter(v ?? null); setPage(1); }}
               options={[
                 { value: 'SUCCESS', label: '完成' },
                 { value: 'RUNNING', label: '运行中' },
@@ -931,14 +935,14 @@ function UniversalModelTab() {
             current: page,
             pageSize: PAGE_SIZE,
             total,
-            onChange: (p) => void fetchTasks(p, statusFilter),
+            onChange: setPage,
             showTotal: (t) => `共 ${t} 条`,
             showSizeChanger: false,
           }}
           locale={{ emptyText: <Empty description="暂无时序预测记录" /> }}
           onRow={(r) => ({
             style: r.status === 'SUCCESS' ? { cursor: 'pointer' } : {},
-            onClick: () => r.status === 'SUCCESS' && navigate(`/ts/results?id=${r.id}`),
+            onClick: () => r.status === 'SUCCESS' && navigate(`/ts/tasks/${r.id}`),
           })}
         />
       </Card>
@@ -963,7 +967,7 @@ export default function ModelManagement() {
   const [mlReloadKey, setMlReloadKey] = useState(0);
   const [dlReloadKey, setDlReloadKey] = useState(0);
 
-  useEffect(() => { void fetchTagLibrary(); }, []);
+  useActiveEffect(() => { void fetchTagLibrary(); }, []);
 
   async function fetchTagLibrary() {
     try {
@@ -1065,7 +1069,7 @@ export default function ModelManagement() {
           },
           {
             key: 'universal',
-            label: '通用模型',
+            label: '时序预测',
             children: <UniversalModelTab />,
           },
         ]}

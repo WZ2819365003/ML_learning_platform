@@ -20,9 +20,10 @@ Dependencies:
 
 Design notes
 ------------
-- baseline & grid_search fire runs concurrently via ``asyncio.create_task``.
+- baseline & grid_search submit persisted runs through the per-kind scheduler.
 - bayesian_search runs one trial at a time because Optuna's TPE needs the
-  last result before suggesting the next set of hyperparameters.
+  last result before suggesting the next set of hyperparameters. Its outer
+  in-process orchestrator remains until M2d moves study state to RDBStorage.
 - ``search_space`` shape:
     grid_search:
       {"<model_type>": {"param_name": [v1, v2, ...], ...}, ...}
@@ -30,7 +31,12 @@ Design notes
       {"<model_type>": {"param_name": {"type": "float", "low": ..., "high": ...}, ...}}
   Missing models fall back to ``registry/tuning_spaces.yaml`` defaults.
 - ``budget_config``:
-    max_trials      (grid/bayesian): cap on how many runs per model
+    max_trials      (grid/bayesian): cap on the TOTAL number of runs in the batch,
+                    consumed model by model in selected order. A cap below the
+                    planned total would starve the later models, so preflight
+                    rejects that for multi-model batches (see
+                    ``_budget_starvation_detail``).
+    n_trials_per_model (bayesian)  : Optuna trials per model
     timeout_minutes (future)        : hard walltime
     random_state                    : seed used everywhere for reproducibility
 """
@@ -41,13 +47,19 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from itertools import product
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dl_registry import build_default_dl_config, get_dl_model_spec
+from app.core.dl_registry import (
+    build_default_dl_config,
+    clamp_train_config,
+    get_dl_model_spec,
+)
+from app.core.evaluation_metrics import resolve_objective_metrics
 from app.core.model_registry import resolve_model_family
 from app.models.database import (
     DLTrainingTask,
@@ -60,17 +72,18 @@ from app.models.database import (
     async_session_factory,
 )
 from app.scheduler.task_runner import (
-    dispatch_platform_task,
     register_domain_task,
     update_platform_task_status,
 )
+from app.scheduler.scheduler import get_scheduler
 from app.services.modeling_task_service import (
-    _get_task_or_404,
     load_tuning_spaces,
     refresh_task_summary,
     serialize_experiment,
+    task_final_evaluation_state,
 )
 from app.services.training_service import create_training_task_record
+from app.services.task_lifecycle_lock import task_lifecycle_guard
 
 logger = logging.getLogger(__name__)
 
@@ -211,52 +224,95 @@ def _validate_search_space(
 # Entry point
 # ---------------------------------------------------------------------------
 
-async def dispatch_experiment_batch(
+async def _lock_task_for_experiment_dispatch(
     db: AsyncSession,
-    *,
     modeling_task_id: str,
-    name: str,
-    strategy_type: str,
+    owner_username: str | None = None,
+) -> ModelingTask:
+    stmt = select(ModelingTask).where(ModelingTask.id == modeling_task_id)
+    if owner_username:
+        stmt = stmt.where(ModelingTask.owner_username == owner_username)
+    task = (
+        await db.execute(stmt.with_for_update())
+    ).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"ModelingTask {modeling_task_id!r} not found",
+        )
+    final_state = task_final_evaluation_state(task)
+    if final_state.get("state") != "OPEN":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "任务已进入最终确认流程，不能再启动新批次；"
+                "需要继续调参时请创建新的建模任务。"
+            ),
+        )
+    return task
+
+
+
+# ---------------------------------------------------------------------------
+# Shared batch pre-flight
+# ---------------------------------------------------------------------------
+# Every *pure* validation for a batch lives here — nothing in this function
+# touches the database or launches work. That is the whole point: a bundle
+# commits and launches each batch as it goes, so any check left inside the
+# per-batch path can reject strategy #2 *after* strategy #1 is already
+# training. The client would see a 422 while work runs on regardless, which is
+# the worst contract we can offer. Running this over the entire bundle first
+# makes rejection all-or-nothing.
+#
+# ``_dispatch_experiment_batch_locked`` consumes the same result, so the two
+# callers can never drift apart.
+
+
+@dataclass
+class _PreflightedBatch:
+    strategy_type: str
+    selected_models: list[str]
+    search_space: dict[str, Any]
+    budget_config: dict[str, Any]
+    eval_metrics: list[str]
+    dl_config: dict[str, Any]
+    model_family: str | None
+    ml_models: list[str] = field(default_factory=list)
+    dl_models: list[str] = field(default_factory=list)
+    tuning_defaults: dict[str, Any] = field(default_factory=dict)
+    trials: list[dict[str, Any]] = field(default_factory=list)
+    dl_trials: list[dict[str, Any]] = field(default_factory=list)
+    total_trials: int = 0
+    test_size: float = 0.2
+    cv_folds: int = 5
+    max_trials: Any = None
+
+
+def _preflight_batch(
+    task: Any,
+    *,
+    strategy_type: str | None,
     selected_models: list[str],
-    search_space: dict[str, Any],
-    budget_config: dict[str, Any],
+    search_space: dict[str, Any] | None,
+    budget_config: dict[str, Any] | None,
     eval_metrics: list[str] | None = None,
-    description: str | None = None,
     model_family: str | None = None,
     dl_config: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+    where: str = "",
+) -> _PreflightedBatch:
+    """Validate and expand one batch without any side effects.
+
+    ``where`` prefixes every error (e.g. ``"strategy #2: "``) so a bundle
+    rejection points at the offending item.
     """
-    Create a PlatformExperiment for this batch, expand trials, and launch them.
+    def _reject(detail: str, status_code: int = 422):
+        raise HTTPException(status_code=status_code, detail=f"{where}{detail}")
 
-    Returns a serialised experiment plus trial counts.  Actual training runs
-    execute asynchronously through asyncio.create_task — the HTTP response
-    returns immediately after runs are persisted in PENDING state.
+    selected_models = list(selected_models or [])
+    search_space = dict(search_space or {})
+    budget_config = dict(budget_config or {})
 
-    V3 Phase 1 — DL integration
-    ----------------------------
-    ``selected_models`` may contain both ML and DL tokens.  Each token is
-    resolved against the model registries; unknown tokens raise 422.
-    DL tokens are dispatched as ``PlatformTask(kind='dl_train')`` and executed
-    by ``dl_service._run_dl_training_by_id``.  DL models are baseline-only in
-    Phase 1; grid/bayesian requests that include DL tokens fail fast with 422.
-    """
-    task = await _get_task_or_404(db, modeling_task_id)
-    if not task.dataset_id or not task.target_column:
-        raise HTTPException(
-            status_code=400,
-            detail="Modeling task must have dataset_id and target_column before dispatch",
-        )
-
-    task_type = task.task_type or "classification"
-    tuning_defaults = load_tuning_spaces(task_type)
-
-    # -----------------------------------------------------------------------
-    # V3 Phase 2 — snapshot-first defaulting
-    # If the caller omitted selected_models / search_space / dl_config /
-    # budget_config / eval_metrics, fall back to the plan snapshot frozen at task creation.
-    # Snapshot is authoritative; editing the live plan after bind does NOT
-    # change what the task runs (reproducibility).
-    # -----------------------------------------------------------------------
+    # --- snapshot-first defaulting (authoritative; see the locked dispatcher) --
     snapshot_payload: dict[str, Any] = {}
     snapshot = getattr(task, "training_plan_snapshot", None) or {}
     if isinstance(snapshot, dict):
@@ -277,23 +333,36 @@ async def dispatch_experiment_batch(
     if (not strategy_type) and snapshot_payload.get("strategy_type"):
         strategy_type = snapshot_payload["strategy_type"]
 
-    # Validate search_space shape BEFORE we touch the DB or spawn any tasks.
-    # Shape errors surface as a 422 with an actionable "use [50, 100, 200]"
-    # hint so the workbench UI can fix its payload without guesswork.
-    _validate_search_space(strategy_type, search_space, selected_models)
+    if strategy_type not in ("baseline", "grid_search", "bayesian_search", "automl"):
+        _reject(f"Unsupported strategy_type: {strategy_type!r}")
+    if not selected_models and strategy_type != "automl":
+        _reject(f"{strategy_type} requires at least one selected model")
 
-    # Split selected_models by family via registry lookup.  Any token that
-    # belongs to neither registry is rejected.
+    task_type = task.task_type or "classification"
+    try:
+        tuning_defaults = load_tuning_spaces(task_type)
+    except (ValueError, FileNotFoundError) as exc:
+        # An unsupported task_type is a client-side mistake, not a server
+        # fault. Letting the raw ValueError escape turns it into a 500 with no
+        # indication of which task types *are* supported.
+        _reject(f"不支持的任务类型 {task_type!r}: {exc}")
+
+    # Re-raise with the bundle prefix: these helpers raise their own
+    # HTTPException, so without this "strategy #N" would be missing on exactly
+    # the errors a bundle caller most needs to locate.
+    try:
+        _validate_search_space(strategy_type, search_space, selected_models)
+    except HTTPException as exc:
+        _reject(str(exc.detail), status_code=exc.status_code)
+
+    # --- split tokens by registry family ------------------------------------
     ml_models: list[str] = []
     dl_models: list[str] = []
     unknown_models: list[str] = []
     for token in selected_models:
         family = resolve_model_family(token)
         if family == "ml":
-            if token not in tuning_defaults:
-                unknown_models.append(token)
-            else:
-                ml_models.append(token)
+            (ml_models if token in tuning_defaults else unknown_models).append(token)
         elif family == "dl":
             spec = get_dl_model_spec(token)
             if spec is None or task_type not in spec.get("task_types", []):
@@ -303,22 +372,224 @@ async def dispatch_experiment_batch(
         else:
             unknown_models.append(token)
     if unknown_models:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Unknown or incompatible model_type(s): {unknown_models}. "
-                f"Available ML for {task_type}: {sorted(tuning_defaults.keys())}"
-            ),
+        _reject(
+            f"Unknown or incompatible model_type(s): {unknown_models}. "
+            f"Available ML for {task_type}: {sorted(tuning_defaults.keys())}"
         )
 
     if strategy_type != "baseline" and dl_models:
-        raise HTTPException(
-            status_code=422,
-            detail=(
+        _reject(
             "Deep-learning models are currently supported in baseline batches only. "
-                f"Remove from {strategy_type}: {dl_models}"
-            ),
+            f"Remove from {strategy_type}: {dl_models}"
         )
+
+    # M2c guard: the Optuna study is an in-process ask/tell loop. Under Celery
+    # the orchestrator submits trial 1 and returns, so the study never advances
+    # and the experiment would sit RUNNING forever. Refuse until M2d.
+    if strategy_type == "bayesian_search" and ml_models:
+        try:
+            _reject_bayesian_under_celery()
+        except HTTPException as exc:
+            _reject(str(exc.detail), status_code=exc.status_code)
+
+    # --- budget values ------------------------------------------------------
+    # `or <default>` would swallow an explicit 0 and skip the range check
+    # below, so an invalid test_size=0 / cv_folds=0 would silently become the
+    # default instead of a 422. Only a missing key may default.
+    raw_test_size = budget_config.get("test_size")
+    raw_cv_folds = budget_config.get("cv_folds")
+    max_trials = budget_config.get("max_trials")
+    try:
+        test_size = 0.2 if raw_test_size is None else float(raw_test_size)
+        cv_folds = 5 if raw_cv_folds is None else int(raw_cv_folds)
+        if max_trials is not None:
+            max_trials = int(max_trials)
+    except (TypeError, ValueError):
+        _reject(
+            "budget_config test_size/cv_folds/max_trials must be numeric, got "
+            f"{ {k: budget_config.get(k) for k in ('test_size', 'cv_folds', 'max_trials')} }"
+        )
+    if not 0.0 < test_size < 1.0:
+        _reject(f"budget_config.test_size must be between 0 and 1, got {test_size}")
+    if cv_folds < 2:
+        _reject(f"budget_config.cv_folds must be at least 2, got {cv_folds}")
+    if max_trials is not None and max_trials < 1:
+        _reject(f"budget_config.max_trials must be at least 1, got {max_trials}")
+
+    # Write the coerced values back. Consumers downstream read the *raw*
+    # budget_config (``_launch_bayesian`` compares ``global_trial_no >=
+    # max_trials``), so leaving a string "5" here would pass pre-flight and
+    # then blow up with a TypeError inside the background study — an API that
+    # reports success while the experiment dies.
+    budget_config["test_size"] = test_size
+    budget_config["cv_folds"] = cv_folds
+    if max_trials is not None:
+        budget_config["max_trials"] = max_trials
+
+    eval_metrics = list(
+        eval_metrics or _default_eval_metrics(task_type, task.objective_metric)
+    )
+    dl_config = dict(dl_config or {})
+    dl_trials = _expand_dl_baseline(dl_models, dl_config, task_type)
+
+    # --- expand trials (pure) so "zero trials" is caught before any launch ---
+    trials: list[dict[str, Any]] = []
+    if strategy_type == "automl":
+        try:
+            trials = _expand_automl(task_type, max_trials)
+        except (FileNotFoundError, ValueError) as exc:
+            _reject(f"AutoML 候选清单不可用: {exc}")
+        if not trials:
+            _reject(f"AutoML 注册表中没有适用于 {task_type} 的候选模型")
+        total_trials = len(trials)
+        selected_models = sorted({t["model_type"] for t in trials})
+    elif strategy_type == "baseline":
+        merged_overrides = dict(search_space)
+        for token in dl_models:
+            if token not in merged_overrides and dl_config.get(token):
+                merged_overrides[token] = dl_config[token]
+        trials = _expand_baseline(selected_models, tuning_defaults, merged_overrides)
+        if not trials:
+            _reject("Baseline produced no trials — check selected_models")
+        total_trials = len(trials)
+    elif strategy_type == "grid_search":
+        starvation = _budget_starvation_detail(
+            _planned_trials_per_model(strategy_type, ml_models, tuning_defaults, search_space, budget_config),
+            max_trials,
+        )
+        if starvation:
+            _reject(starvation)
+        ml_trials = _expand_grid_search(ml_models, tuning_defaults, search_space, max_trials)
+        trials = ml_trials + _renumber_trials(dl_trials, start=len(ml_trials) + 1)
+        if not trials:
+            _reject(
+                "Grid search produced no trials — provide search_space or pick "
+                "models with grid_values defined"
+            )
+        total_trials = len(trials)
+    else:  # bayesian_search
+        starvation = _budget_starvation_detail(
+            _planned_trials_per_model(strategy_type, ml_models, tuning_defaults, search_space, budget_config),
+            max_trials,
+        )
+        if starvation:
+            _reject(starvation)
+        total_trials = _count_bayesian_trials(ml_models, budget_config, max_trials) + len(dl_trials)
+
+    return _PreflightedBatch(
+        strategy_type=strategy_type,
+        selected_models=selected_models,
+        search_space=search_space,
+        budget_config=budget_config,
+        eval_metrics=eval_metrics,
+        dl_config=dl_config,
+        model_family=model_family,
+        ml_models=ml_models,
+        dl_models=dl_models,
+        tuning_defaults=tuning_defaults,
+        trials=trials,
+        dl_trials=dl_trials,
+        total_trials=total_trials,
+        test_size=test_size,
+        cv_folds=cv_folds,
+        max_trials=max_trials,
+    )
+
+
+async def dispatch_experiment_batch(
+    db: AsyncSession,
+    *,
+    modeling_task_id: str,
+    name: str,
+    strategy_type: str,
+    selected_models: list[str],
+    search_space: dict[str, Any],
+    budget_config: dict[str, Any],
+    eval_metrics: list[str] | None = None,
+    description: str | None = None,
+    model_family: str | None = None,
+    dl_config: dict[str, Any] | None = None,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    async with task_lifecycle_guard(modeling_task_id):
+        return await _dispatch_experiment_batch_locked(
+            db,
+            modeling_task_id=modeling_task_id,
+            name=name,
+            strategy_type=strategy_type,
+            selected_models=selected_models,
+            search_space=search_space,
+            budget_config=budget_config,
+            eval_metrics=eval_metrics,
+            description=description,
+            model_family=model_family,
+            dl_config=dl_config,
+            owner_username=owner_username,
+        )
+
+
+async def _dispatch_experiment_batch_locked(
+    db: AsyncSession,
+    *,
+    modeling_task_id: str,
+    name: str,
+    strategy_type: str,
+    selected_models: list[str],
+    search_space: dict[str, Any],
+    budget_config: dict[str, Any],
+    eval_metrics: list[str] | None = None,
+    description: str | None = None,
+    model_family: str | None = None,
+    dl_config: dict[str, Any] | None = None,
+    owner_username: str | None = None,
+) -> dict[str, Any]:
+    """
+    Create a PlatformExperiment for this batch, expand trials, and launch them.
+
+    Returns a serialised experiment plus trial counts.  Actual training runs
+    execute asynchronously through asyncio.create_task — the HTTP response
+    returns immediately after runs are persisted in PENDING state.
+
+    V3 Phase 1 — DL integration
+    ----------------------------
+    ``selected_models`` may contain both ML and DL tokens.  Each token is
+    resolved against the model registries; unknown tokens raise 422.
+    DL tokens are dispatched as ``PlatformTask(kind='dl_train')`` and executed
+    by ``dl_service._run_dl_training_by_id``.  DL models are baseline-only in
+    Phase 1; grid/bayesian requests that include DL tokens fail fast with 422.
+    """
+    task = await _lock_task_for_experiment_dispatch(
+        db,
+        modeling_task_id,
+        owner_username=owner_username,
+    )
+    if not task.dataset_id or not task.target_column:
+        raise HTTPException(
+            status_code=400,
+            detail="Modeling task must have dataset_id and target_column before dispatch",
+        )
+
+    # All pure validation + trial expansion happens up front and is shared with
+    # ``dispatch_experiment_bundle`` — see ``_preflight_batch``.
+    pf = _preflight_batch(
+        task,
+        strategy_type=strategy_type,
+        selected_models=selected_models,
+        search_space=search_space,
+        budget_config=budget_config,
+        eval_metrics=eval_metrics,
+        model_family=model_family,
+        dl_config=dl_config,
+    )
+    strategy_type = pf.strategy_type
+    selected_models = pf.selected_models
+    search_space = pf.search_space
+    budget_config = pf.budget_config
+    eval_metrics = pf.eval_metrics
+    tuning_defaults = pf.tuning_defaults
+    ml_models, dl_models = pf.ml_models, pf.dl_models
+    test_size, cv_folds, max_trials = pf.test_size, pf.cv_folds, pf.max_trials
+    total_trials = pf.total_trials
 
     # Create the experiment shell (RUNNING immediately so UI polls see it live).
     exp = PlatformExperiment(
@@ -351,51 +622,22 @@ async def dispatch_experiment_batch(
         task.finished_at = None  # clear previous completion timestamp
         await db.flush()
 
-    # Expand trials → list of concrete hyperparameter dicts per model.
-    eval_metrics = list(eval_metrics or _default_eval_metrics(task_type, task.objective_metric))
-    max_trials = budget_config.get("max_trials") if budget_config else None
-    test_size = float((budget_config or {}).get("test_size") or 0.2)
-    cv_folds = int((budget_config or {}).get("cv_folds") or 5)
-
-    # DL trials are always baseline in Phase 1; non-baseline strategies with DL
-    # tokens have already failed fast above.
-    dl_trials = _expand_dl_baseline(dl_models, dl_config or {}, task_type)
-
-    if strategy_type == "baseline":
-        # ``_expand_baseline`` is family-aware so a single call covers both
-        # ML and DL tokens; the ``search_space`` acts as a per-model override
-        # (ML: hyperparameter overrides; DL: arch/opt/train section overrides).
-        merged_overrides = dict(search_space or {})
-        for token in dl_models:
-            if token not in merged_overrides and (dl_config or {}).get(token):
-                merged_overrides[token] = dl_config[token]
-        trials = _expand_baseline(selected_models, tuning_defaults, merged_overrides)
-        total_trials = len(trials)
-        if total_trials == 0:
-            raise HTTPException(status_code=422, detail="Baseline produced no trials — check selected_models")
-        await _persist_trials(db, exp, task, trials, eval_metrics, test_size=test_size, cv_folds=cv_folds)
+    if strategy_type in ("baseline", "grid_search", "automl"):
+        await _persist_trials(
+            db, exp, task, pf.trials, eval_metrics,
+            test_size=test_size, cv_folds=cv_folds,
+        )
         await db.commit()
-        _launch_concurrent(exp.id, modeling_task_id)
-    elif strategy_type == "grid_search":
-        ml_trials = _expand_grid_search(ml_models, tuning_defaults, search_space, max_trials)
-        trials = ml_trials + _renumber_trials(dl_trials, start=len(ml_trials) + 1)
-        total_trials = len(trials)
-        if total_trials == 0:
-            raise HTTPException(
-                status_code=422,
-                detail="Grid search produced no trials — provide search_space or pick models with grid_values defined",
+        await _launch_concurrent(exp.id, modeling_task_id)
+    else:  # bayesian_search — ML part runs the study; DL part runs baseline
+        if pf.dl_trials:
+            await _persist_trials(
+                db, exp, task, pf.dl_trials, eval_metrics,
+                test_size=test_size, cv_folds=cv_folds,
             )
-        await _persist_trials(db, exp, task, trials, eval_metrics, test_size=test_size, cv_folds=cv_folds)
         await db.commit()
-        _launch_concurrent(exp.id, modeling_task_id)
-    elif strategy_type == "bayesian_search":
-        # ML part runs bayesian; DL part runs baseline concurrently (persisted now).
-        if dl_trials:
-            await _persist_trials(db, exp, task, dl_trials, eval_metrics, test_size=test_size, cv_folds=cv_folds)
-        total_trials = _count_bayesian_trials(ml_models, budget_config, max_trials) + len(dl_trials)
-        await db.commit()
-        if dl_trials:
-            _launch_concurrent(exp.id, modeling_task_id)
+        if pf.dl_trials:
+            await _launch_concurrent(exp.id, modeling_task_id)
         if ml_models:
             _launch_bayesian(
                 experiment_id=exp.id,
@@ -408,8 +650,6 @@ async def dispatch_experiment_batch(
                 test_size=test_size,
                 cv_folds=cv_folds,
             )
-    else:
-        raise HTTPException(status_code=422, detail=f"Unsupported strategy_type: {strategy_type!r}")
 
     return {
         "experiment": serialize_experiment(exp),
@@ -425,33 +665,58 @@ async def dispatch_experiment_bundle(
     name: str,
     strategies: list[dict[str, Any]],
     description: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """Submit several strategy batches for the same modeling task in one call."""
     if not strategies:
         raise HTTPException(status_code=422, detail="At least one strategy is required")
+
+    # Pre-flight the WHOLE bundle before launching anything. Each batch commits
+    # and starts its trials immediately, so a rejection discovered mid-loop
+    # would leave earlier batches running while the client only sees an error —
+    # "failed request, work already started" is the worst possible contract.
+    #
+    # This runs the *same* ``_preflight_batch`` the per-batch dispatcher uses,
+    # so every pure check (search_space shape, unknown/incompatible models,
+    # DL outside baseline, budget ranges, zero-trial expansions, bayesian under
+    # Celery) is enforced across the bundle before batch #1 commits. A partial
+    # check here would silently reintroduce partial launches.
+    task_stmt = select(ModelingTask).where(ModelingTask.id == modeling_task_id)
+    if owner_username:
+        task_stmt = task_stmt.where(ModelingTask.owner_username == owner_username)
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Modeling task {modeling_task_id} not found")
+    if not task.dataset_id or not task.target_column:
+        raise HTTPException(
+            status_code=400,
+            detail="Modeling task must have dataset_id and target_column before dispatch",
+        )
+
+    for idx, spec in enumerate(strategies, start=1):
+        _preflight_batch(
+            task,
+            strategy_type=spec.get("strategy_type"),
+            selected_models=list(spec.get("selected_models") or []),
+            search_space=spec.get("search_space") or {},
+            budget_config=spec.get("budget_config") or {},
+            eval_metrics=spec.get("eval_metrics"),
+            dl_config=spec.get("dl_config"),
+            where=f"strategy #{idx}: ",
+        )
 
     submitted: list[dict[str, Any]] = []
     strategy_types: list[str] = []
     total_trials = 0
     for idx, spec in enumerate(strategies, start=1):
         strategy_type = spec.get("strategy_type")
-        if strategy_type not in ("baseline", "grid_search", "bayesian_search"):
-            raise HTTPException(
-                status_code=422,
-                detail="strategy_type must be baseline|grid_search|bayesian_search",
-            )
         selected_models = list(spec.get("selected_models") or [])
-        if not selected_models:
-            raise HTTPException(
-                status_code=422,
-                detail=f"{strategy_type} requires at least one selected model",
-            )
 
         label = {
             "baseline": "基线",
             "grid_search": "网格",
             "bayesian_search": "贝叶斯",
-        }[strategy_type]
+        }.get(strategy_type, strategy_type or "批次")
         result = await dispatch_experiment_batch(
             db,
             modeling_task_id=modeling_task_id,
@@ -462,6 +727,7 @@ async def dispatch_experiment_bundle(
             budget_config=spec.get("budget_config") or {},
             eval_metrics=spec.get("eval_metrics"),
             description=spec.get("description") or description,
+            owner_username=owner_username,
         )
         submitted.append(result)
         strategy_types.append(strategy_type)
@@ -492,8 +758,9 @@ def _expand_baseline(
     per-model overrides from the caller (supporting both the ``arch`` short
     form and the ``arch_config`` suffixed form for backward-compat).
 
-    Baseline DL trials are capped at ``epochs <= 10`` so a mixed ML+DL batch
-    finishes in seconds rather than minutes during a baseline sweep.
+    Baseline DL trials honour the submitted ``epochs``, clamped only to the
+    registry's advertised bounds (see ``clamp_train_config``). Early stopping
+    keeps long runs from training past convergence.
     """
     overrides = overrides or {}
     trials: list[dict[str, Any]] = []
@@ -505,10 +772,15 @@ def _expand_baseline(
             arch_override = per_model.get("arch_config") or per_model.get("arch") or {}
             opt_override = per_model.get("opt_config") or per_model.get("opt") or {}
             train_override = per_model.get("train_config") or per_model.get("train") or {}
-            train_config = {**defaults["train"], **train_override}
-            # Cap baseline epochs — full sweeps go through grid/bayesian paths.
-            if int(train_config.get("epochs", 10) or 10) > 10:
-                train_config["epochs"] = 10
+            # Bound to the registry's advertised min/max (epochs <= 100) rather
+            # than overriding what the user asked for. Baseline used to force
+            # epochs down to 10, so a submitted 50 silently trained for 10 and
+            # the run looked like it had finished normally — nothing in the UI
+            # or the stored config said otherwise. Long baselines are bounded in
+            # practice by early stopping (`early_stopping_patience`, default 10)
+            # in dl_trainer, which is the mechanism actually meant to cut runs
+            # short.
+            train_config = clamp_train_config({**defaults["train"], **train_override})
             hyperparameters = {
                 "arch_config": {**defaults["arch"], **arch_override},
                 "opt_config": {**defaults["opt"], **opt_override},
@@ -532,6 +804,41 @@ def _expand_baseline(
             "hyperparameters": params,
             "trial_no": idx,
             "search_meta": {"strategy": "baseline", "grid_index": None},
+        })
+    return trials
+
+
+def _expand_automl(task_type: str, max_trials: int | None = None) -> list[dict[str, Any]]:
+    """One trial per *candidate*, straight from the AutoML registry.
+
+    Deliberately not expressed as a baseline batch. ``_expand_baseline`` emits
+    one trial per ``model_type`` and keys its overrides the same way, but the
+    registry intentionally lists the same model several times with different
+    hyperparameters (five of the eleven classification candidates share a
+    model_type). Routing AutoML through baseline would silently collapse those
+    to one trial each and quietly halve the search. Grid search is no better:
+    it takes the cartesian product of a model's values, so two candidate
+    *configurations* would become four trials rather than two.
+    """
+    from app.services.automl_service import load_candidates
+
+    candidates = load_candidates(task_type)
+    if max_trials is not None:
+        candidates = candidates[:max_trials]
+
+    trials: list[dict[str, Any]] = []
+    for idx, candidate in enumerate(candidates, start=1):
+        trials.append({
+            "family": "ml",
+            "model_type": candidate["model_type"],
+            "hyperparameters": dict(candidate.get("hyperparameters") or {}),
+            "trial_no": idx,
+            "search_meta": {
+                "strategy": "automl",
+                "grid_index": None,
+                "candidate_index": idx,
+                "candidate_description": candidate.get("description"),
+            },
         })
     return trials
 
@@ -618,6 +925,68 @@ def _renumber_trials(trials: list[dict[str, Any]], *, start: int) -> list[dict[s
     return out
 
 
+def _planned_trials_per_model(
+    strategy_type: str,
+    ml_models: list[str],
+    tuning_defaults: dict[str, Any],
+    search_space: dict[str, Any] | None,
+    budget_config: dict[str, Any] | None,
+) -> dict[str, int]:
+    """How many trials each model would get with no cap, in dispatch order.
+
+    Mirrors the expansion rules exactly: grid uses the user grid or the
+    registry ``grid_values``; bayesian uses ``n_trials_per_model`` for every
+    model that has a distribution. Models the expansion would skip anyway
+    (no grid / no distribution / DL) are left out.
+    """
+    search_space = search_space or {}
+    planned: dict[str, int] = {}
+    for model_type in ml_models:
+        template = tuning_defaults.get(model_type) or {}
+        if template.get("family", "ml") == "dl":
+            continue
+        if strategy_type == "grid_search":
+            grid = search_space.get(model_type) or template.get("grid_values") or {}
+            if not grid:
+                continue
+            combos = 1
+            for values in grid.values():
+                combos *= len(values) if isinstance(values, list) else 1
+            planned[model_type] = combos
+        elif strategy_type == "bayesian_search":
+            dist = search_space.get(model_type) or template.get("distribution") or {}
+            if not dist:
+                continue
+            planned[model_type] = int((budget_config or {}).get("n_trials_per_model", 10))
+    return planned
+
+
+def _budget_starvation_detail(planned: dict[str, int], max_trials: int | None) -> str | None:
+    """Explain why a total cap would silently cut whole models, or None if it won't.
+
+    The cap is consumed model by model, so with two or more models any cap
+    below the planned total leaves the later ones short — historically with
+    zero runs and a batch that still reports COMPLETED. A single model keeps
+    the original safety-valve truncation.
+    """
+    total = sum(planned.values())
+    if not max_trials or len(planned) < 2 or max_trials >= total:
+        return None
+    remaining = max_trials
+    cut = []
+    for model_type, want in planned.items():
+        got = min(want, remaining)
+        remaining -= got
+        if got < want:
+            cut.append(f"{model_type} 只能跑 {got}/{want} 次")
+    breakdown = "、".join(f"{m} {n}" for m, n in planned.items())
+    return (
+        f"「最大 Trial 数」{max_trials} 小于本批次计划的 {total} 次（{breakdown}）。"
+        f"上限按模型顺序消耗，{'；'.join(cut)}。"
+        f"请把「最大 Trial 数」调到 {total}，或减少模型数 / 每个模型的次数。"
+    )
+
+
 def _count_bayesian_trials(
     selected_models: list[str], budget_config: dict[str, Any] | None, max_trials: int | None
 ) -> int:
@@ -664,6 +1033,7 @@ async def _persist_trials(
                 model_type=trial["model_type"],
                 config=trial["hyperparameters"],
                 test_size=test_size,
+                owner_username=task.owner_username,
             )
             kind = "dl_train"
             payload_ref = f"dl_train:{domain_task.id}"
@@ -678,11 +1048,18 @@ async def _persist_trials(
                     "test_size": test_size,
                     "cv_folds": cv_folds,
                     "eval_metrics": eval_metrics,
+                    "owner_username": task.owner_username,
                 },
             )
             kind = "train"
             payload_ref = f"train:{domain_task.id}"
 
+        search_meta = dict(trial["search_meta"])
+        # B1: every V3 run (ML and DL alike) trains in selection mode — the
+        # outer hold-out stays sealed until POST /final-evaluation opens it
+        # once for the confirmed winner.
+        if family in ("ml", "dl"):
+            search_meta["evaluation_mode"] = "selection"
         run = ExperimentRun(
             experiment_id=exp.id,
             params={
@@ -696,7 +1073,7 @@ async def _persist_trials(
             },
             status="PENDING",
             trial_no=trial["trial_no"],
-            search_meta=trial["search_meta"],
+            search_meta=search_meta,
             source_experiment_type=exp.strategy_type,
         )
         db.add(run)
@@ -725,6 +1102,7 @@ async def _create_dl_training_task_record(
     model_type: str,
     config: dict[str, Any],
     test_size: float,
+    owner_username: str | None = None,
 ) -> DLTrainingTask:
     """Create a DLTrainingTask row without auto-launching it."""
     from app.core.dl_registry import get_dl_trainer_registry
@@ -742,6 +1120,7 @@ async def _create_dl_training_task_record(
     train_config.setdefault("test_size", test_size)
     short_id = str(_uuid_mod.uuid4())[:8]
     task = DLTrainingTask(
+        owner_username=owner_username,
         dataset_id=dataset_id,
         name=f"{model_type}_{short_id}",
         target_column=target_column,
@@ -762,13 +1141,13 @@ async def _create_dl_training_task_record(
 # Launch helpers
 # ---------------------------------------------------------------------------
 
-def _launch_concurrent(experiment_id: str, modeling_task_id: str) -> None:
-    """Fire one asyncio coroutine per persisted PENDING run."""
-    asyncio.create_task(_run_concurrent_batch(experiment_id, modeling_task_id))
+async def _launch_concurrent(experiment_id: str, modeling_task_id: str) -> None:
+    """Submit every persisted PENDING run without waiting for execution."""
+    await _run_concurrent_batch(experiment_id, modeling_task_id)
 
 
 async def _run_concurrent_batch(experiment_id: str, modeling_task_id: str) -> None:
-    """Launch all PENDING runs of an experiment in parallel and wait for completion."""
+    """Submit all PENDING runs; their scheduler wrappers finalise the batch."""
     async with async_session_factory() as db:
         rows = await db.execute(
             select(ExperimentRun).where(
@@ -801,14 +1180,20 @@ async def _run_concurrent_batch(experiment_id: str, modeling_task_id: str) -> No
             elif domain_fallback:
                 full_entries.append(("train", domain_fallback, platform_task_id, run_id))
 
-    await asyncio.gather(
+    submissions = await asyncio.gather(
         *(
-            _execute_single_trial(dti, pti, rid, experiment_id, kind=kind)
-            for kind, dti, pti, rid in full_entries
+            get_scheduler(kind).submit(platform_task_id)
+            for kind, _domain_id, platform_task_id, _run_id in full_entries
         ),
         return_exceptions=True,
     )
-    await _finalise_batch(experiment_id, modeling_task_id)
+    for submission in submissions:
+        if isinstance(submission, BaseException):
+            logger.error(
+                "Failed to submit experiment %s trial: %s",
+                experiment_id,
+                submission,
+            )
 
 
 def _parse_domain_task_id_from_payload_ref(run: ExperimentRun) -> str | None:
@@ -838,48 +1223,57 @@ async def _execute_single_trial(
     returns so the leaderboard sees ``accuracy``/``rmse`` aliases regardless
     of whether the underlying run was ML or DL.
     """
-    from app.services.experiment_service import update_run_metrics
     from app.scheduler.executors import get_executor
+    from app.services.run_writeback import claim_for_execution, complete_platform_task
 
-    await update_platform_task_status(platform_task_id, "RUNNING")
+    # Claim first: this is the only place RUNNING is written, and it refuses a
+    # task whose Run is already terminal. Writing RUNNING before claiming would
+    # drag a finished task back to RUNNING on a duplicate delivery.
+    if not await claim_for_execution(platform_task_id):
+        logger.info("Trial %s already terminal; skipping duplicate execution", run_id)
+        return {"run_id": run_id, "status": "SKIPPED"}
 
+    # Executor failure and write-back failure are NOT the same thing and must
+    # not share an except block: a transient DB error while committing a
+    # *successful* result would otherwise be re-reported as a failed trial.
     try:
-        async with async_session_factory() as db:
-            run = (
-                await db.execute(select(ExperimentRun).where(ExperimentRun.id == run_id))
-            ).scalar_one_or_none()
-            if run and run.started_at is None:
-                run.started_at = datetime.now(timezone.utc)
-                run.status = "RUNNING"
-                await db.commit()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not mark run %s RUNNING: %s", run_id, exc)
-
-    try:
-        executor = get_executor(kind)
-        result = await executor(domain_task_id, platform_task_id)
-        metrics = _normalise_run_metrics(result.get("metrics") or {})
-        async with async_session_factory() as db:
-            await update_run_metrics(db, run_id, metrics, status="SUCCESS")
-            await db.commit()
-        await update_platform_task_status(platform_task_id, "SUCCESS", metrics=metrics)
-        # Mirror legacy → V3 native logs so the Run Inspector keeps working
-        # even if the legacy training_tasks row is later purged (CASCADE).
-        await _mirror_logs_to_v3(domain_task_id=domain_task_id, run_id=run_id)
-        return {"run_id": run_id, "status": "SUCCESS", "metrics": metrics}
-    except Exception as exc:  # noqa: BLE001
+        result = await get_executor(kind)(domain_task_id, platform_task_id)
+        if not isinstance(result, dict):
+            raise TypeError(
+                f"executor for kind={kind!r} returned {type(result).__name__}, expected dict"
+            )
+        metrics = result.get("metrics") or {}
+        evaluation_mode = result.get("evaluation_mode", "standard")
+    except Exception as exc:  # noqa: BLE001 — genuine trial failure
         logger.error("Tuning trial %s failed: %s", run_id, exc, exc_info=True)
-        try:
-            async with async_session_factory() as db:
-                await update_run_metrics(db, run_id, {}, status="FAILED")
-                await db.commit()
-        except Exception:
-            pass
-        await update_platform_task_status(platform_task_id, "FAILED", error=str(exc))
-        # Even on failure: capture whatever logs the trainer wrote before it
-        # blew up — failure diagnosis is the inspector's primary job.
-        await _mirror_logs_to_v3(domain_task_id=domain_task_id, run_id=run_id)
+        # In-process has no retry budget, so this attempt is terminal. If the
+        # write itself fails we let it propagate — a silently swallowed
+        # write-back is exactly the RUNNING-forever bug M2c exists to kill.
+        await complete_platform_task(
+            platform_task_id,
+            status="FAILED",
+            error=str(exc),
+            domain_task_id=domain_task_id,
+            final_attempt=True,
+        )
         return {"run_id": run_id, "status": "FAILED"}
+
+    # Training succeeded. Any exception from here is a bookkeeping failure and
+    # propagates untouched — never downgraded to "the trial failed".
+    outcome = await complete_platform_task(
+        platform_task_id,
+        status="SUCCESS",
+        metrics=metrics,
+        evaluation_mode=evaluation_mode,
+        domain_task_id=domain_task_id,
+        final_attempt=True,
+    )
+    # Report what was actually committed, not what we asked for.
+    return {
+        "run_id": run_id,
+        "status": outcome.status,
+        "metrics": outcome.metrics or {},
+    }
 
 
 async def _mirror_logs_to_v3(*, domain_task_id: str, run_id: str) -> None:
@@ -911,7 +1305,7 @@ async def _mirror_logs_to_v3(*, domain_task_id: str, run_id: str) -> None:
                 await db.execute(
                     select(TrainingLog)
                     .where(TrainingLog.task_id == domain_task_id)
-                    .order_by(TrainingLog.created_at)
+                    .order_by(TrainingLog.created_at, TrainingLog.seq)
                 )
             ).scalars().all()
             if not legacy_rows:
@@ -924,6 +1318,7 @@ async def _mirror_logs_to_v3(*, domain_task_id: str, run_id: str) -> None:
                     message=ll.message,
                     extra=ll.extra,
                     created_at=ll.created_at,
+                    seq=ll.seq,
                 ))
             await db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -933,8 +1328,18 @@ async def _mirror_logs_to_v3(*, domain_task_id: str, run_id: str) -> None:
         )
 
 
-def _normalise_run_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
-    """Expose common leaderboard metric keys for both ML and DL runs."""
+def _normalise_run_metrics(
+    metrics: dict[str, Any],
+    evaluation_mode: str = "standard",
+) -> dict[str, Any]:
+    """Expose common leaderboard metric keys for both ML and DL runs.
+
+    B1 semantics: in ``selection`` mode the DL val metrics come from an INNER
+    validation split (the outer hold-out is sealed), so they map to
+    ``selection_val_{metric}`` — never pre-stamped as ``final_test_*``.
+    ``final_test_*`` for selection runs is written exclusively by
+    final_evaluation_service after the winner is confirmed.
+    """
     normalised: dict[str, Any] = {}
     for key, value in (metrics or {}).items():
         if hasattr(value, "item"):
@@ -953,8 +1358,15 @@ def _normalise_run_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "val_r2": "r2",
     }
     for source, target in aliases.items():
-        if target not in normalised and isinstance(normalised.get(source), (int, float)):
-            normalised[target] = float(normalised[source])
+        source_value = normalised.get(source)
+        if not isinstance(source_value, (int, float)):
+            continue
+        if evaluation_mode == "selection":
+            normalised.setdefault(f"selection_val_{target}", float(source_value))
+        else:
+            if target not in normalised:
+                normalised[target] = float(source_value)
+            normalised.setdefault(f"final_test_{target}", float(source_value))
     return normalised
 
 
@@ -970,16 +1382,24 @@ async def _finalise_batch(experiment_id: str, modeling_task_id: str) -> None:
         )
         status_map = {s: int(c) for s, c in counts.all()}
         total = sum(status_map.values())
-        done = status_map.get("SUCCESS", 0) + status_map.get("FAILED", 0)
+        # CANCELLED counts as done: a cancelled trial will never report again,
+        # so excluding it would hang the batch at done < total forever.
+        done = (
+            status_map.get("SUCCESS", 0)
+            + status_map.get("FAILED", 0)
+            + status_map.get("CANCELLED", 0)
+        )
 
         triggered_explain = False
         if total > 0 and done >= total:
             exp = (
                 await db.execute(
-                    select(PlatformExperiment).where(PlatformExperiment.id == experiment_id)
+                    select(PlatformExperiment)
+                    .where(PlatformExperiment.id == experiment_id)
+                    .with_for_update()
                 )
             ).scalar_one_or_none()
-            if exp:
+            if exp and exp.status not in {"COMPLETED", "FAILED"}:
                 if status_map.get("SUCCESS", 0) == 0:
                     exp.status = "FAILED"
                 else:
@@ -1034,11 +1454,9 @@ async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> 
 
         def _score(run: ExperimentRun) -> float:
             metrics = run.metrics or {}
-            if objective_metric and objective_metric in metrics:
-                try:
-                    return float(metrics[objective_metric])
-                except (TypeError, ValueError):
-                    pass
+            resolved = resolve_objective_metrics(metrics, objective_metric)
+            if resolved.selection_value is not None:
+                return resolved.selection_value
             # Fallback: lowest trial_no first so order is deterministic.
             return float(run.trial_no or 0)
 
@@ -1047,7 +1465,7 @@ async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> 
             r for r in runs if not (r.metrics or {}).get("shap_importances")
         ]
         candidates.sort(key=_score, reverse=reverse)
-        ml_candidates: list[ExperimentRun] = []
+        explainable_candidates: list[ExperimentRun] = []
         for run in candidates:
             if not run.task_id:
                 continue
@@ -1056,10 +1474,10 @@ async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> 
                     select(PlatformTask).where(PlatformTask.id == run.task_id)
                 )
             ).scalar_one_or_none()
-            if platform_task and platform_task.kind == "train":
-                ml_candidates.append(run)
+            if platform_task and platform_task.kind in {"train", "dl_train"}:
+                explainable_candidates.append(run)
 
-        top_runs = ml_candidates[: max(0, int(top_k))]
+        top_runs = explainable_candidates[: max(0, int(top_k))]
         if not top_runs:
             return
 
@@ -1074,10 +1492,10 @@ async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> 
             dispatches.append((platform_task.id, "explain", f"explain:{run.id}"))
         await db.commit()
 
-    # Dispatch outside the DB transaction so asyncio.create_task() fires cleanly.
+    # Dispatch outside the DB transaction so Celery never races an uncommitted row.
     for platform_task_id, kind, payload_ref in dispatches:
         try:
-            await dispatch_platform_task(platform_task_id, kind, payload_ref, 3)
+            await get_scheduler(kind).submit(platform_task_id)
             logger.info(
                 "SHAP explain dispatched: experiment=%s platform_task=%s payload=%s",
                 experiment_id,
@@ -1098,6 +1516,26 @@ async def _schedule_shap_for_top_runs(experiment_id: str, *, top_k: int = 3) -> 
 # Bayesian search (Optuna)
 # ---------------------------------------------------------------------------
 
+def _reject_bayesian_under_celery() -> None:
+    """Fail fast when bayesian_search would be routed to a Celery worker.
+
+    Better a clear 422 at dispatch than an experiment that silently sits in
+    RUNNING forever. Lifted until M2d ships the cross-process ask/tell
+    continuation (Optuna RDBStorage + completion-driven ``tell``).
+    """
+    from app.scheduler.scheduler import CeleryScheduler, get_scheduler
+
+    if isinstance(get_scheduler("train"), CeleryScheduler):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "贝叶斯调参暂不支持 Celery 执行（CELERY_KINDS 含 train）："
+                "Optuna 的 ask/tell 目前是进程内顺序循环，跨进程会导致实验永久停在"
+                "运行中。请改用 baseline/grid_search，或将 train 移出 CELERY_KINDS。"
+            ),
+        )
+
+
 def _launch_bayesian(
     *,
     experiment_id: str,
@@ -1111,7 +1549,7 @@ def _launch_bayesian(
     cv_folds: int = 5,
 ) -> None:
     asyncio.create_task(
-        _run_bayesian_search(
+        _run_bayesian_search_guarded(
             experiment_id=experiment_id,
             modeling_task_id=modeling_task_id,
             selected_models=selected_models,
@@ -1123,6 +1561,51 @@ def _launch_bayesian(
             cv_folds=cv_folds,
         )
     )
+
+
+async def _run_bayesian_search_guarded(**kwargs: Any) -> None:
+    """Run Bayesian search and persist fatal background-worker failures."""
+    experiment_id = kwargs["experiment_id"]
+    modeling_task_id = kwargs["modeling_task_id"]
+    try:
+        await _run_bayesian_search(**kwargs)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Bayesian worker failed for experiment %s", experiment_id)
+        async with async_session_factory() as db:
+            exp = await db.get(PlatformExperiment, experiment_id)
+            if exp:
+                exp.status = "FAILED"
+                exp.finished_at = datetime.now(timezone.utc)
+                exp.config = {
+                    **(exp.config or {}),
+                    "worker_error": str(exc),
+                }
+                await db.flush()
+            await refresh_task_summary(db, modeling_task_id)
+            await db.commit()
+
+
+def _tpe_startup_trials(n_trials: int, budget_config: dict[str, Any] | None = None) -> int:
+    """How many trials TPE spends on random exploration before it models.
+
+    Optuna's default is 10 — and this platform's default ``n_trials_per_model``
+    is also 10. Left alone, that means the default "bayesian search" spends
+    100% of its budget in the random startup phase and never reaches the TPE
+    modelling stage at all: measured on optuna 4.1.0, a default run completes
+    10 trials with **zero** TPE-sampled suggestions. Users pick 「贝叶斯搜索」
+    and get random search, only slower (trials run sequentially).
+
+    Scaling startup with the budget fixes that without making the default run
+    any longer: ~1/3 of trials explore, the rest exploit. The floor of 3 keeps
+    TPE from modelling on almost nothing; the ceiling of 10 preserves Optuna's
+    default behaviour once the budget is large enough to afford it.
+
+    An explicit ``n_startup_trials`` in budget_config always wins.
+    """
+    explicit = (budget_config or {}).get("n_startup_trials")
+    if explicit is not None:
+        return max(1, int(explicit))
+    return max(3, min(10, n_trials // 3))
 
 
 async def _run_bayesian_search(
@@ -1150,10 +1633,13 @@ async def _run_bayesian_search(
 
     n_trials_per_model = int(budget_config.get("n_trials_per_model", 10))
     random_state = int(budget_config.get("random_state", 42))
+    n_startup_trials = _tpe_startup_trials(n_trials_per_model, budget_config)
     max_trials = budget_config.get("max_trials")
 
     async with async_session_factory() as db:
-        task = await _get_task_or_404(db, modeling_task_id)
+        task = await db.get(ModelingTask, modeling_task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Modeling task not found")
         direction = "maximize" if (task.objective_direction or "max") == "max" else "minimize"
         objective_metric = task.objective_metric or "accuracy"
         dataset_id = task.dataset_id
@@ -1175,7 +1661,7 @@ async def _run_bayesian_search(
 
         study = optuna.create_study(
             direction=direction,
-            sampler=TPESampler(seed=random_state),
+            sampler=TPESampler(seed=random_state, n_startup_trials=n_startup_trials),
             study_name=f"{experiment_id}-{model_type}",
         )
 
@@ -1209,14 +1695,19 @@ async def _run_bayesian_search(
                     cv_folds=cv_folds,
                 )
 
-                outcome = await _execute_single_trial(
-                    domain_task_id,
-                    platform_task_id,
-                    run_id,
-                    experiment_id,
-                    kind="train",
+                scheduled = await get_scheduler("train").submit(platform_task_id)
+                if not isinstance(scheduled, asyncio.Task):
+                    logger.warning(
+                        "Bayesian trial %s submitted to Celery; study continuation "
+                        "is deferred to M2d",
+                        run_id,
+                    )
+                    return
+                outcome = await scheduled
+                resolved = resolve_objective_metrics(
+                    outcome.get("metrics") or {}, objective_metric
                 )
-                value = (outcome.get("metrics") or {}).get(objective_metric)
+                value = resolved.selection_value
                 if value is None:
                     study.tell(trial, state=optuna.trial.TrialState.FAIL)
                 else:
@@ -1231,6 +1722,7 @@ async def _run_bayesian_search(
                         meta = dict(run.search_meta or {})
                         meta["optuna_state"] = trial.state.name if hasattr(trial, "state") else "COMPLETE"
                         meta["objective_value"] = value
+                        meta["selection_metric_key"] = resolved.selection_metric_key
                         run.search_meta = meta
                         await db.commit()
 
@@ -1312,6 +1804,7 @@ async def _persist_single_bayesian_trial(
             search_meta={
                 "strategy": "bayesian_search",
                 "optuna_trial_id": optuna_trial_id,
+                "evaluation_mode": "selection",
             },
             source_experiment_type="bayesian_search",
         )

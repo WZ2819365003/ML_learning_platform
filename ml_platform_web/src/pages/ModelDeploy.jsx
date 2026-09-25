@@ -1,3 +1,4 @@
+import { useActiveEffect } from '../hooks/useActiveEffect'
 /**
  * ModelDeploy — 模型部署管理
  * 路由: /deploy
@@ -7,19 +8,25 @@
  *       - TS 测试 payload 从数据集动态组装
  *       - Chronos 模型状态卡 + 下载/预热按钮
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
   Alert, Badge, Button, Card, Col, Descriptions, Drawer, Empty,
   Form, Input, Modal, Popconfirm, Row, Select, Space, Spin,
-  Statistic, Table, Tabs, Tag, Typography, message,
-} from 'antd'
-import {
-  CloudDownloadOutlined, CloudServerOutlined, CopyOutlined,
-  DeleteOutlined, EyeOutlined, PauseCircleOutlined, PlayCircleOutlined,
-  PlusOutlined, ReloadOutlined, ThunderboltOutlined,
-} from '@ant-design/icons'
+  Table, Tabs, Tag, Tooltip, Typography, message,
+} from '../ui'
+import { ApiOutlined, CloudDownloadOutlined, CloudServerOutlined, CopyOutlined, DatabaseOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import MetricCard from '../components/layout/MetricCard'
 import api, { dataApi, deployApi, dlApi, modelApi, trainingApi, tsApi } from '../services/api'
+import BatchPredictPanel from '../components/workbench/BatchPredictPanel'
 import { formatDateTime } from '../utils/formatters'
+import { absoluteEndpoint } from '../utils/endpointUrl'
+import {
+  latestSuccessfulTask,
+  missingTsFields,
+  payloadFromPreview,
+  payloadFromTask,
+  TS_TEST_FALLBACK,
+} from '../utils/tsTestPayload'
 
 const { Text, Title } = Typography
 
@@ -27,7 +34,7 @@ const { Text, Title } = Typography
 const statusMeta = (s) => ({
   badge:  s === 'active' ? 'success' : 'default',
   text:   s === 'active' ? '运行中' : '已暂停',
-  color:  s === 'active' ? '#52c41a' : '#8c8c8c',
+  color:  s === 'active' ? '#00a870' : 'var(--text-muted)',
 })
 
 // ── 可复制地址框 ───────────────────────────────────────────────────────────────
@@ -38,7 +45,7 @@ function CopyField({ label, value }) {
       <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>{label}</Text>
       <Space style={{ width: '100%' }} align="start">
         <Text code style={{ wordBreak: 'break-all', flex: 1 }}>{value}</Text>
-        <Button
+        <Button aria-label="复制"
           size="small" icon={<CopyOutlined />}
           onClick={() => { navigator.clipboard.writeText(value); message.success('已复制') }}
         />
@@ -53,18 +60,12 @@ function DeployPanel({ stats, loading, data, columns, onRefresh, onNew }) {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Row gutter={[12, 12]}>
         {[
-          { label: '部署总数', val: stats.total,  color: '#1890ff' },
-          { label: '运行中',   val: stats.active, color: '#52c41a' },
-          { label: '累计调用', val: stats.calls,  color: '#722ed1' },
-        ].map(({ label, val, color }) => (
-          <Col xs={8} key={label}>
-            <Card size="small" style={{ textAlign: 'center', borderTop: `3px solid ${color}` }}>
-              <Statistic
-                title={<Text type="secondary" style={{ fontSize: 12 }}>{label}</Text>}
-                value={val}
-                valueStyle={{ color, fontSize: 20, fontWeight: 700 }}
-              />
-            </Card>
+          { label: '部署总数', val: stats.total,  color: 'var(--brand-500)', icon: <CloudServerOutlined /> },
+          { label: '运行中',   val: stats.active, color: 'var(--success)', icon: <ThunderboltOutlined /> },
+          { label: '累计调用', val: stats.calls,  color: 'var(--info)', icon: <ApiOutlined /> },
+        ].map(({ label, val, color, icon }) => (
+          <Col xs={24} sm={8} key={label}>
+            <MetricCard label={label} value={val} color={color} icon={icon} />
           </Col>
         ))}
       </Row>
@@ -127,18 +128,12 @@ function ChronosStatusCard({ status, statusLoading, preloading, modelName, onMod
         <Space direction="vertical" style={{ width: '100%' }} size={16}>
           <Row gutter={[12, 12]}>
             {[
-              { label: '依赖状态', val: status?.available ? '已安装' : '未安装', color: status?.available ? '#52c41a' : '#ff4d4f' },
-              { label: '当前加载', val: status?.loaded    ? '已加载' : '未加载', color: status?.loaded    ? '#1890ff' : '#8c8c8c' },
-              { label: '模型名称', val: (status?.model ?? modelName).split('/').pop(), color: '#595959' },
-            ].map(({ label, val, color }) => (
-              <Col span={8} key={label}>
-                <Card size="small" style={{ textAlign: 'center' }}>
-                  <Statistic
-                    title={<Text type="secondary" style={{ fontSize: 12 }}>{label}</Text>}
-                    value={val}
-                    valueStyle={{ color, fontSize: 16, fontWeight: 600 }}
-                  />
-                </Card>
+              { label: '依赖状态', val: status?.available ? '已安装' : '未安装', color: status?.available ? 'var(--success)' : 'var(--error)', icon: <SafetyCertificateOutlined /> },
+              { label: '当前加载', val: status?.loaded ? '已加载' : '未加载', color: 'var(--brand-500)', icon: <CloudServerOutlined /> },
+              { label: '模型名称', val: (status?.model ?? modelName).split('/').pop(), color: 'var(--info)', icon: <DatabaseOutlined /> },
+            ].map(({ label, val, color, icon }) => (
+              <Col xs={24} sm={8} key={label}>
+                <MetricCard label={label} value={val} color={color} icon={icon} />
               </Col>
             ))}
           </Row>
@@ -173,7 +168,7 @@ export default function ModelDeploy() {
   const [tester, setTester] = useState({
     ml: { input: '[\n  {}\n]',  result: null, loading: false, prepared: false },
     dl: { input: '[\n  {}\n]',  result: null, loading: false, prepared: false },
-    ts: { input: '{\n  "dataset_id": "",\n  "value_column": "",\n  "time_column": null,\n  "horizon": 24,\n  "frequency": "D"\n}',
+    ts: { input: JSON.stringify(TS_TEST_FALLBACK, null, 2),
           result: null, loading: false, prepared: false },
   })
 
@@ -182,6 +177,10 @@ export default function ModelDeploy() {
   const [createLoading, setCreateLoading] = useState(false)
   const [mlTasks, setMlTasks] = useState([])
   const [dlTasks, setDlTasks] = useState([])
+
+  // 时序在线测试可以照抄哪几次跑成功的任务
+  const [tsReplayTasks, setTsReplayTasks] = useState([])
+  const [tsReplayId, setTsReplayId] = useState(null)
 
   // Chronos 状态
   const [tsStatus, setTsStatus]         = useState(null)
@@ -226,7 +225,7 @@ export default function ModelDeploy() {
     } finally { setTsStatusLoading(false) }
   }, [])
 
-  useEffect(() => {
+  useActiveEffect(() => {
     void fetchMl()
     void fetchDl()
     void fetchTs()
@@ -257,63 +256,31 @@ export default function ModelDeploy() {
         }
       }
       if (kind === 'ts') {
-        // 动态选择第一份真正像时序的数据集组装 payload
-        // 时序预测需要：
-        //   time_column  — datetime dtype 或名字含 time/date/timestamp/ds
-        //   value_column — 数值型（int/float）且 unique_rate < 0.9（过滤 UDI 这种 ID）
-        //   frequency    — 默认 'D'，让用户自己按需改成 H/T/M/Q/Y
-        const dsRes = await dataApi.listDatasets({ page: 1, page_size: 20 })
-        const datasets = dsRes.items ?? dsRes.datasets ?? []
-        if (datasets.length === 0) return
-        let selectedDs = null
-        let valueCol = null
-        let timeCol  = null
-
-        const inferColumns = (preview, ds) => {
-          const colsInfo = preview?.columns_info ?? {}
-          const stats    = preview?.statistics ?? {}
-          const rowCount = preview?.row_count || ds.row_count || 0
-          const cols     = Object.keys(colsInfo)
-
-          const isDatetime = (name) => {
-            const dt = String(colsInfo[name]?.dtype ?? '').toLowerCase()
-            if (dt.startsWith('datetime') || dt.includes('date')) return true
-            return ['time','date','datetime','timestamp','ds'].includes(name.toLowerCase())
-          }
-          const isNumericNonId = (name) => {
-            const dt = String(colsInfo[name]?.dtype ?? '').toLowerCase()
-            const numeric = dt.startsWith('int') || dt.startsWith('float') || dt.startsWith('uint')
-            if (!numeric) return false
-            const unique = Number(stats[name]?.unique_count ?? 0)
-            const rate   = rowCount > 0 ? unique / rowCount : 0
-            return rate < 0.9  // ID-like columns (UDI etc.) are filtered out
-          }
-
-          timeCol  = cols.find(isDatetime) ?? null
-          valueCol = cols.find(c => c !== timeCol && isNumericNonId(c)) ?? null
-          return { timeCol, valueCol }
+        // 先照抄最近一次跑成功的时序任务：那组参数后端已经接受过一次，打开抽屉
+        // 就能直接点发送。没有历史任务（全新环境）才退回猜列名。
+        const taskRes = await tsApi.listTasks({ page: 1, page_size: 20 }).catch(() => null)
+        const successful = (taskRes?.items ?? taskRes?.tasks ?? [])
+          .filter(t => String(t?.status ?? '').toUpperCase() === 'SUCCESS' && t?.dataset_id && t?.value_column)
+        setTsReplayTasks(successful)
+        const latest = latestSuccessfulTask(successful)
+        const replay = payloadFromTask(latest)
+        if (replay) {
+          setTsReplayId(latest.id)
+          setTester(s => ({ ...s, ts: { ...s.ts, input: JSON.stringify(replay, null, 2), prepared: true } }))
+          return
         }
 
+        const dsRes = await dataApi.listDatasets({ page: 1, page_size: 20 })
+        const datasets = dsRes.items ?? dsRes.datasets ?? []
         for (const ds of datasets) {
           try {
-            const preview = await dataApi.previewDataset(ds.id)
-            const inferred = inferColumns(preview, ds)
-            if (inferred.timeCol && inferred.valueCol) {
-              selectedDs = ds
-              timeCol = inferred.timeCol
-              valueCol = inferred.valueCol
-              break
+            const payload = payloadFromPreview(ds, await dataApi.previewDataset(ds.id))
+            if (payload) {
+              setTester(s => ({ ...s, ts: { ...s.ts, input: JSON.stringify(payload, null, 2), prepared: true } }))
+              return
             }
           } catch { /* try next dataset */ }
         }
-        const payload = {
-          dataset_id: selectedDs?.id ?? '',
-          value_column: valueCol ?? '',
-          time_column: timeCol ?? '',
-          horizon: 24,
-          frequency: 'D',
-        }
-        setTester(s => ({ ...s, ts: { ...s.ts, input: JSON.stringify(payload, null, 2), prepared: true } }))
       }
     } catch { /* silent */ }
     finally { preparingRef.current = false }
@@ -403,8 +370,10 @@ export default function ModelDeploy() {
         })
       } else {
         const payload = JSON.parse(tester[kind].input)
-        if (!payload.dataset_id || !payload.value_column || !payload.time_column) {
-          throw new Error('时序测试需要 dataset_id、value_column 和 time_column，请先补齐参数')
+        // time_column 后端签名是 str | None，只用来画显示用的横轴，缺了不影响预测。
+        const missing = missingTsFields(payload)
+        if (missing.length > 0) {
+          throw new Error(`时序测试还缺 ${missing.join('、')}，请先补齐`)
         }
         result = await tsApi.predictDeployment(drawer.record.deployment_id, payload)
       }
@@ -452,11 +421,12 @@ export default function ModelDeploy() {
   }
 
   // ── 辅助：预测 URL ────────────────────────────────────────────────────────
+  // 后端只给相对路径，这里按当前访问的 host 拼成能直接复制调用的地址。
   const getPredictUrl = (kind, record) => {
     if (!record) return ''
-    if (kind === 'ml') return record.endpoints?.predict ?? ''
-    if (kind === 'dl') return `${api.defaults.baseURL}/dl/deployments/${record.id}/predict`
-    return record.predict_url ?? `${api.defaults.baseURL}/ts/deployments/${record.deployment_id}/predict`
+    if (kind === 'ml') return absoluteEndpoint(record.endpoints?.predict)
+    if (kind === 'dl') return absoluteEndpoint(`${api.defaults.baseURL}/dl/deployments/${record.id}/predict`)
+    return absoluteEndpoint(record.predict_url ?? `${api.defaults.baseURL}/ts/deployments/${record.deployment_id}/predict`)
   }
 
   // ── 详情 Descriptions ─────────────────────────────────────────────────────
@@ -480,33 +450,37 @@ export default function ModelDeploy() {
       title: '部署名称',
       dataIndex: 'name',
       render: (v, r) => (
-        <Space direction="vertical" size={2}>
+        <Space direction="vertical" size={2} style={{ maxWidth: 420 }}>
           <Button type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => openDrawer(kind, r, 'overview')}>{v}</Button>
+          {/* The note whoever deployed this wrote — what it is for, who put it
+              up. Without it a list of deployment names says nothing about which
+              one you are looking at. */}
+          {r.description && (
+            <Tooltip title={r.description}>
+              <Text type="secondary" style={{ fontSize: 11 }} ellipsis>{r.description}</Text>
+            </Tooltip>
+          )}
           {kind === 'ts' && r.backend_label && (
-            <Tag color="blue" style={{ fontSize: 10 }}>{r.backend_label.split('/').pop()}</Tag>
+            <Tag color="blue">{r.backend_label.split('/').pop()}</Tag>
           )}
         </Space>
       ),
     },
     {
       title: '状态', dataIndex: 'status', width: 100,
-      render: v => { const m = statusMeta(v); return <Badge status={m.badge} text={<Text style={{ color: m.color }}>{m.text}</Text>} /> },
+      render: v => { const m = statusMeta(v); return <Tag color={m.badge}>{m.text}</Tag> },
     },
     { title: '调用次数', dataIndex: 'request_count', width: 95, render: v => v ?? 0 },
     { title: '创建时间', dataIndex: 'created_at', width: 145, render: v => <Text style={{ fontSize: 12 }}>{formatDateTime(v)}</Text> },
     {
       title: '操作', key: 'act', width: 210,
       render: (_, r) => (
-        <Space size={4} onClick={e => e.stopPropagation()}>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => openDrawer(kind, r, 'overview')}>详情</Button>
-          <Button size="small" icon={<ThunderboltOutlined />} onClick={() => openDrawer(kind, r, 'testing')}>测试</Button>
-          <Button
-            size="small"
-            icon={r.status === 'active' ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-            onClick={() => void handleToggle(kind, r)}
-          />
+        <Space onClick={e => e.stopPropagation()} size={16} className="table-actions">
+          <Button size="small" onClick={() => openDrawer(kind, r, 'overview')} type="link" className="table-action">详情</Button>
+          <Button size="small" onClick={() => openDrawer(kind, r, 'testing')} type="link" className="table-action">测试</Button>
+          <Button size="small" onClick={() => void handleToggle(kind, r)} type="link" className="table-action">{r.status === 'active' ? '暂停' : '启用'}</Button>
           <Popconfirm title="确认删除此部署？" okButtonProps={{ danger: true }} onConfirm={() => void handleDelete(kind, r)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
+            <Button size="small" danger type="link" className="table-action">删除</Button>
           </Popconfirm>
         </Space>
       ),
@@ -687,10 +661,31 @@ export default function ModelDeploy() {
                       type="info" showIcon message="在线测试说明"
                       description={
                         drawer.kind === 'ts'
-                          ? 'TimesFM 请求需要 dataset_id、value_column、time_column、horizon、frequency。系统只会自动填入同时具备时间列和数值目标列的数据集；若未推断到，请手工补齐，避免把 UDI 等 ID 列当作预测值。'
+                          ? '已按最近一次跑成功的时序任务预填，可以直接点发送；没有历史任务时会从数据集推断列名。time_column 只用于显示横轴，留空也能预测。'
                           : 'ML / DL 请求已根据训练数据集自动预填第一行样本（已删除目标列），可直接点发送。'
                       }
                     />
+                    {drawer.kind === 'ts' && tsReplayTasks.length > 0 ? (
+                      <Space wrap size={8}>
+                        <Text type="secondary">照抄历史任务</Text>
+                        <Select
+                          size="small"
+                          style={{ minWidth: 280 }}
+                          value={tsReplayId}
+                          onChange={(id) => {
+                            const task = tsReplayTasks.find(t => t.id === id)
+                            const payload = payloadFromTask(task)
+                            if (!payload) return
+                            setTsReplayId(id)
+                            setTester(s => ({ ...s, ts: { ...s.ts, input: JSON.stringify(payload, null, 2), result: null } }))
+                          }}
+                          options={tsReplayTasks.map(t => ({
+                            value: t.id,
+                            label: `${t.dataset_name ?? t.dataset_id} · ${t.value_column} · ${t.horizon}步`,
+                          }))}
+                        />
+                      </Space>
+                    ) : null}
                     <Input.TextArea
                       rows={10}
                       value={tester[drawer.kind]?.input ?? ''}
@@ -715,6 +710,16 @@ export default function ModelDeploy() {
                   </Space>
                 ),
               },
+              // ML deployments only: batch prediction is backed by the classical
+              // inference path (deploy_service + InferenceJob). DL/TS deployments
+              // have their own predict routes and no batch job table.
+              ...(drawer.kind === 'ml' && drawer.record ? [{
+                key: 'batch',
+                label: '批量预测',
+                // /deploy/list returns `deployment_id`, not `id` — passing record.id
+                // silently sends `undefined` and the API answers 「部署不存在」.
+                children: <BatchPredictPanel deploymentId={drawer.record.deployment_id} />,
+              }] : []),
             ]}
           />
         )}

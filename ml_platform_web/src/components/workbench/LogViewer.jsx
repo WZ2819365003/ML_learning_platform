@@ -1,3 +1,4 @@
+import { useActiveEffect } from '../../hooks/useActiveEffect'
 /**
  * LogViewer — professional log panel for the Run Inspector.
  *
@@ -18,22 +19,24 @@
  *   isLive — whether the owning Run is still RUNNING (controls "live" indicator)
  */
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { Input, Checkbox, Button, Space, Tag, Tooltip, Empty, Typography } from 'antd'
+import { Input, Checkbox, Button, Space, Tag, Tooltip, Empty, Typography } from '../../ui'
 import {
   SearchOutlined, PauseCircleOutlined, PlayCircleOutlined, DownloadOutlined,
   ClearOutlined, VerticalAlignBottomOutlined, ClockCircleOutlined,
 } from '@ant-design/icons'
 import { useLogStream } from '../../hooks/useLogStream'
+import { parseServerDate } from '../../utils/formatters'
+import { saveBlob } from '../../utils/download'
 
 const { Text } = Typography
 
 const LEVELS = ['INFO', 'WARN', 'ERROR', 'DEBUG']
 const LEVEL_COLOR = {
-  INFO: { bg: 'rgba(59, 130, 246, 0.1)',  fg: '#2563eb', dim: '#94a3b8' },
-  WARN: { bg: 'rgba(245, 158, 11, 0.12)', fg: '#d97706', dim: '#94a3b8' },
-  WARNING: { bg: 'rgba(245, 158, 11, 0.12)', fg: '#d97706', dim: '#94a3b8' },
-  ERROR:{ bg: 'rgba(239, 68, 68, 0.12)',  fg: '#dc2626', dim: '#94a3b8' },
-  DEBUG:{ bg: 'rgba(148, 163, 184, 0.12)',fg: '#64748b', dim: '#94a3b8' },
+  INFO: { bg: 'rgba(59, 130, 246, 0.1)',  fg: '#1a8dff', dim: 'var(--text-muted)' },
+  WARN: { bg: 'rgba(245, 158, 11, 0.12)', fg: '#ed7b2f', dim: 'var(--text-muted)' },
+  WARNING: { bg: 'rgba(245, 158, 11, 0.12)', fg: '#ed7b2f', dim: 'var(--text-muted)' },
+  ERROR:{ bg: 'rgba(239, 68, 68, 0.12)',  fg: '#e34d59', dim: 'var(--text-muted)' },
+  DEBUG:{ bg: 'rgba(148, 163, 184, 0.12)',fg: 'var(--text-secondary)', dim: 'var(--text-muted)' },
 }
 
 function normaliseLevel(l) {
@@ -45,17 +48,24 @@ function normaliseLevel(l) {
 
 function formatAbsolute(ts) {
   if (!ts) return ''
-  try { return new Date(ts).toLocaleString('zh-CN', { hour12: false, fractionalSecondDigits: 3 }) }
-  catch { return '' }
+  try {
+    const d = parseServerDate(ts)
+    return d ? d.toLocaleString('zh-CN', { hour12: false, fractionalSecondDigits: 3 }) : ''
+  } catch { return '' }
 }
-function formatRelative(ts, now) {
+export function formatRelative(ts, now) {
   if (!ts) return ''
   try {
-    const diff = now - new Date(ts).getTime()
-    if (diff < 1000) return 'just now'
-    if (diff < 60_000) return `${Math.floor(diff/1000)}s ago`
-    if (diff < 3_600_000) return `${Math.floor(diff/60_000)}m ago`
-    return `${Math.floor(diff/3_600_000)}h ago`
+    // REST-seeded entries arrive without a UTC marker; parsing them as local
+    // time dated every fresh log 8 hours ago in UTC+8. See parseServerDate.
+    const d = parseServerDate(ts)
+    if (!d) return ''
+    const diff = now - d.getTime()
+    if (diff < 1000) return '刚刚'
+    if (diff < 60_000) return `${Math.floor(diff/1000)} 秒前`
+    if (diff < 3_600_000) return `${Math.floor(diff/60_000)} 分钟前`
+    if (diff < 86_400_000) return `${Math.floor(diff/3_600_000)} 小时前`
+    return `${Math.floor(diff/86_400_000)} 天前`
   } catch { return '' }
 }
 
@@ -70,7 +80,7 @@ function highlight(text, term) {
   while (i >= 0) {
     if (i > idx) parts.push(text.slice(idx, i))
     parts.push(
-      <mark key={i} style={{ background: '#fde68a', padding: '0 2px', borderRadius: 3 }}>
+      <mark key={i} style={{ background: 'rgba(237,123,47,.3)', color: 'var(--text-primary)', padding: '0 2px', borderRadius: 3 }}>
         {text.slice(i, i + term.length)}
       </mark>
     )
@@ -81,17 +91,17 @@ function highlight(text, term) {
   return parts
 }
 
-export default function LogViewer({ historical, domainTaskId, isLive }) {
+export default function LogViewer({ historical, domainTaskId, isLive, streamEnabled = true }) {
   // Connect to WS. `enabled` gate avoids opening a socket when we don't
   // have a task id yet (loading state) or when caller explicitly disables.
   const { logs, connected, paused, setPaused, clear, seedHistorical } = useLogStream({
     domainTaskId: domainTaskId || null,
-    enabled: !!domainTaskId,
+    enabled: !!domainTaskId && streamEnabled,
     maxEntries: 2000,
   })
 
   // Seed with REST payload whenever it changes (only meaningful on first mount).
-  useEffect(() => {
+  useActiveEffect(() => {
     if (Array.isArray(historical) && historical.length > 0) seedHistorical(historical)
   }, [historical, seedHistorical])
 
@@ -103,7 +113,7 @@ export default function LogViewer({ historical, domainTaskId, isLive }) {
 
   // 1s tick so "relative time" stays fresh
   const [nowMs, setNowMs] = useState(Date.now())
-  useEffect(() => {
+  useActiveEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 1000)
     return () => clearInterval(id)
   }, [])
@@ -154,14 +164,7 @@ export default function LogViewer({ historical, domainTaskId, isLive }) {
       return `${ts} | ${lvl} | ${l.message}${extras}`
     })
     const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${domainTaskId || 'logs'}.log`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    saveBlob(blob, `${domainTaskId || 'logs'}.log`)
   }
 
   const levelCounts = useMemo(() => {
@@ -178,9 +181,10 @@ export default function LogViewer({ historical, domainTaskId, isLive }) {
       {/* Toolbar */}
       <div style={{
         display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center',
-        padding: '6px 2px', borderBottom: '1px solid #e2e8f0', marginBottom: 6,
-      }}>
+        padding: '6px 2px', borderBottom: '1px solid var(--border)', marginBottom: 6,
+      }} className="log-viewer-toolbar">
         <Input
+          className="log-search-input"
           size="small"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -190,7 +194,7 @@ export default function LogViewer({ historical, domainTaskId, isLive }) {
           style={{ width: 200 }}
         />
 
-        <Space size={4}>
+        <Space size={4} className="log-level-filters">
           {LEVELS.map((lvl) => (
             <Checkbox
               key={lvl}
@@ -203,41 +207,44 @@ export default function LogViewer({ historical, domainTaskId, isLive }) {
               style={{ fontSize: 11, marginRight: 0 }}
             >
               <span style={{ color: LEVEL_COLOR[lvl]?.fg, fontWeight: 600 }}>{lvl}</span>
-              <span style={{ color: '#94a3b8', marginLeft: 3 }}>({levelCounts[lvl] || 0})</span>
+              <span style={{ color: 'var(--text-muted)', marginLeft: 3 }}>({levelCounts[lvl] || 0})</span>
             </Checkbox>
           ))}
         </Space>
 
-        <div style={{ flex: 1 }} />
-
-        <Tooltip title={absoluteTime ? '切换到相对时间' : '切换到绝对时间'}>
-          <Button size="small" icon={<ClockCircleOutlined />}
-            type={absoluteTime ? 'primary' : 'default'}
-            onClick={() => setAbsoluteTime((v) => !v)} />
-        </Tooltip>
-        <Tooltip title={paused ? '恢复跟随' : '暂停跟随'}>
-          <Button size="small"
-            icon={paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
-            type={paused ? 'primary' : 'default'}
-            onClick={() => setPaused(!paused)} />
-        </Tooltip>
-        <Tooltip title="跳到底部">
-          <Button size="small" icon={<VerticalAlignBottomOutlined />}
-            onClick={handleJumpToBottom} />
-        </Tooltip>
-        <Tooltip title="清空视图(不影响服务端)">
-          <Button size="small" icon={<ClearOutlined />} onClick={clear} />
-        </Tooltip>
-        <Tooltip title="下载日志">
-          <Button size="small" icon={<DownloadOutlined />} onClick={handleDownload}
-            disabled={logs.length === 0} />
-        </Tooltip>
+        <Space size={4} className="log-toolbar-actions" style={{ marginLeft: 'auto' }}>
+          <Tooltip title={absoluteTime ? '切换到相对时间' : '切换到绝对时间'}>
+            <Button size="small"
+              aria-label={absoluteTime ? '切换到相对时间' : '切换到绝对时间'}
+              icon={<ClockCircleOutlined />}
+              type={absoluteTime ? 'primary' : 'default'}
+              onClick={() => setAbsoluteTime((v) => !v)} />
+          </Tooltip>
+          <Tooltip title={paused ? '恢复日志跟随' : '暂停日志跟随'}>
+            <Button size="small"
+              aria-label={paused ? '恢复日志跟随' : '暂停日志跟随'}
+              icon={paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
+              type={paused ? 'primary' : 'default'}
+              onClick={() => setPaused(!paused)} />
+          </Tooltip>
+          <Tooltip title="跳到最新日志">
+            <Button size="small" aria-label="跳到最新日志" icon={<VerticalAlignBottomOutlined />}
+              onClick={handleJumpToBottom} />
+          </Tooltip>
+          <Tooltip title="清空日志视图（不影响服务端）">
+            <Button size="small" aria-label="清空日志视图" icon={<ClearOutlined />} onClick={clear} />
+          </Tooltip>
+          <Tooltip title="下载日志">
+            <Button size="small" aria-label="下载日志" icon={<DownloadOutlined />} onClick={handleDownload}
+              disabled={logs.length === 0} />
+          </Tooltip>
+        </Space>
 
         {isLive && (
           <Tag color={connected ? 'green' : 'orange'} style={{ margin: 0 }}>
             <span style={{
               display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
-              background: connected ? '#10b981' : '#f59e0b', marginRight: 4,
+              background: connected ? '#00a870' : '#ed7b2f', marginRight: 4,
               animation: connected ? 'pulse 1.5s infinite' : 'none',
             }} />
             {connected ? 'LIVE' : '重连中'}
@@ -250,8 +257,8 @@ export default function LogViewer({ historical, domainTaskId, isLive }) {
         ref={bodyRef}
         onScroll={onBodyScroll}
         style={{
-          flex: 1, overflow: 'auto', background: '#0f172a',
-          borderRadius: 6, padding: '6px 10px', fontFamily: 'ui-monospace, Menlo, Monaco, monospace',
+          flex: 1, overflow: 'auto', background: 'var(--code-bg)',
+          borderRadius: 4, padding: '6px 10px', fontFamily: 'ui-monospace, Menlo, Monaco, monospace',
           fontSize: 11.5, lineHeight: 1.55,
         }}
       >
@@ -259,7 +266,7 @@ export default function LogViewer({ historical, domainTaskId, isLive }) {
           <div style={{ padding: 40, textAlign: 'center' }}>
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={<Text style={{ color: '#64748b' }}>
+              description={<Text style={{ color: 'var(--text-secondary)' }}>
                 {logs.length === 0
                   ? (isLive ? '等待日志…' : '该 Run 没有日志')
                   : '没有匹配的日志(检查筛选条件)'}
@@ -278,19 +285,19 @@ export default function LogViewer({ historical, domainTaskId, isLive }) {
               padding: '2px 4px', borderRadius: 3,
               background: idx % 2 === 0 ? 'transparent' : 'rgba(148, 163, 184, 0.04)',
             }}>
-              <span style={{ color: '#64748b', flexShrink: 0, width: absoluteTime ? 140 : 70 }}>{ts}</span>
+              <span style={{ color: 'var(--text-secondary)', flexShrink: 0, width: absoluteTime ? 140 : 70 }}>{ts}</span>
               <span style={{
                 color: c.fg, background: c.bg, padding: '0 6px', borderRadius: 3,
                 flexShrink: 0, width: 50, textAlign: 'center', fontWeight: 600,
               }}>{lvl}</span>
-              <span style={{ color: '#e2e8f0', wordBreak: 'break-all', flex: 1 }}>
+              <span style={{ color: 'var(--code-text)', wordBreak: 'break-all', flex: 1 }}>
                 {highlight(l.message || '', search)}
                 {l.extra && Object.keys(l.extra).length > 0 && (
                   <span style={{ color: c.dim, marginLeft: 10 }}>
-                    {Object.entries(l.extra).map(([k, v], i) => (
+                    {Object.entries(l.extra).map(([k, v]) => (
                       <span key={k} style={{ marginRight: 8 }}>
-                        <span style={{ color: '#94a3b8' }}>{k}=</span>
-                        <span style={{ color: '#cbd5e1' }}>{String(v)}</span>
+                        <span style={{ color: 'var(--text-muted)' }}>{k}=</span>
+                        <span style={{ color: 'var(--text-muted)' }}>{String(v)}</span>
                       </span>
                     ))}
                   </span>
@@ -304,11 +311,11 @@ export default function LogViewer({ historical, domainTaskId, isLive }) {
       {/* Footer */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: '4px 0', marginTop: 4, fontSize: 11, color: '#64748b',
+        padding: '4px 0', marginTop: 4, fontSize: 11, color: 'var(--text-secondary)',
       }}>
         <span>
-          显示 <strong style={{ color: '#0f172a' }}>{filtered.length}</strong>
-          {' / '}共 <strong style={{ color: '#0f172a' }}>{logs.length}</strong> 条
+          显示 <strong style={{ color: 'var(--text-primary)' }}>{filtered.length}</strong>
+          {' / '}共 <strong style={{ color: 'var(--text-primary)' }}>{logs.length}</strong> 条
         </span>
         <span>
           {paused && <Tag color="orange" style={{ marginRight: 4 }}>已暂停</Tag>}

@@ -18,6 +18,7 @@ class DatasetResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    owner_username: str | None = None
     name: str
     file_size: int
     row_count: int | None = None
@@ -90,6 +91,7 @@ class TrainingTaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    owner_username: str | None = None
     name: str | None = None
     dataset_id: str
     model_type: str
@@ -220,7 +222,9 @@ class PredictionResponse(BaseModel):
     target_column: str
     rows: int
     predictions: list[Any] = Field(default_factory=list)
-    class_labels: list[str] = Field(default_factory=list)
+    # Classification-only metadata. Regression responses omit this field
+    # instead of presenting every continuous target value as a "class".
+    class_labels: list[str] | None = None
     probabilities: list[dict[str, float]] | None = None
 
 
@@ -382,6 +386,7 @@ class DLTaskResponse(BaseModel):
     progress:      float
     current_epoch: int
     total_epochs:  int
+    train_config:  dict[str, Any] | None = None
     result_metrics: dict[str, Any] | None = None
     model_path:    str | None = None
     error_message: str | None = None

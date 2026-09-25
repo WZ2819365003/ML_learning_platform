@@ -11,9 +11,7 @@
 // Backend + Vite are expected to already be running.
 
 const { test, expect, request } = require('@playwright/test');
-
-const WEB_BASE = 'http://127.0.0.1:3000';
-const API_BASE = 'http://127.0.0.1:8000';
+const { WEB_BASE, API_ROOT: API_BASE } = require('./helpers/e2e-env');
 
 test.describe('Commit 11 — V3 Run 诊断中心', () => {
   test('GET /api/v3/runs/ returns flat run list with documented fields', async () => {
@@ -49,10 +47,10 @@ test.describe('Commit 11 — V3 Run 诊断中心', () => {
   });
 
   test('Sidebar entry navigates to /v3/runs', async ({ page }) => {
-    await page.goto(`${WEB_BASE}/dashboard`);
+    await page.goto(`${WEB_BASE}/v3/tasks`);
     // V3 sub-menu may need to be expanded; defaultOpenKeys includes 'v3' so the
     // child link should be findable directly.
-    const link = page.getByRole('link', { name: 'Run 诊断中心' });
+    const link = page.getByRole('link', { name: '运行诊断' });
     await expect(link).toBeVisible({ timeout: 10000 });
     await link.click();
     await expect(page).toHaveURL(/\/v3\/runs$/);
@@ -60,7 +58,7 @@ test.describe('Commit 11 — V3 Run 诊断中心', () => {
 
   test('Page renders header + table; row action buttons present', async ({ page }) => {
     await page.goto(`${WEB_BASE}/v3/runs`);
-    await expect(page.getByRole('heading', { name: 'Run 诊断中心' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: '运行诊断' })).toBeVisible({ timeout: 10000 });
     // Filters
     await expect(page.getByPlaceholder('搜索任务名 / 实验名 / Run ID')).toBeVisible();
     // Wait for at least one data row OR an empty-state message — both are acceptable

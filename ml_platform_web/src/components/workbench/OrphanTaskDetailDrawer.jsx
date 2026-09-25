@@ -1,14 +1,17 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useActiveEffect } from '../../hooks/useActiveEffect'
+import { usePollMs } from '../../hooks/useAppSettings'
+import React, { useCallback, useMemo, useState } from 'react'
 import {
   Alert, Button, Descriptions, Drawer, Empty, Popconfirm, Space, Spin,
-  Tabs, Tag, Tooltip, Typography, message,
-} from 'antd'
+  Tabs, Tag, Typography, message,
+} from '../../ui'
 import {
   ClockCircleOutlined, CloseCircleOutlined, CodeOutlined,
-  DatabaseOutlined, ExperimentOutlined, FileTextOutlined, InfoCircleOutlined,
-  LineChartOutlined, ReloadOutlined, RedoOutlined,
+  DatabaseOutlined, ExperimentOutlined, InfoCircleOutlined,
+  ReloadOutlined, RedoOutlined,
 } from '@ant-design/icons'
 import { platformTasksApi } from '../../services/api'
+import { parseServerDate } from '../../utils/formatters'
 
 const { Paragraph, Text } = Typography
 
@@ -35,6 +38,7 @@ export default function OrphanTaskDetailDrawer({
   onCancel,
   onDelete,
 }) {
+  const pollMs = usePollMs()
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
 
@@ -52,7 +56,7 @@ export default function OrphanTaskDetailDrawer({
     }
   }, [taskId])
 
-  useEffect(() => {
+  useActiveEffect(() => {
     if (open && taskId) load()
     // Clear out the stale payload so re-opening a different task doesn't
     // briefly flash the previous task's data.
@@ -61,12 +65,13 @@ export default function OrphanTaskDetailDrawer({
 
   // Light auto-refresh: while the task is active, poll every 3s so the
   // drawer reflects epoch-level DL progress + fresh log lines.
-  useEffect(() => {
+  useActiveEffect(() => {
     const status = detail?.task?.status?.toUpperCase()
     if (!open || !['RUNNING', 'QUEUED', 'PENDING', 'RETRY'].includes(status)) return
-    const t = setInterval(load, 3000)
+    if (!pollMs) return
+    const t = setInterval(load, pollMs)
     return () => clearInterval(t)
-  }, [open, detail?.task?.status, load])
+  }, [open, detail?.task?.status, pollMs, load])
 
   const task   = detail?.task
   const domain = detail?.domain
@@ -209,8 +214,8 @@ function SourceTab({ kind, domain }) {
   if (kind === 'ts_forecast') return <TSForecastDomain d={domain} />
   return (
     <pre style={{
-      background: '#0f172a', color: '#e2e8f0',
-      padding: 16, borderRadius: 8, fontSize: 12,
+      background: 'var(--code-bg)', color: 'var(--code-text)',
+      padding: 16, borderRadius: 4, fontSize: 12,
       maxHeight: 480, overflow: 'auto',
     }}>{JSON.stringify(domain, null, 2)}</pre>
   )
@@ -351,8 +356,8 @@ function LogsTab({ logs, onRefresh }) {
         </Text>
       </Space>
       <pre style={{
-        background: '#0f172a', color: '#e2e8f0',
-        padding: 16, borderRadius: 8, fontSize: 12, lineHeight: 1.5,
+        background: 'var(--code-bg)', color: 'var(--code-text)',
+        padding: 16, borderRadius: 4, fontSize: 12, lineHeight: 1.5,
         maxHeight: 520, overflow: 'auto',
         fontFamily: 'Menlo, Consolas, monospace',
       }}>
@@ -385,7 +390,7 @@ function ActionsTab({ task, onRetry, onCancel, onDelete }) {
           message="取消执行"
           description="任务将立即标记为 CANCELLED 并从调度队列移除。"
           action={
-            <Popconfirm title="确认取消？" onConfirm={onCancel}>
+            <Popconfirm okButtonProps={{ danger: true }} title="确认取消？" onConfirm={onCancel}>
               <Button danger icon={<CloseCircleOutlined />}>取消任务</Button>
             </Popconfirm>
           }
@@ -396,7 +401,7 @@ function ActionsTab({ task, onRetry, onCancel, onDelete }) {
           message="删除记录"
           description="此操作不可撤销；仅清除调度层记录，不影响模型文件。"
           action={
-            <Popconfirm title="确认删除？" onConfirm={onDelete}>
+            <Popconfirm okButtonProps={{ danger: true }} title="确认删除？" onConfirm={onDelete}>
               <Button danger>删除</Button>
             </Popconfirm>
           }
@@ -412,7 +417,7 @@ function ActionsTab({ task, onRetry, onCancel, onDelete }) {
 // ── Helpers ────────────────────────────────────────────────────────────────
 function _fmt(iso) {
   if (!iso) return '—'
-  const d = new Date(iso)
+  const d = parseServerDate(iso)
   return d.toLocaleString('zh-CN', { hour12: false })
 }
 
@@ -433,7 +438,7 @@ function _statusColor(status) {
 }
 
 const _jsonStyle = {
-  background: '#0f172a', color: '#e2e8f0',
-  padding: 10, borderRadius: 6, fontSize: 11, lineHeight: 1.5,
+  background: 'var(--code-bg)', color: 'var(--code-text)',
+  padding: 10, borderRadius: 4, fontSize: 11, lineHeight: 1.5,
   margin: 0, maxHeight: 180, overflow: 'auto',
 }

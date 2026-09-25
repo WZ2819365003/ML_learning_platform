@@ -1,14 +1,12 @@
 """Visualization service — computes data for charts and plots.
 
 Task resolution and SHAP computation live in `resolver.py` / `shap_service.py`;
-this module stays focused on the per-chart metric computation. Back-compat
-aliases (`_get_task_and_dataset`, `_TaskFacade`, `_is_regressor`,
-`_load_and_split_data`, `_load_task_model_data`) are preserved so existing
-in-function imports (e.g. `model_mgmt.py`) keep working.
+this module stays focused on the per-chart metric computation.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -32,41 +30,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.services import shap_service
 from app.services.resolver import (
-    TaskFacade,
     is_regressor,
-    load_and_split_data_no_stratify,
-    load_and_split_data_stratified,
-    load_model,
+    resolve_and_load,
     resolve_legacy_id_candidates,
-    resolve_task_and_dataset,
 )
+from app.services.object_storage import restore_file
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Back-compat aliases — kept so existing `from .viz_service import _*` work.
-# New code should import directly from `app.services.resolver`.
-# ---------------------------------------------------------------------------
-
-_TaskFacade = TaskFacade
-_is_regressor = is_regressor
-_load_model = load_model
-_load_and_split_data = load_and_split_data_stratified
-_get_task_and_dataset = resolve_task_and_dataset
-_resolve_metrics_candidate_ids = resolve_legacy_id_candidates
-
-
-def _load_task_model_data(task, dataset, test_size: float = 0.2):
-    """Non-stratified loader compatible with older callers.
-
-    Returns (model, X_train, X_test, y_train, y_test, feature_names).
-    """
-    X_train, X_test, y_train, y_test, feature_names = load_and_split_data_no_stratify(
-        dataset.file_path, task.target_column, test_size
-    )
-    model = load_model(task.model_path)
-    return model, X_train, X_test, y_train, y_test, feature_names
 
 
 # ---------------------------------------------------------------------------
@@ -76,16 +48,17 @@ def _load_task_model_data(task, dataset, test_size: float = 0.2):
 
 async def get_confusion_matrix(task_id: str, db: AsyncSession, normalize: bool = False) -> dict:
     """Compute confusion matrix for a completed training task."""
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     if is_regressor(task.model_type):
         raise HTTPException(
             status_code=400,
             detail="该任务为回归任务，不支持混淆矩阵。请查看残差图或预测-真实值散点。",
         )
-    model = load_model(task.model_path)
-    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
+    model = prepared["model"]
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    class_labels = prepared["class_labels"]
 
     y_pred = model.predict(X_test)
     cm = confusion_matrix(y_test, y_pred)
@@ -105,16 +78,17 @@ async def get_confusion_matrix(task_id: str, db: AsyncSession, normalize: bool =
 
 async def get_roc_curve(task_id: str, db: AsyncSession) -> dict:
     """Compute ROC curve data for a completed training task."""
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     if is_regressor(task.model_type):
         raise HTTPException(
             status_code=400,
             detail="该任务为回归任务，不支持 ROC 曲线。请查看残差图或预测-真实值散点。",
         )
-    model = load_model(task.model_path)
-    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
+    model = prepared["model"]
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    class_labels = prepared["class_labels"]
 
     if not hasattr(model, "predict_proba"):
         raise HTTPException(status_code=400, detail="Model does not support probability prediction for ROC")
@@ -149,12 +123,9 @@ async def get_roc_curve(task_id: str, db: AsyncSession) -> dict:
 
 async def get_feature_importance(task_id: str, db: AsyncSession) -> dict:
     """Feature importance extracted from the model (tree-based or linear)."""
-    task, dataset = await resolve_task_and_dataset(task_id, db)
-    model = load_model(task.model_path)
-    # Non-stratified split — we only need feature names. Works for regression too.
-    _, _, _, _, feature_names = load_and_split_data_no_stratify(
-        dataset.file_path, task.target_column, task.test_size
-    )
+    prepared = await resolve_and_load(task_id, db, stratified=False)
+    model = prepared["model"]
+    feature_names = prepared["feature_names"]
 
     if hasattr(model, "feature_importances_"):
         importance = np.asarray(model.feature_importances_, dtype=np.float64)
@@ -182,6 +153,8 @@ async def get_learning_curve(task_id: str, db: AsyncSession) -> dict:
     resolved_id = task_id
     for cid in await resolve_legacy_id_candidates(task_id, db):
         candidate = settings.storage_logs / f"{cid}_metrics.json"
+        if not candidate.exists():
+            restore_file(candidate, [f"logs/{cid}_metrics.json"])
         if candidate.exists():
             metrics_file = candidate
             resolved_id = cid
@@ -205,12 +178,76 @@ async def get_learning_curve(task_id: str, db: AsyncSession) -> dict:
     }
 
 
-async def get_shap_summary(task_id: str, db: AsyncSession, max_samples: int = 200) -> dict[str, Any]:
-    """Thin wrapper around `shap_service.compute_shap_summary` — keeps viz_service
-    as the single import surface for route handlers.
+# Where a computed explanation is parked on the task row, and the shape that
+# tells us whether a cached one still answers the current request.
+_SHAP_CACHE_KEY = "shap_cache"
+
+
+def _cached_shap(task: Any, max_samples: int) -> dict[str, Any] | None:
+    """Return a previously computed summary if it matches this request."""
+    metrics = getattr(task, "result_metrics", None) or {}
+    cached = metrics.get(_SHAP_CACHE_KEY)
+    if not isinstance(cached, dict):
+        return None
+    # A summary computed over fewer samples is not the one being asked for.
+    if cached.get("max_samples") != max_samples:
+        return None
+    payload = cached.get("payload")
+    return payload if isinstance(payload, dict) else None
+
+
+async def _store_shap(db: AsyncSession, task: Any, max_samples: int, payload: dict) -> None:
+    """Park the computed summary on the task row. Never raises.
+
+    Losing the cache costs a recomputation; failing the request the user just
+    waited minutes for would be worse, so a storage problem is logged and
+    swallowed.
     """
     try:
-        return await shap_service.compute_shap_summary(task_id, db, max_samples=max_samples)
+        if not hasattr(task, "result_metrics"):
+            return   # an on-disk orphan facade has no row to write back to
+        metrics = dict(task.result_metrics or {})
+        metrics[_SHAP_CACHE_KEY] = {"max_samples": max_samples, "payload": payload}
+        task.result_metrics = metrics
+        await db.flush()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Caching SHAP summary for %s failed: %s", getattr(task, "id", "?"), exc)
+
+
+async def get_shap_summary(
+    task_id: str,
+    db: AsyncSession,
+    max_samples: int = 200,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """Return a SHAP summary, computing it only when there is no usable cache.
+
+    SHAP is the most expensive thing this service does — a TreeExplainer on a
+    deep forest once took six minutes in production — and the result does not
+    change unless the model does. Recomputing it every time the tab is opened
+    made an already slow operation feel broken, so the payload is parked on the
+    task row and returned directly next time. `refresh=True` forces a new run.
+    """
+    if not refresh:
+        try:
+            task, _dataset = await shap_service.resolve_task_and_dataset(task_id, db)
+            cached = _cached_shap(task, max_samples)
+            if cached is not None:
+                return {**cached, "cached": True}
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a cache miss must not break the request
+            logger.warning("SHAP cache lookup for %s failed: %s", task_id, exc)
+
+    try:
+        payload = await shap_service.compute_shap_summary(task_id, db, max_samples=max_samples)
+        try:
+            task, _dataset = await shap_service.resolve_task_and_dataset(task_id, db)
+            await _store_shap(db, task, max_samples, payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not cache SHAP summary for %s: %s", task_id, exc)
+        return {**payload, "cached": False}
     except HTTPException:
         raise
     except ImportError as exc:
@@ -225,13 +262,39 @@ async def get_shap_summary(task_id: str, db: AsyncSession, max_samples: int = 20
 # ---------------------------------------------------------------------------
 
 
-async def get_residual_plot(task_id: str, db: AsyncSession) -> dict:
+async def _is_dl_task(task_id: str, db: AsyncSession) -> bool:
+    """True when the id names a DL training task."""
+    from app.models.database import DLTrainingTask
+    from sqlalchemy import select
+
+    found = (await db.execute(
+        select(DLTrainingTask.id).where(DLTrainingTask.id == task_id)
+    )).scalar_one_or_none()
+    return found is not None
+
+
+def _tail_evaluation_rows(X_test, y_test, max_samples: int):
+    """Return a deterministic tail window without aggregating chart values.
+
+    Visualization endpoints do not need to predict an entire large hold-out
+    set merely to draw at most 1,000 points.  This is a view window rather than
+    statistical resampling: rows keep their original order and values.
+    """
+    total = int(len(y_test))
+    limit = max(1, min(int(max_samples), total)) if total else 0
+    start = max(0, total - limit)
+    return X_test[start:], y_test[start:], total, start
+
+
+async def get_residual_plot(
+    task_id: str, db: AsyncSession, max_samples: int = 1000
+) -> dict:
     """Return residuals (y_true - y_pred) and predicted values for residual plot."""
-    task, dataset = await resolve_task_and_dataset(task_id, db)
-    X_train, X_test, y_train, y_test, _ = load_and_split_data_no_stratify(
-        dataset.file_path, task.target_column, task.test_size
+    prepared = await resolve_and_load(task_id, db, stratified=False)
+    model = prepared["model"]
+    X_test, y_test, total_count, sample_offset = _tail_evaluation_rows(
+        prepared["X_test"], prepared["y_test"], max_samples
     )
-    model = load_model(task.model_path)
 
     y_pred = model.predict(X_test)
     residuals = (y_test - y_pred).tolist()
@@ -243,16 +306,104 @@ async def get_residual_plot(task_id: str, db: AsyncSession) -> dict:
         "residuals": [round(float(v), 4) for v in residuals],
         "mean_residual": round(float(np.mean(residuals)), 4),
         "std_residual": round(float(np.std(residuals)), 4),
+        "sample_count": len(y_pred_list),
+        "total_count": total_count,
+        "sample_offset": sample_offset,
+        "truncated": len(y_pred_list) < total_count,
     }
 
 
-async def get_predicted_vs_actual(task_id: str, db: AsyncSession) -> dict:
-    """Return predicted vs actual values for scatter plot."""
-    task, dataset = await resolve_task_and_dataset(task_id, db)
-    X_train, X_test, y_train, y_test, _ = load_and_split_data_no_stratify(
-        dataset.file_path, task.target_column, task.test_size
+def _dl_predicted_vs_actual_sync(
+    file_path: str,
+    target_column: str,
+    test_size: float,
+    task_type: str,
+    model_type: str,
+    model_path: str,
+    max_samples: int,
+) -> dict:
+    """Replay a DL task's hold-out and predict it, keeping row order.
+
+    Synchronous and CPU-bound — the caller runs it in a worker thread.
+
+    The stored `val_scatter` cannot serve this: it is a bounded window saved
+    during training, and runs from before it became contiguous hold a random
+    subsample, which is fine for a scatter but meaningless as a curve. Replaying
+    the split gives ordered rows for every model, including ones trained before
+    that changed, without asking anyone to retrain.
+    """
+    from app.core.dl_registry import get_dl_trainer
+    from app.services.dl_service import _prepare_dl_data
+
+    _X_train, X_val, _y_train, y_val, artifact, resolved_kind = _prepare_dl_data(
+        file_path, target_column, test_size, task_type,
     )
-    model = load_model(task.model_path)
+    X_win, y_win, total, offset = _tail_evaluation_rows(X_val, y_val, max_samples)
+
+    trainer = get_dl_trainer(model_type)
+    trainer.load_for_inference(model_path)
+    preds, _probas = trainer.predict(X_win, resolved_kind)
+
+    actual = artifact.decode_predictions(y_win) if resolved_kind == "classification" else y_win
+    predicted = artifact.decode_predictions(preds) if resolved_kind == "classification" else preds
+
+    return {
+        "actual": [round(float(v), 4) for v in np.asarray(actual).ravel().tolist()],
+        "predicted": [round(float(v), 4) for v in np.asarray(predicted).ravel().tolist()],
+        "sample_count": int(len(y_win)),
+        "total_count": int(total),
+        "sample_offset": int(offset),
+    }
+
+
+async def _dl_predicted_vs_actual(task_id: str, db: AsyncSession, max_samples: int) -> dict:
+    """DL branch of get_predicted_vs_actual."""
+    from app.models.database import DLTrainingTask, Dataset
+    from app.services.object_storage import restore_dataset_file, restore_model_bundle
+    from sqlalchemy import select
+
+    task = (await db.execute(
+        select(DLTrainingTask).where(DLTrainingTask.id == task_id)
+    )).scalar_one_or_none()
+    if task is None or not task.model_path:
+        raise HTTPException(status_code=404, detail="深度学习模型不存在或尚无产物")
+
+    dataset = (await db.execute(
+        select(Dataset).where(Dataset.id == task.dataset_id)
+    )).scalar_one_or_none()
+    dataset_path = restore_dataset_file(dataset.id, dataset.file_path) if dataset else None
+    model_path = restore_model_bundle(task.model_path)
+    if dataset_path is None or model_path is None:
+        raise HTTPException(status_code=404, detail="数据集或模型文件不存在，无法回测")
+
+    train_config = task.train_config or {}
+    payload = await asyncio.to_thread(
+        _dl_predicted_vs_actual_sync,
+        str(dataset_path),
+        task.target_column,
+        float(train_config.get("test_size", 0.2)),
+        task.task_type or "auto",
+        task.model_type,
+        str(model_path),
+        max_samples,
+    )
+    return {"task_id": task_id, **payload}
+
+
+async def get_predicted_vs_actual(
+    task_id: str, db: AsyncSession, max_samples: int = 1000
+) -> dict:
+    """Return a bounded predicted/actual window for scatter and line charts."""
+    # DL models are not loadable through resolve_and_load, which refuses them
+    # outright; they get their own branch rather than being unsupported.
+    if await _is_dl_task(task_id, db):
+        return await _dl_predicted_vs_actual(task_id, db, max_samples)
+
+    prepared = await resolve_and_load(task_id, db, stratified=False)
+    model = prepared["model"]
+    X_test, y_test, total_count, sample_offset = _tail_evaluation_rows(
+        prepared["X_test"], prepared["y_test"], max_samples
+    )
 
     y_pred = model.predict(X_test)
 
@@ -260,6 +411,10 @@ async def get_predicted_vs_actual(task_id: str, db: AsyncSession) -> dict:
         "task_id": task_id,
         "actual": [round(float(v), 4) for v in y_test.tolist()],
         "predicted": [round(float(v), 4) for v in y_pred.tolist()],
+        "sample_count": int(len(y_pred)),
+        "total_count": total_count,
+        "sample_offset": sample_offset,
+        "truncated": int(len(y_pred)) < total_count,
     }
 
 
@@ -285,12 +440,13 @@ async def get_per_class_metrics(task_id: str, db: AsyncSession) -> dict:
     averages are included.  The frontend table can render one row per
     class with the last two rows pinned as aggregate.
     """
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     _guard_classification(task.model_type, "per_class metrics")
-    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    class_labels = prepared["class_labels"]
+    model = prepared["model"]
     y_pred = model.predict(X_test)
 
     report = classification_report(
@@ -338,12 +494,13 @@ async def get_pr_curve(task_id: str, db: AsyncSession) -> dict:
     arrays; the frontend plots PR + vertical line at best_threshold.
     Multiclass is one-vs-rest per class.
     """
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     _guard_classification(task.model_type, "PR curve")
-    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    class_labels = prepared["class_labels"]
+    model = prepared["model"]
     if not hasattr(model, "predict_proba"):
         raise HTTPException(
             status_code=400,
@@ -399,12 +556,12 @@ async def get_calibration_curve(task_id: str, db: AsyncSession, n_bins: int = 10
     Binary-only.  ECE is the mean of |prob_pred - prob_true| weighted by
     per-bin count.  Good calibration means the curve hugs the diagonal.
     """
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     _guard_classification(task.model_type, "calibration curve")
-    _, X_test, _, y_test, _, _ = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    model = prepared["model"]
     if not hasattr(model, "predict_proba"):
         raise HTTPException(
             status_code=400,
@@ -460,12 +617,12 @@ async def get_threshold_analysis(
     by default) with precision / recall / F1 / accuracy.  The UI picks the
     best-F1 row to highlight.
     """
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
     _guard_classification(task.model_type, "threshold analysis")
-    _, X_test, _, y_test, _, _ = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    X_test = prepared["X_test"]
+    y_test = prepared["y_test"]
+    model = prepared["model"]
     if not hasattr(model, "predict_proba"):
         raise HTTPException(
             status_code=400,
@@ -510,7 +667,7 @@ async def get_threshold_analysis(
 
 
 async def get_prediction_distribution(
-    task_id: str, db: AsyncSession, bins: int = 30
+    task_id: str, db: AsyncSession, bins: int = 30, max_samples: int = 5000
 ) -> dict:
     """Prediction distribution for classification (probability histogram)
     or regression (residual histogram).
@@ -519,14 +676,15 @@ async def get_prediction_distribution(
     by true class to see separation.  For regression: residual histogram
     + summary stats.
     """
-    task, dataset = await resolve_task_and_dataset(task_id, db)
+    prepared = await resolve_and_load(task_id, db)
+    task = prepared["task"]
+    model = prepared["model"]
+    X_test, y_test, total_count, sample_offset = _tail_evaluation_rows(
+        prepared["X_test"], prepared["y_test"], max_samples
+    )
     bins = max(10, min(100, int(bins)))
 
     if is_regressor(task.model_type):
-        _, X_test, _, y_test, _ = load_and_split_data_no_stratify(
-            dataset.file_path, task.target_column, task.test_size
-        )
-        model = load_model(task.model_path)
         y_pred = model.predict(X_test)
         residuals = np.asarray(y_test) - np.asarray(y_pred)
         counts, edges = np.histogram(residuals, bins=bins)
@@ -539,12 +697,13 @@ async def get_prediction_distribution(
             "std": round(float(np.std(residuals)), 4),
             "min": round(float(np.min(residuals)), 4),
             "max": round(float(np.max(residuals)), 4),
+            "sample_count": int(len(residuals)),
+            "total_count": total_count,
+            "sample_offset": sample_offset,
+            "truncated": int(len(residuals)) < total_count,
         }
 
-    _, X_test, _, y_test, _, class_labels = load_and_split_data_stratified(
-        dataset.file_path, task.target_column, task.test_size
-    )
-    model = load_model(task.model_path)
+    class_labels = prepared["class_labels"]
     if not hasattr(model, "predict_proba"):
         raise HTTPException(
             status_code=400,
@@ -563,6 +722,9 @@ async def get_prediction_distribution(
             "bin_edges": [round(float(e), 4) for e in edges],
             "counts": [int(c) for c in counts],
             "n_classes": int(y_proba.shape[1]),
+            "sample_count": int(len(max_probs)),
+            "total_count": total_count,
+            "truncated": int(len(max_probs)) < total_count,
         }
 
     positive = classes[1]
@@ -579,4 +741,7 @@ async def get_prediction_distribution(
         "bin_edges": [round(float(e), 4) for e in edges],
         "positive_counts": [int(c) for c in pos_counts],
         "negative_counts": [int(c) for c in neg_counts],
+        "sample_count": int(len(positive_scores)),
+        "total_count": total_count,
+        "truncated": int(len(positive_scores)) < total_count,
     }
